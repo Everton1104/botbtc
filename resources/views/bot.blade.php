@@ -1,0 +1,98 @@
+@extends('layouts.app')
+
+@section('content')
+<h1 class="text-center my-5">Preço BTC: R$ <span id="btc-price">CARREGANDO...</span></h1>
+
+<h1 class="text-center my-5">Saldo BTC: <span id="btc-saldo">CARREGANDO...</span> <span class="form-text fs-5"> <br> R$ <span id="btc-saldo-real">CARREGANDO...</span> - Bloqueado: R$ <span id="btc-saldo-bloqueado">CARREGANDO...</span></h1>
+
+<h1 class="text-center my-5">Saldo BRL: R$ <span id="brl-saldo">CARREGANDO...</span> <span class="form-text fs-5"> <br> BTC: <span id="brl-saldo-btc">CARREGANDO...</span> - Bloqueado: R$ <span id="brl-saldo-bloqueado">CARREGANDO...</span></h1>
+
+<h1 class="text-center my-5">
+    TOTAL GERAL (BRL): R$ <span id="brl-saldo-geral-total">CARREGANDO...</span>
+
+    <span class="form-text fs-5">
+        <br> Saldo TOTAL BRL: R$ <span id="brl-saldo-total">CARREGANDO...</span>
+        <br> TOTAL BTC (em BRL): <span id="brl-saldo-btc-total">CARREGANDO...</span>
+    </span>
+</h1>
+
+
+
+<script>
+    const formatarBTC = (valor) => {
+        return new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 8
+        }).format(Number(valor));
+    };
+
+    const formatar = (valor) => {
+        return new Intl.NumberFormat('pt-BR').format(valor);
+    }
+
+
+    function atualizar() {
+
+        axios.get("https://app.evertonrs.com.br/binance/getSaldos")
+            .then((res) => {
+
+                axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL")
+                    .then((preco) => {
+
+                        const btcbrl = parseFloat(preco.data.price);
+
+                        let btcFree = 0;
+                        let btcLocked = 0;
+
+                        let brlFree = 0;
+                        let brlLocked = 0;
+
+                        res.data.balances.forEach(moeda => {
+
+                            if (moeda.asset === 'BTC') {
+                                btcFree = parseFloat(moeda.free);
+                                btcLocked = parseFloat(moeda.locked);
+
+                                $('#btc-saldo').text(formatarBTC(btcFree));
+                                $('#btc-price').text(formatar(btcbrl));
+                                $('#btc-saldo-real').text(formatar(btcFree * btcbrl));
+                                $('#btc-saldo-bloqueado').text(formatar(btcLocked * btcbrl));
+                            }
+
+                            if (moeda.asset === 'BRL') {
+                                brlFree = parseFloat(moeda.free);
+                                brlLocked = parseFloat(moeda.locked);
+
+                                $('#brl-saldo').text(formatar(brlFree));
+                                $('#brl-saldo-btc').text(formatarBTC(brlFree / btcbrl));
+                                $('#brl-saldo-bloqueado').text(formatar(brlLocked));
+                            }
+                        });
+
+                        const totalBRL = brlFree + brlLocked;
+                        const totalBTCemBRL = (btcFree + btcLocked) * btcbrl;
+                        const totalGeralBRL = totalBRL + totalBTCemBRL;
+
+                        $('#brl-saldo-total').text(formatar(totalBRL));
+                        $('#brl-saldo-btc-total').text(formatar(totalBTCemBRL));
+                        $('#brl-saldo-geral-total').text(formatar(totalGeralBRL));
+                    })
+                    .catch(err => console.log(err));
+            })
+            .catch(err => console.log(err));
+    }
+
+    atualizar();
+    setInterval(() => {
+        atualizar();
+    }, 5000);
+
+
+
+    
+
+
+
+</script>
+
+@endsection
