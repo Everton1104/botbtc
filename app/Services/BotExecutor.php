@@ -33,19 +33,21 @@ class BotExecutor
         $precoAtual = $this->binance->getPrecoBTC();
 
         // ============================================================
-        // PROTEÇÃO: cancelar ordens fora do preço atual
+        // PROTEÇÃO: cancelar ordens fora do preço atual com margem
         // ============================================================
+        $margem = 1000; // margem de tolerância em BRL
+
         foreach ($open as $ordem) {
             $side  = $ordem['side'];
             $price = (float)$ordem['price'];
 
-            // BUY acima do preço atual → inútil
-            if ($side === 'BUY' && $price > $precoAtual) {
+            // VENDA: só cancela se o preço atual estiver MUITO acima da ordem
+            if ($side === 'SELL' && ($precoAtual - $price) > $margem) {
                 $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
             }
 
-            // SELL abaixo do preço atual → inútil
-            if ($side === 'SELL' && $price < $precoAtual) {
+            // COMPRA: só cancela se o preço atual estiver MUITO abaixo da ordem
+            if ($side === 'BUY' && ($price - $precoAtual) > $margem) {
                 $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
             }
         }
@@ -101,6 +103,7 @@ class BotExecutor
 
         return "Uma ordem restante detectada. Direção registrada e novo par criado.";
     }
+
 
 
     // ============================================================
