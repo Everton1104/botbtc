@@ -16,6 +16,16 @@
     </span>
 </h1>
 
+<h1 class="text-center">Configurações do bot</h1>
+<div class="d-flex justify-content-center my-5">
+    <div class="card shadow p-3">
+        <h3>
+            Oscilação: <span id="salto">CARREGANDO...</span>
+        </h3>
+        <button class="btn btn-primary" onclick="atualizarSalto()">Atualizar Oscilação</button>
+    </div>
+</div>
+
 
 
 <script>
@@ -32,10 +42,14 @@
 
 
     function atualizar() {
-
-        axios.get("https://app.evertonrs.com.br/binance/getSaldos")
+        axios.get("https://evtu.com.br/binance/getConf")
             .then((res) => {
+                $('#salto').text(res.data.salto);
+            })
+            .catch(err => console.log(err));
 
+        axios.get("https://evtu.com.br/binance/getSaldos")
+            .then((res) => {
                 axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL")
                     .then((preco) => {
 
@@ -85,7 +99,7 @@
     atualizar();
     setInterval(() => {
         atualizar();
-    }, 5000);
+    }, 10000);
 
 
 

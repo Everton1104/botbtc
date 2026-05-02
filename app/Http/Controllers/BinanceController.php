@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BotState;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 
 class BinanceController extends Controller
@@ -235,5 +237,13 @@ class BinanceController extends Controller
         $response = Http::get($url);
 
         return (float) $response->json()['price'];
+    }
+
+    // ============================================================
+    // CONFIGURACAO DO BOT
+    // ============================================================
+    public function getConf()
+    {
+        return BotState::where('id_user', Auth::user()->id)->first();
     }
 }

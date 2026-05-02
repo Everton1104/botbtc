@@ -30,14 +30,34 @@ class BotExecutor
             return "Erro ao buscar ordens abertas.";
         }
 
-        $qtd = count($open);
+        $precoAtual = $this->binance->getPrecoBTC();
+
+        // ============================================================
+        // PROTEÇÃO: cancelar ordens fora do preço atual
+        // ============================================================
+        foreach ($open as $ordem) {
+            $side  = $ordem['side'];
+            $price = (float)$ordem['price'];
+
+            // BUY acima do preço atual → inútil
+            if ($side === 'BUY' && $price > $precoAtual) {
+                $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
+            }
+
+            // SELL abaixo do preço atual → inútil
+            if ($side === 'SELL' && $price < $precoAtual) {
+                $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
+            }
+        }
+
+        // Atualizar lista após cancelamentos
+        $open = $this->binance->getOpenOrders("BTCBRL");
+        $qtd  = count($open);
 
         // ============================================================
         // 0 ORDENS → recriar par
         // ============================================================
         if ($qtd === 0) {
-
-            $precoAtual = $this->binance->getPrecoBTC();
 
             // garantir que está realmente vazio
             $this->limparTodasOrdensEAguardar("BTCBRL");
@@ -60,10 +80,8 @@ class BotExecutor
         // ============================================================
         $ordem = $open[0];
         $side  = $ordem['side'];
-        $orderId = $ordem['orderId'];
 
-        $precoAtual = $this->binance->getPrecoBTC();
-        $saldos     = $this->binance->getSaldos();
+        $saldos = $this->binance->getSaldos();
 
         // Registrar direção ANTES de apagar tudo
         if ($side === 'SELL') {
@@ -83,6 +101,7 @@ class BotExecutor
 
         return "Uma ordem restante detectada. Direção registrada e novo par criado.";
     }
+
 
     // ============================================================
     // LIMPAR TODAS AS ORDENS E AGUARDAR
@@ -134,7 +153,7 @@ class BotExecutor
         $state = new BotState();
         $state->id_user = $userId;
         $state->preco_referencia = $precoAtual;
-        $state->salto = 1000;
+        $state->salto = 2000; // padrao inicial (os proximos seguem a tabela)
         $state->direcao_atual = null;
         $state->contador_subidas = 0;
         $state->contador_quedas = 0;
@@ -154,7 +173,7 @@ class BotExecutor
         $precoVenda  = $precoAtual + $salto;
 
         // Compra inicial (25% do BRL)
-        $valorCompra = $saldoBRL * 0.25;
+        $valorCompra = $saldoBRL * 0.50;
 
         if ($valorCompra > 10) {
             $quantidadeBTC = $valorCompra / $precoCompra;
@@ -164,7 +183,7 @@ class BotExecutor
         }
 
         // Venda inicial (25% do BTC)
-        $quantidadeVenda = $saldoBTC * 0.25;
+        $quantidadeVenda = $saldoBTC * 0.50;
 
         if ($quantidadeVenda > 0) {
             $orderVenda = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
@@ -223,10 +242,10 @@ class BotExecutor
     private function percentualPorSalto(int $contador): float
     {
         return match (true) {
-            $contador === 1 => 0.25,
-            $contador === 2 => 0.15,
-            $contador === 3 => 0.10,
-            $contador === 4 => 0.05,
+            $contador === 1 => 0.50,
+            $contador === 2 => 0.25,
+            $contador === 3 => 0.15,
+            $contador === 4 => 0.10,
             default => 0.01,
         };
     }
@@ -284,7 +303,7 @@ class BotExecutor
         );
 
         // Percentual fixo para o lado oposto
-        $percentualFixo = 0.25;
+        $percentualFixo = 0.50;
 
         // ============================================================
         // COMPRA
