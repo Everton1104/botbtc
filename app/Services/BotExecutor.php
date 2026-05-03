@@ -156,7 +156,7 @@ class BotExecutor
         $state = new BotState();
         $state->id_user = $userId;
         $state->preco_referencia = $precoAtual;
-        $state->salto = 2000; // padrao inicial (os proximos seguem a tabela)
+        $state->salto = 1000; // padrao inicial (os proximos seguem a tabela)
         $state->direcao_atual = null;
         $state->contador_subidas = 0;
         $state->contador_quedas = 0;
