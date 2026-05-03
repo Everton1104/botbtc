@@ -35,34 +35,97 @@
 </h2>
 
 
+@if(auth()->user()->id == 1)
 
-<div class="card p-3">
-    <h4>Adicionar Investimento Manual</h4>
 
-    <input type="number" id="valor-investimento" class="form-control" placeholder="Valor em reais">
 
-    <button class="btn btn-primary mt-2" onclick="investirManual()">
-        Adicionar
-    </button>
+    <div class="card p-3 mt-4">
+    <h4>Gerenciar Investimentos dos Usuários</h4>
 
-    <p id="msg-investimento" class="mt-2"></p>
+    <table class="table table-bordered mt-3">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nome</th>
+                <th>Email</th>
+                <th>Investimento Inicial</th>
+                <th>Valor Atual</th>
+                <th>Lucro</th>
+                <th>Adicionar</th>
+                <th>Remover</th>
+            </tr>
+        </thead>
+        <tbody id="tabela-usuarios"></tbody>
+    </table>
 </div>
 
-<script>
-    function investirManual() {
-        const valor = Number($('#valor-investimento').val());
 
-        axios.post('/bot/investir-manual', { valor })
-            .then((res) => {
-                console.log(res);
-                $('#msg-investimento').text(res.data.mensagem);
-            })
-            .catch((err) => {
-                console.log(err);
-                $('#msg-investimento').text("Erro ao adicionar investimento.");
+    <script>
+        if ({{ auth()->user()->id }} === 1) {
+
+            axios.get('/admin/usuarios-investimentos').then(res => {
+
+                let html = '';
+
+                res.data.forEach(u => {
+                    html += `
+                        <tr>
+                            <td>${u.id}</td>
+                            <td>${u.name}</td>
+                            <td>${u.email}</td>
+                            <td>R$ ${formatar(u.investimento_inicial)}</td>
+                            <td>R$ ${formatar(u.valor_atual)}</td>
+                            <td>R$ ${formatar(u.lucro)}</td>
+                            <td>
+                                <button class="btn btn-primary btn-sm" onclick="adicionar(${u.id})">
+                                    Adicionar
+                                </button>
+                            </td>
+                            <td>
+                                <button class="btn btn-danger btn-sm" onclick="remover(${u.id})">
+                                    Remover
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                document.getElementById('tabela-usuarios').innerHTML = html;
             });
-    }
-</script>
+        }
+
+
+        function adicionar(userId) {
+            const valor = prompt("Digite o valor a adicionar:");
+
+            if (!valor || isNaN(valor)) {
+                alert("Valor inválido");
+                return;
+            }
+
+            axios.post('/bot/investir-manual', { valor, userId })
+                .then(res => alert(res.data.mensagem))
+                .catch(() => alert("Erro ao adicionar investimento."));
+        }
+
+        function remover(userId) {
+            if (!confirm("Tem certeza que deseja remover o investimento deste usuário?")) {
+                return;
+            }
+
+            axios.delete(`/bot/remover-investimento/${userId}`)
+                .then(res => alert(res.data.mensagem))
+                .catch(() => alert("Erro ao remover investimento."));
+        }
+
+
+    </script>
+
+
+
+@endif
+
+
 
 
 
