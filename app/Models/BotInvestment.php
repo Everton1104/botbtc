@@ -10,7 +10,7 @@ class BotInvestment extends Model
         'user_id',
         'investimento_inicial',
         'patrimonio_inicial',
-        'lucro_atual',
-        'capital_total_no_momento'
+        'proporcao',
+        'lucro_atual'
     ];
 }

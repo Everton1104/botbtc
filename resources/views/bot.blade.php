@@ -29,11 +29,40 @@
 
 <h2 class="text-center mt-4">
     LUCRO TOTAL: <span id="lucro-total">CARREGANDO...</span>
-    <p>Preço atual do BTC: R$ <span id="btc-price-2">CARREGANDO...</span>
+    <p class="mt-4">Preço atual do BTC: R$ <span id="btc-price-2">CARREGANDO...</span>
     <p>Impacto do BTC no Seu Lucro: R$ <span id="impacto-no-lucro">CARREGANDO...</span></p>
     <p>Valor Atual do Seu Investimento: R$ <span id="valor-atual-investimento">CARREGANDO...</span></p>
 </h2>
 
+
+
+<div class="card p-3">
+    <h4>Adicionar Investimento Manual</h4>
+
+    <input type="number" id="valor-investimento" class="form-control" placeholder="Valor em reais">
+
+    <button class="btn btn-primary mt-2" onclick="investirManual()">
+        Adicionar
+    </button>
+
+    <p id="msg-investimento" class="mt-2"></p>
+</div>
+
+<script>
+    function investirManual() {
+        const valor = Number($('#valor-investimento').val());
+
+        axios.post('/bot/investir-manual', { valor })
+            .then((res) => {
+                console.log(res);
+                $('#msg-investimento').text(res.data.mensagem);
+            })
+            .catch((err) => {
+                console.log(err);
+                $('#msg-investimento').text("Erro ao adicionar investimento.");
+            });
+    }
+</script>
 
 
 
@@ -59,7 +88,7 @@
 
     @if(auth()->user()->id == 1)
         function atualizar() {
-            axios.get("https://evtu.com.br/binance/getSaldos")
+            axios.get("/binance/getSaldos")
                 .then((res) => {
 
                     axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL")
@@ -135,17 +164,15 @@
         .catch(err => console.log(err));
 
     // atualiza o lucro
-    axios.get("/bot/lucro-usuario").then((res) => {
+    axios.get("/bot/valor-atual").then((res) => {
 
-        // segurança contra undefined
         const safe = (v) => Number(v ?? 0);
 
         $('#investimento-inicial').text(formatar(safe(res.data.investimento_inicial)));
-        $('#lucro-total').text(formatar(safe(res.data.lucro_usuario)));
+        $('#lucro-total').text(formatar(safe(res.data.lucro)));
+        $('#impacto-no-lucro').text(formatar(safe(res.data.impacto_usuario)));
+        $('#valor-atual-investimento').text(formatar(safe(res.data.valor_atual)));
 
-        // novos campos
-        $('#impacto-no-lucro').text(formatar(safe(res.data.impacto_no_lucro)));
-        $('#valor-atual-investimento').text(formatar(safe(res.data.valor_atual_investimento)));
         axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL")
             .then((precoBTC) => {
                 $('#btc-price-2').text(formatar(parseFloat(precoBTC.data.price)));

@@ -63,33 +63,10 @@ class RegisterController extends Controller
      */
     protected function create(array $data)
     {
-        $user = User::create([
+        return User::create([
             'name' => $data['name'],
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
         ]);
-
-        // pegar patrimônio atual do bot principal
-        $binance = new BinanceController();
-        $saldos = $binance->getSaldos();
-        $preco  = $binance->getPrecoBTC();
-
-        $brl = collect($saldos['balances'])->firstWhere('asset', 'BRL');
-        $brl_total = (float) $brl['free'] + (float) $brl['locked'];
-
-        $btc = collect($saldos['balances'])->firstWhere('asset', 'BTC');
-        $btc_total = (float) $btc['free'] + (float) $btc['locked'];
-
-        $patrimonioAtualBot = $brl_total + ($btc_total * $preco);
-
-        // criar registro do investimento do usuário
-        BotInvestment::create([
-            'user_id' => $user->id,
-            'investimento_inicial' => 0,
-            'patrimonio_inicial' => $patrimonioAtualBot,
-            'lucro_atual' => 0,
-        ]);
-
-        return $user;
     }
 }
