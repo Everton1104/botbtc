@@ -42,21 +42,23 @@
     <div class="card p-3 mt-4">
     <h4>Gerenciar Investimentos dos Usuários</h4>
 
-    <table class="table table-bordered mt-3">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Nome</th>
-                <th>Email</th>
-                <th>Investimento Inicial</th>
-                <th>Valor Atual</th>
-                <th>Lucro</th>
-                <th>Adicionar</th>
-                <th>Remover</th>
-            </tr>
-        </thead>
-        <tbody id="tabela-usuarios"></tbody>
-    </table>
+    <div class="table-responsive">
+        <table class="table table-bordered mt-3">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Nome</th>
+                    <th>Email</th>
+                    <th>Investimento Inicial</th>
+                    <th>Valor Atual</th>
+                    <th>Lucro</th>
+                    <th>Adicionar</th>
+                    <th>Remover</th>
+                </tr>
+            </thead>
+            <tbody id="tabela-usuarios"></tbody>
+        </table>
+    </div>
 </div>
 
 
