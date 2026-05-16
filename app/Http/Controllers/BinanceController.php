@@ -239,6 +239,14 @@ class BinanceController extends Controller
         return (float) $response->json()['price'];
     }
 
+    public function getPrecos()
+    {
+        $btc = Http::get($this->baseUrl . "/api/v3/ticker/price?symbol=BTCBRL")->json()['price'];
+        $bnb = Http::get($this->baseUrl . "/api/v3/ticker/price?symbol=BNBBRL")->json()['price'];
+
+        return ['BTCBRL' => (float) $btc, 'BNBBRL' => (float) $bnb];
+    }
+
     // ============================================================
     // CONFIGURACAO DO BOT
     // ============================================================

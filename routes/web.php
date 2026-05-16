@@ -20,6 +20,8 @@ Route::get('/bot', function () {
 
 Route::get('/binance/getConf', [\App\Http\Controllers\BinanceController::class, 'getConf'])->middleware('auth');
 Route::get('/binance/getSaldos', [\App\Http\Controllers\BinanceController::class, 'getSaldos'])->middleware('auth');
+Route::get('/binance/getPrecos', [\App\Http\Controllers\BinanceController::class, 'getPrecos'])->middleware('auth');
+Route::get('/binance/getOrdens', [\App\Http\Controllers\BinanceController::class, 'getOpenOrders'])->middleware('auth');
 Route::post('/binance/buy', [\App\Http\Controllers\BinanceController::class, 'buy'])->middleware('auth');
 Route::post('/binance/sell', [\App\Http\Controllers\BinanceController::class, 'sell'])->middleware('auth');
 
@@ -54,131 +56,145 @@ Route::get('/bot/patrimonio', function (BinanceController $binance) {
 
 Route::post('/bot/investir-manual', function (Request $req, BinanceController $binance) {
 
-    // 1. validar valor
     $valor = floatval($req->input('valor'));
 
     if ($valor <= 0) {
         return ['mensagem' => 'Valor inválido'];
     }
 
-    // 2. definir o userId corretamente
-    if (Auth::id() === 1 && $req->filled('userId')) {
-        $userId = (int) $req->input('userId');
-    } else {
-        $userId = Auth::id();
-    }
+    // Admin pode investir por outro usuário
+    $userId = (Auth::id() === 1 && $req->filled('userId'))
+        ? (int) $req->input('userId')
+        : Auth::id();
 
-    // 3. pegar saldos reais da Binance
+    // Patrimônio atual da Binance
     $saldos = $binance->getSaldos();
     $preco  = $binance->getPrecoBTC();
 
     $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $brl_total = $brl ? (float) $brl['free'] + (float) $brl['locked'] : 0;
-
     $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
-    $btc_total = $btc ? (float) $btc['free'] + (float) $btc['locked'] : 0;
 
-    $patrimonioAtual = $brl_total + ($btc_total * $preco);
+    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
+                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
-    if ($patrimonioAtual <= 0) {
-        return ['mensagem' => 'Erro ao calcular patrimônio do bot.'];
-    }
+    // Total de cotas em circulação (todos os investidores)
+    $totalCotas = (float) BotInvestment::sum('cotas');
 
-    // 4. pegar investimento atual do usuário (se existir)
+    // Remove o valor do aporte do patrimônio atual, pois o dinheiro já está na Binance
+    // mas ainda não deve ser contado no preço da cota (era do investidor antes do registro)
+    $patrimonioSemDeposito = max(0, $patrimonioAtual - $valor);
+
+    // Preço por cota: se ainda não há cotas, começa em R$1
+    $precoPorCota = $totalCotas > 0 ? $patrimonioSemDeposito / $totalCotas : 1.0;
+
+    // Cotas que o investidor recebe pelo valor aportado
+    $novasCotas = $valor / $precoPorCota;
+
     $invest = BotInvestment::where('user_id', $userId)->first();
 
     if ($invest) {
-        // SOMAR ao investimento existente
-        $novoInvestimento = $invest->investimento_inicial + $valor;
-
-        // recalcular proporção com base no novo total
-        $proporcao = $novoInvestimento / $patrimonioAtual;
-
-        $invest->update([
-            'investimento_inicial' => $novoInvestimento,
-            'proporcao' => $proporcao
-        ]);
-
+        $invest->investimento_inicial += $valor;
+        $invest->cotas += $novasCotas;
+        $invest->save();
     } else {
-        // primeiro investimento do usuário
-        $proporcao = $valor / $patrimonioAtual;
-
         BotInvestment::create([
-            'user_id' => $userId,
+            'user_id'              => $userId,
             'investimento_inicial' => $valor,
-            'patrimonio_inicial' => $patrimonioAtual,
-            'proporcao' => $proporcao
+            'cotas'                => $novasCotas,
         ]);
     }
 
-    return ['mensagem' => 'Investimento atualizado com sucesso!'];
-});
+    return ['mensagem' => 'Investimento realizado com sucesso!'];
+})->middleware('auth');
 
 
 
 Route::get('/bot/valor-atual', function (BinanceController $binance) {
 
     $userId = Auth::id();
-
-    // pegar investimento do usuário
     $invest = BotInvestment::where('user_id', $userId)->first();
 
-    if (!$invest) {
+    if (!$invest || $invest->cotas <= 0) {
         return [
-            'mensagem' => 'Nenhum investimento encontrado.',
-            'valor_atual' => 0,
-            'lucro' => 0,
-            'impacto_btc' => 0
+            'mensagem'             => 'Nenhum investimento encontrado.',
+            'investimento_inicial' => 0,
+            'cotas'                => 0,
+            'percentual'           => 0,
+            'valor_atual'          => 0,
+            'lucro'                => 0,
         ];
     }
 
-    // pegar saldos reais da Binance
     $saldos = $binance->getSaldos();
     $preco  = $binance->getPrecoBTC();
 
-    // pegar BRL corretamente
     $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $brl_total = $brl ? (float) $brl['free'] + (float) $brl['locked'] : 0;
-
-    // pegar BTC corretamente
     $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
-    $btc_total = $btc ? (float) $btc['free'] + (float) $btc['locked'] : 0;
 
-    // patrimônio real do bot
-    $patrimonioAtual = $brl_total + ($btc_total * $preco);
+    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
+                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
-    // impedir cálculo inválido
-    if ($patrimonioAtual <= 0) {
-        return [
-            'mensagem' => 'Não foi possível calcular o patrimônio atual do bot.',
-            'valor_atual' => 0,
-            'lucro' => 0,
-            'impacto_btc' => 0
-        ];
-    }
+    $totalCotas   = (float) BotInvestment::sum('cotas');
+    $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
 
-    // impacto do BTC desde a entrada do usuário
-    $impacto_btc = $patrimonioAtual - $invest->patrimonio_inicial;
-
-    // impacto proporcional ao usuário
-    $impacto_usuario = $impacto_btc * $invest->proporcao;
-
-    // valor atual do investimento
-    $valor_atual = $invest->investimento_inicial + $impacto_usuario;
+    $valorAtual = $invest->cotas * $precoPorCota;
+    $lucro      = $valorAtual - $invest->investimento_inicial;
+    $percentual = $totalCotas > 0 ? ($invest->cotas / $totalCotas) * 100 : 0;
 
     return [
         'investimento_inicial' => $invest->investimento_inicial,
-        'preco_btc' => $preco,
+        'cotas'                => $invest->cotas,
+        'percentual'           => round($percentual, 4),
+        'preco_btc'            => $preco,
         'patrimonio_bot_atual' => $patrimonioAtual,
-        'patrimonio_bot_inicial' => $invest->patrimonio_inicial,
-        'proporcao' => $invest->proporcao,
-        'impacto_btc' => $impacto_btc,
-        'impacto_usuario' => $impacto_usuario,
-        'valor_atual' => $valor_atual,
-        'lucro' => $valor_atual - $invest->investimento_inicial
+        'preco_por_cota'       => $precoPorCota,
+        'valor_atual'          => $valorAtual,
+        'lucro'                => $lucro,
     ];
-});
+})->middleware('auth');
 
+
+Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceController $binance) {
+
+    if (Auth::id() !== 1) {
+        return ['mensagem' => 'Acesso negado.'];
+    }
+
+    $valor = floatval($req->input('valor'));
+    if ($valor <= 0) {
+        return ['mensagem' => 'Valor inválido.'];
+    }
+
+    $invest = BotInvestment::where('user_id', $userId)->first();
+    if (!$invest || $invest->cotas <= 0) {
+        return ['mensagem' => 'Investimento não encontrado.'];
+    }
+
+    $saldos = $binance->getSaldos();
+    $preco  = $binance->getPrecoBTC();
+
+    $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
+    $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
+
+    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
+                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
+
+    // O dinheiro já saiu da Binance, então soma de volta para obter o preço correto
+    $patrimonioAntes = $patrimonioAtual + $valor;
+    $totalCotas      = (float) BotInvestment::sum('cotas');
+    $precoPorCota    = $totalCotas > 0 ? $patrimonioAntes / $totalCotas : 1.0;
+    $cotasAQueimar   = $valor / $precoPorCota;
+
+    if ($cotasAQueimar >= $invest->cotas) {
+        $invest->delete();
+    } else {
+        $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valor);
+        $invest->cotas -= $cotasAQueimar;
+        $invest->save();
+    }
+
+    return ['mensagem' => 'Retirada registrada com sucesso!'];
+})->middleware('auth');
 
 Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
 
@@ -205,61 +221,54 @@ Route::get('/admin/usuarios', function () {
     return \App\Models\User::select('id', 'name', 'email')->get();
 });
 
-Route::get('/admin/usuarios-investimentos', function (\App\Http\Controllers\BinanceController $binance) {
+Route::get('/admin/usuarios-investimentos', function (BinanceController $binance) {
 
     if (Auth::id() !== 1) {
         return [];
     }
 
-    $usuarios = \App\Models\User::select('id', 'name', 'email')->get();
-
-    // pegar patrimônio real do bot
     $saldos = $binance->getSaldos();
     $preco  = $binance->getPrecoBTC();
 
     $brl = collect($saldos['balances'])->firstWhere('asset', 'BRL');
     $btc = collect($saldos['balances'])->firstWhere('asset', 'BTC');
 
-    $brl_total = (float) $brl['free'] + (float) $brl['locked'];
-    $btc_total = (float) $btc['free'] + (float) $btc['locked'];
+    $patrimonioAtual = ((float)$brl['free'] + (float)$brl['locked'])
+                     + (((float)$btc['free'] + (float)$btc['locked']) * $preco);
 
-    $patrimonioAtual = $brl_total + ($btc_total * $preco);
+    $totalCotas   = (float) BotInvestment::sum('cotas');
+    $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
 
-    // montar lista final
-    $lista = [];
+    return \App\Models\User::select('id', 'name', 'email')->get()->map(function ($u) use ($precoPorCota, $totalCotas) {
 
-    foreach ($usuarios as $u) {
+        $inv = BotInvestment::where('user_id', $u->id)->first();
 
-        $inv = \App\Models\BotInvestment::where('user_id', $u->id)->first();
-
-        if (!$inv) {
-            $lista[] = [
-                'id' => $u->id,
-                'name' => $u->name,
-                'email' => $u->email,
+        if (!$inv || $inv->cotas <= 0) {
+            return [
+                'id'                   => $u->id,
+                'name'                 => $u->name,
+                'email'                => $u->email,
                 'investimento_inicial' => 0,
-                'valor_atual' => 0,
-                'lucro' => 0
+                'cotas'                => 0,
+                'percentual'           => 0,
+                'valor_atual'          => 0,
+                'lucro'                => 0,
             ];
-            continue;
         }
 
-        // calcular impacto
-        $impacto_btc = $patrimonioAtual - $inv->patrimonio_inicial;
-        $impacto_usuario = $impacto_btc * $inv->proporcao;
-        $valor_atual = $inv->investimento_inicial + $impacto_usuario;
+        $valorAtual = $inv->cotas * $precoPorCota;
+        $percentual = $totalCotas > 0 ? ($inv->cotas / $totalCotas) * 100 : 0;
 
-        $lista[] = [
-            'id' => $u->id,
-            'name' => $u->name,
-            'email' => $u->email,
+        return [
+            'id'                   => $u->id,
+            'name'                 => $u->name,
+            'email'                => $u->email,
             'investimento_inicial' => $inv->investimento_inicial,
-            'valor_atual' => $valor_atual,
-            'lucro' => $valor_atual - $inv->investimento_inicial
+            'cotas'                => round($inv->cotas, 4),
+            'percentual'           => round($percentual, 2),
+            'valor_atual'          => $valorAtual,
+            'lucro'                => $valorAtual - $inv->investimento_inicial,
         ];
-    }
+    });
+})->middleware('auth');
 
-    return $lista;
-});
-
-$userId = Auth::id() === 1 ? $req->input('userId') : Auth::id();
