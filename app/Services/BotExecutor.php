@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\BotState;
+use App\Models\BotConfig;
 use App\Http\Controllers\BinanceController;
 
 class BotExecutor
@@ -160,7 +161,8 @@ class BotExecutor
         $state = new BotState();
         $state->id_user = $userId;
         $state->preco_referencia = $precoAtual;
-        $state->salto = 1000; // padrao inicial (os proximos seguem a tabela)
+        $config = BotConfig::atual();
+        $state->salto = $config->salto;
         $state->direcao_atual = null;
         $state->contador_subidas = 0;
         $state->contador_quedas = 0;
@@ -234,11 +236,13 @@ class BotExecutor
 
     private function percentualPorSalto(int $contador): float
     {
+        $cfg = BotConfig::atual();
+
         return match (true) {
-            $contador === 1 => 0.25,
-            $contador === 2 => 0.15,
-            $contador === 3 => 0.10,
-            $contador === 4 => 0.05,
+            $contador === 1 => $cfg->p1,
+            $contador === 2 => $cfg->p2,
+            $contador === 3 => $cfg->p3,
+            $contador === 4 => $cfg->p4,
             default => 0.01,
         };
     }
@@ -249,7 +253,9 @@ class BotExecutor
 
     private function criarOrdensNovas(BotState $state, float $precoAtual)
     {
-        $salto = $state->salto;
+        $config = BotConfig::atual();
+        $salto  = $config->salto;
+        $state->salto = $salto; // mantém sincronizado
 
         $precoCompra = $precoAtual - $salto;
         $precoVenda  = $precoAtual + $salto;
@@ -263,8 +269,8 @@ class BotExecutor
                 : $state->contador_quedas
         );
 
-        // Percentual fixo para o lado oposto
-        $percentualFixo = 0.25;
+        // Percentual fixo para o lado oposto (sempre p1 — trade normal)
+        $percentualFixo = BotConfig::atual()->p1;
 
         $contadorAtual = $state->direcao_atual === 'up'
             ? $state->contador_subidas

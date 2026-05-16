@@ -232,6 +232,11 @@
                             </li>
                         @endif
                     @else
+                        @if(auth()->user()->id == 1)
+                        <li class="nav-item">
+                            <a class="nav-link" href="/simulacao"><i class="fa-solid fa-flask-vial me-1"></i>Simulação</a>
+                        </li>
+                        @endif
                         <li class="nav-item dropdown">
                             <a id="navbarDropdown" class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
                                 <i class="fa-regular fa-circle-user me-1"></i>{{ Auth::user()->name }}
