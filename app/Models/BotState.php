@@ -14,6 +14,7 @@ class BotState extends Model
         'direcao_atual',
         'contador_subidas',
         'contador_quedas',
+        'contador_anterior',
         'salto',
         'order_id_compra',
         'order_id_venda',

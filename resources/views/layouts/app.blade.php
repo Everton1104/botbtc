@@ -260,5 +260,25 @@
     </main>
 </div>
 
+<script>
+(function () {
+    var appName = '{{ config('app.name', 'BotBTC') }}';
+
+    function atualizarTitulo() {
+        fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL')
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                if (d && d.price) {
+                    var preco = Math.round(parseFloat(d.price)).toLocaleString('pt-BR');
+                    document.title = appName + ' · R$ ' + preco;
+                }
+            })
+            .catch(function(){});
+    }
+
+    atualizarTitulo();
+    setInterval(atualizarTitulo, 30000); // atualiza a cada 30 s
+})();
+</script>
 </body>
 </html>
