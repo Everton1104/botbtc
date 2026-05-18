@@ -238,7 +238,7 @@ class BotExecutor
     // PERCENTUAIS
     // ============================================================
 
-    // Retorna p1, p2, p3, p4 conforme o contador (usado em quedas)
+    // Retorna p1, p2, p3, p4 conforme o contador; p5/p6/p7 = 1%
     private function percentualPorSalto(int $contador): float
     {
         $cfg = BotConfig::atual();
@@ -248,21 +248,17 @@ class BotExecutor
             $contador === 2 => $cfg->p2,
             $contador === 3 => $cfg->p3,
             $contador === 4 => $cfg->p4,
-            default => 0.01,
+            default         => 0.01,   // saltos 5, 6, 7 = 1%
         };
     }
 
-    // Modo B — espelho: subidas vendem p3→p2→p1 (inverso das quedas)
-    private function percentualEspelhoSubida(int $contador): float
+    // Espelho dinâmico: vende no nível (nivelMaximo - contadorSubidas + 1)
+    // Exemplo: nivelMaximo=7, subida 1 → vende 1% (nível 7), subida 4 → vende p4 (5%), etc.
+    private function percentualEspelhoSubida(int $contadorSubidas, int $nivelMaximo): float
     {
-        $cfg = BotConfig::atual();
-
-        return match (true) {
-            $contador === 1 => $cfg->p3, // 1ª subida: menor (10%)
-            $contador === 2 => $cfg->p2, // 2ª subida: médio (25%)
-            $contador === 3 => $cfg->p1, // 3ª subida: maior (50%)
-            default         => 0.0,      // pausa
-        };
+        $nivel = $nivelMaximo - $contadorSubidas + 1;
+        if ($nivel < 1) return 0.0;
+        return $this->percentualPorSalto($nivel);
     }
 
     // ============================================================
@@ -284,15 +280,13 @@ class BotExecutor
             ? $state->contador_subidas
             : $state->contador_quedas;
 
-        // Modo B (espelho) ativo somente se o streak anterior foi 3+ saltos
-        $modoEspelho = ($state->contador_anterior ?? 0) >= 3;
+        // Profundidade da sequência anterior (usada como teto do espelho de volta)
+        $nivelMaximo = (int) ($state->contador_anterior ?? 0);
 
-        // Modo B permite 3 passos antes de pausar (p1→p2→p3 / p3→p2→p1)
-        // Modo A permite 2 passos antes de pausar (p1→p2)
-        $limPausa = $modoEspelho ? 4 : 3;
-
-        $pausarCompra = $state->direcao_atual === 'down' && $contadorAtual >= $limPausa;
-        $pausarVenda  = $state->direcao_atual === 'up'   && $contadorAtual >= $limPausa;
+        // All-in no 8º salto consecutivo na mesma direção.
+        // Compra ou vende 100% do montante e posiciona ordem de saída 1 salto oposto.
+        // A cada salto adicional a saída se atualiza acompanhando o preço.
+        $allin = $contadorAtual >= 8;
 
         // ============================================================
         // COMPRA
@@ -301,22 +295,22 @@ class BotExecutor
         $saldoBRL = (float) (collect($saldos['balances'])
             ->firstWhere('asset', 'BRL')['free'] ?? 0);
 
-        if (!$pausarCompra) {
-            if ($state->direcao_atual === 'down') {
-                // Queda: sempre p1→p2(→p3 se modoEspelho) conforme contador
-                $percentualCompra = $this->percentualPorSalto($contadorAtual);
-            } else {
-                // Subida: ordem de compra reservada para a próxima queda (sempre p1)
-                $percentualCompra = $config->p1;
-            }
+        if ($allin && $state->direcao_atual === 'down') {
+            // All-in caindo: compra 100% do BRL disponível
+            $valorCompra = $saldoBRL;
+        } elseif ($state->direcao_atual === 'down') {
+            // Saltos 1–7: percentual progressivo (p1→p2→p3→p4→1%→1%→1%)
+            $percentualCompra = $this->percentualPorSalto($contadorAtual);
+            $valorCompra      = $saldoBRL * $percentualCompra;
+        } else {
+            // Subindo: standby buy reservado para próxima queda (p1)
+            $valorCompra = $saldoBRL * $config->p1;
+        }
 
-            $valorCompra = $saldoBRL * $percentualCompra;
-
-            if ($valorCompra > 10) {
-                $quantidadeBTC = $valorCompra / $precoCompra;
-                $orderCompra = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
-                $state->order_id_compra = $orderCompra['orderId'] ?? null;
-            }
+        if (!empty($valorCompra) && $valorCompra > 10) {
+            $quantidadeBTC = $valorCompra / $precoCompra;
+            $orderCompra   = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
+            $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
         // ============================================================
@@ -326,19 +320,21 @@ class BotExecutor
         $saldoBTC = (float) (collect($saldos['balances'])
             ->firstWhere('asset', 'BTC')['free'] ?? 0);
 
-        if (!$pausarVenda) {
-            if ($state->direcao_atual === 'up') {
-                // Subida: espelho (p3→p2→p1) se modoEspelho, senão normal (p1→p2)
-                $percentualVenda = $modoEspelho
-                    ? $this->percentualEspelhoSubida($contadorAtual)
-                    : $this->percentualPorSalto($contadorAtual);
-            } else {
-                // Queda: ordem de venda reservada para a próxima subida
-                // Modo B → coloca p3 (primeira subida vende pouco, mantendo exposição)
-                // Modo A → coloca p1 (primeira subida vende 50% logo)
-                $percentualVenda = $modoEspelho ? $config->p3 : $config->p1;
-            }
+        if ($allin) {
+            // All-in (qualquer direção): 100% — saída ou entrada total
+            $percentualVenda = 1.0;
+        } elseif ($state->direcao_atual === 'up') {
+            // Espelho dinâmico: vende no nível (nivelMaximo - passo + 1)
+            // Ex: caiu 7 → subida 1 vende 1% (nível 7), subida 5 vende p3 (10%), etc.
+            $percentualVenda = $nivelMaximo > 0
+                ? $this->percentualEspelhoSubida($contadorAtual, $nivelMaximo)
+                : $this->percentualPorSalto($contadorAtual);
+        } else {
+            // Caindo: standby sell espelha o nível atual da queda
+            $percentualVenda = $this->percentualPorSalto($contadorAtual);
+        }
 
+        if ($percentualVenda > 0) {
             $quantidadeVenda = $saldoBTC * $percentualVenda;
 
             if ($quantidadeVenda > 0) {

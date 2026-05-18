@@ -394,6 +394,7 @@ function carregarTabela() {
     });
 }
 carregarTabela();
+setInterval(carregarTabela, 60000);
 
 function carregarOrdens() {
     axios.get('/binance/getOrdens').then(res => {
@@ -665,6 +666,7 @@ function carregarMeusSaques() {
     }).catch(() => {});
 }
 carregarMeusSaques();
+setInterval(carregarMeusSaques, 60000);
 </script>
 
 @endsection
