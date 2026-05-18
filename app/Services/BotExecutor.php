@@ -36,7 +36,7 @@ class BotExecutor
         // ============================================================
         // PROTEÇÃO: cancelar ordens fora do preço atual com margem
         // ============================================================
-        $margem = 1000; // margem de tolerância em BRL
+        $margem = $state->salto * 1.5; // margem de tolerância: 1.5x o salto
 
         $cancelledAny = false;
 
@@ -327,7 +327,7 @@ class BotExecutor
             // Espelho dinâmico: vende no nível (nivelMaximo - passo + 1)
             // Ex: caiu 7 → subida 1 vende 1% (nível 7), subida 5 vende p3 (10%), etc.
             $percentualVenda = $nivelMaximo > 0
-                ? $this->percentualEspelhoSubida($contadorAtual, $nivelMaximo)
+                ? $this->percentualEspelhoSubida($contadorAtual, min($nivelMaximo, 3))
                 : $this->percentualPorSalto($contadorAtual);
         } else {
             // Caindo: standby sell espelha o nível atual da queda
