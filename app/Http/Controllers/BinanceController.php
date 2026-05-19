@@ -248,6 +248,39 @@ class BinanceController extends Controller
     }
 
     // ============================================================
+    // COMPRAR BNB A MERCADO (gasta exatamente $valorBRL em BRL)
+    // ============================================================
+
+    public function comprarBNBMercado(float $valorBRL): array
+    {
+        $timestamp = now()->getTimestampMs();
+        $qty       = number_format($valorBRL, 2, '.', '');
+
+        $params = http_build_query([
+            'symbol'        => 'BNBBRL',
+            'side'          => 'BUY',
+            'type'          => 'MARKET',
+            'quoteOrderQty' => $qty,
+            'timestamp'     => $timestamp,
+        ]);
+
+        $signature = $this->assinar($params);
+
+        $url = $this->baseUrl . '/api/v3/order';
+
+        return Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
+            ->asForm()
+            ->post($url, [
+                'symbol'        => 'BNBBRL',
+                'side'          => 'BUY',
+                'type'          => 'MARKET',
+                'quoteOrderQty' => $qty,
+                'timestamp'     => $timestamp,
+                'signature'     => $signature,
+            ])->json();
+    }
+
+    // ============================================================
     // CONFIGURACAO DO BOT
     // ============================================================
     public function getConf()

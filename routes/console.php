@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('bots:executar')->everyMinute();
+Schedule::command('bots:recarregar-bnb')->everyFiveMinutes();
