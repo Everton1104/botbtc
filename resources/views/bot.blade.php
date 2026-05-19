@@ -148,6 +148,33 @@
         </div>
     </div>
 
+    {{-- Depósitos PIX confirmados --}}
+    <div class="section-title mt-2">
+        <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
+        <span id="badge-depositos-pix" class="ms-2" style="display:none;background:#32bcad;color:#000;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;"></span>
+    </div>
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>Pago em</th>
+                            <th>Valor Pago</th>
+                            <th>Líquido no Bot</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-depositos-pix">
+                        <tr><td colspan="6" class="text-center text-muted py-3">Nenhum depósito confirmado.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     {{-- Configuração do bot --}}
     <div class="section-title mt-2"><i class="fa-solid fa-sliders me-2"></i>Configuração do Bot</div>
     <div class="card mb-5">
@@ -243,6 +270,33 @@
 
     </div>
 
+    {{-- Depósito PIX --}}
+    <div class="mb-3">
+        <div class="card" style="border-color:rgba(0,214,143,.25);">
+            <div class="card-body">
+                <div class="section-title mb-3"><i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depositar via PIX</div>
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-5">
+                        <label class="form-label">Valor a depositar (R$)</label>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">R$</span>
+                            <input type="number" id="deposito-valor" class="form-control" min="1" step="0.01" placeholder="0,00" oninput="atualizarPreviewDeposito()">
+                        </div>
+                        <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
+                            O bot receberá: <strong id="deposito-liquido-preview" class="text-green">—</strong>
+                            <span style="color:var(--muted);"> (após 1% de taxa do Mercado Pago)</span>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <button class="btn w-100" onclick="abrirPix()" style="background:#32bcad;border:none;color:#000;font-weight:600;">
+                            <i class="fa-solid fa-qrcode me-1"></i>Gerar QR Code
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     {{-- Saque --}}
     <div class="mb-3" id="area-saque-form">
         <div class="card">
@@ -276,9 +330,9 @@
         <div id="lista-saques-pendentes"></div>
     </div>
 
-    {{-- Histórico de saques --}}
+    {{-- Histórico de movimentações --}}
     <div id="area-historico-saques" class="mb-5" style="display:none;">
-        <div class="section-title"><i class="fa-solid fa-check-double me-2"></i>Histórico de Saques</div>
+        <div class="section-title"><i class="fa-solid fa-clock-rotate-left me-2"></i>Histórico de Movimentações</div>
         <div class="card">
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -286,7 +340,8 @@
                         <thead>
                             <tr>
                                 <th>Data</th>
-                                <th>Valor Recebido</th>
+                                <th>Tipo</th>
+                                <th>Valor</th>
                             </tr>
                         </thead>
                         <tbody id="tabela-historico-saques"></tbody>
@@ -309,6 +364,124 @@
     </div>
 
 </div>{{-- /container --}}
+
+
+{{-- ══════════════════════════════════════════
+     MODAL PIX
+══════════════════════════════════════════ --}}
+<div class="modal fade" id="modalPix" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" style="max-width:420px;">
+        <div class="modal-content" style="background:var(--surface);border:1px solid var(--border);border-radius:16px;">
+
+            {{-- Header --}}
+            <div class="modal-header" style="border-bottom:1px solid var(--border);">
+                <h5 class="modal-title fw-600" style="color:var(--text);">
+                    <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Pagamento PIX
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+
+            <div class="modal-body p-4">
+
+                {{-- Estado: gerando --}}
+                <div id="pix-loading" class="text-center py-4">
+                    <div class="spinner-border" style="color:#32bcad;width:2.5rem;height:2.5rem;" role="status"></div>
+                    <div class="mt-3" style="color:var(--muted);font-size:.9rem;">Gerando cobrança...</div>
+                </div>
+
+                {{-- Estado: QR exibido --}}
+                <div id="pix-qr" style="display:none;">
+
+                    {{-- Timer --}}
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span style="font-size:.82rem;color:var(--muted);">Expira em</span>
+                        <span id="pix-timer" style="font-size:.95rem;font-weight:600;color:#f0b90b;letter-spacing:.04em;">30:00</span>
+                    </div>
+
+                    {{-- QR Code --}}
+                    <div class="text-center mb-3">
+                        <img id="pix-qr-img" src="" alt="QR Code PIX"
+                             style="width:220px;height:220px;border-radius:12px;border:3px solid #32bcad;background:#fff;padding:6px;">
+                    </div>
+
+                    {{-- Valor --}}
+                    <div class="text-center mb-3">
+                        <span style="font-size:.78rem;color:var(--muted);">Valor a pagar</span>
+                        <div style="font-size:1.5rem;font-weight:700;color:#32bcad;">
+                            R$ <span id="pix-valor-display">—</span>
+                        </div>
+                    </div>
+
+                    {{-- Copia e cola --}}
+                    <div class="mb-3">
+                        <label style="font-size:.75rem;color:var(--muted);margin-bottom:4px;">PIX Copia e Cola</label>
+                        <div class="input-group input-group-sm">
+                            <input type="text" id="pix-copia-cola" class="form-control"
+                                   readonly style="font-size:.72rem;background:var(--surface2);color:var(--muted);border-color:var(--border);">
+                            <button class="btn btn-sm" onclick="copiarPix()"
+                                    style="background:var(--surface2);border:1px solid var(--border);color:var(--text);">
+                                <i class="fa-solid fa-copy" id="pix-copy-icon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    {{-- Instrução --}}
+                    <div style="background:rgba(50,188,173,.08);border:1px solid rgba(50,188,173,.25);border-radius:10px;padding:.7rem 1rem;font-size:.8rem;color:#32bcad;text-align:center;">
+                        <i class="fa-solid fa-circle-info me-1"></i>
+                        Abra o app do seu banco, escaneie o QR ou use o código copia e cola.
+                        <br>A confirmação é <strong>automática</strong>.
+                    </div>
+
+                    {{-- Aviso de não reembolso da taxa --}}
+                    <div class="mt-2" style="background:rgba(255,71,87,.06);border:1px solid rgba(255,71,87,.2);border-radius:10px;padding:.65rem 1rem;font-size:.76rem;color:#ff4757;line-height:1.5;">
+                        <i class="fa-solid fa-triangle-exclamation me-1"></i>
+                        <strong>Arrependimento:</strong> em caso de cancelamento, o estorno pode ser solicitado ao administrador.
+                        O valor integral será devolvido, porém a <strong>taxa de 1% do Mercado Pago não é reembolsável</strong>.
+                    </div>
+                </div>
+
+                {{-- Estado: pago --}}
+                <div id="pix-pago" style="display:none;" class="text-center py-2">
+                    <div style="font-size:3rem;color:#00d68f;">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                    <div class="mt-2 fw-600" style="font-size:1.1rem;color:var(--text);">Pagamento recebido!</div>
+                    <div class="mt-1 mb-3" style="font-size:.85rem;color:var(--muted);">
+                        R$ <span id="pix-valor-confirmado">—</span> confirmado com sucesso.
+                    </div>
+
+                    <div style="background:rgba(240,185,11,.08);border:1px solid rgba(240,185,11,.3);border-radius:10px;padding:.85rem 1rem;font-size:.8rem;color:#f0b90b;text-align:left;">
+                        <div class="fw-600 mb-1"><i class="fa-solid fa-clock me-1"></i>Aguardando aprovação do administrador</div>
+                        <div style="color:var(--muted);line-height:1.6;">
+                            Seu depósito entrou na fila de processamento. O valor será adicionado ao seu saldo no bot
+                            <strong style="color:#f0b90b;">mediante aprovação manual</strong> do administrador.
+                            Você será informado assim que o crédito for efetivado.
+                        </div>
+                    </div>
+
+                    <button class="btn btn-sm mt-3 px-4" data-bs-dismiss="modal"
+                            style="background:var(--surface2);border:1px solid var(--border);color:var(--text);">
+                        <i class="fa-solid fa-check me-1"></i>Entendido
+                    </button>
+                </div>
+
+                {{-- Estado: expirado --}}
+                <div id="pix-expirado" style="display:none;" class="text-center py-3">
+                    <div style="font-size:3rem;color:#ff4757;">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <div class="mt-2 fw-600" style="color:var(--text);">Cobrança expirada</div>
+                    <div class="mt-1" style="font-size:.85rem;color:var(--muted);">Gere um novo QR code para tentar novamente.</div>
+                    <button class="btn btn-sm mt-3 px-4" data-bs-dismiss="modal"
+                            style="background:var(--surface2);border:1px solid var(--border);color:var(--text);">
+                        Fechar
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
 
 
 {{-- ══════════════════════════════════════════
@@ -522,6 +695,108 @@ function carregarSaques() {
 carregarSaques();
 setInterval(carregarSaques, 15000);
 
+// ── Depósitos PIX confirmados (admin) ─────────────────
+function carregarDepositosPix() {
+    axios.get('/admin/depositos-pix').then(res => {
+        const deps = res.data;
+        const badge = document.getElementById('badge-depositos-pix');
+
+        // Badge com contagem de não registrados
+        const pendentes = deps.filter(d => !d.registrado);
+        if (pendentes.length) {
+            badge.style.display = '';
+            badge.textContent   = pendentes.length + ' novo' + (pendentes.length > 1 ? 's' : '');
+        } else {
+            badge.style.display = 'none';
+        }
+
+        if (!deps.length) {
+            document.getElementById('tabela-depositos-pix').innerHTML =
+                '<tr><td colspan="6" class="text-center text-muted py-3">Nenhum depósito confirmado.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        deps.forEach(d => {
+            const liquido = (d.valor * 0.99).toFixed(2);
+            const tagPix  = '<span style="background:rgba(50,188,173,.15);color:#32bcad;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;border:1px solid rgba(50,188,173,.3);">PAGO VIA PIX</span>';
+
+            if (d.estornado) {
+                html += `
+                <tr style="opacity:.45;">
+                    <td class="fw-500">${d.user_name}</td>
+                    <td class="text-muted" style="font-size:.8rem;">${d.pago_em}</td>
+                    <td>R$ ${fmt(d.valor)}</td>
+                    <td class="text-muted">—</td>
+                    <td><span style="background:rgba(255,71,87,.15);color:#ff4757;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;border:1px solid rgba(255,71,87,.3);">ESTORNADO</span></td>
+                    <td><i class="fa-solid fa-rotate-left" style="color:#ff4757;"></i></td>
+                </tr>`;
+            } else if (d.registrado) {
+                html += `
+                <tr style="opacity:.5;">
+                    <td class="fw-500">${d.user_name}</td>
+                    <td class="text-muted" style="font-size:.8rem;">${d.pago_em}</td>
+                    <td>R$ ${fmt(d.valor)}</td>
+                    <td class="text-green fw-600">R$ ${fmt(liquido)}</td>
+                    <td>${tagPix} <span class="ms-1" style="font-size:.72rem;color:var(--muted);">registrado</span></td>
+                    <td><i class="fa-solid fa-check text-green"></i></td>
+                </tr>`;
+            } else {
+                html += `
+                <tr>
+                    <td class="fw-500">${d.user_name}</td>
+                    <td class="text-muted" style="font-size:.8rem;">${d.pago_em}</td>
+                    <td>R$ ${fmt(d.valor)}</td>
+                    <td class="text-green fw-600">R$ ${fmt(liquido)}</td>
+                    <td>${tagPix}</td>
+                    <td>
+                        <div class="d-flex gap-1">
+                            <button class="btn btn-sm px-3" style="background:#32bcad;border:none;color:#000;font-weight:600;font-size:.8rem;"
+                                    onclick="registrarDepositoNoBot(${d.id}, ${d.user_id}, ${liquido}, '${d.user_name}')">
+                                <i class="fa-solid fa-plus me-1"></i>Registrar
+                            </button>
+                            <button class="btn btn-sm btn-danger px-2" title="Estornar pagamento"
+                                    onclick="estornarDeposito(${d.id}, '${d.txid}', ${d.valor}, '${d.user_name}')">
+                                <i class="fa-solid fa-rotate-left"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+        });
+        document.getElementById('tabela-depositos-pix').innerHTML = html;
+    }).catch(() => {});
+}
+carregarDepositosPix();
+setInterval(carregarDepositosPix, 15000);
+
+function estornarDeposito(pixId, txid, valor, nome) {
+    const fmtVal = fmt(valor);
+    const taxa   = fmt(valor * 0.01);
+    if (!confirm(`Estornar R$ ${fmtVal} para ${nome}?\n\n⚠️ O cliente recebe 100% de volta.\nA taxa de R$ ${taxa} (1% do Mercado Pago) NÃO será recuperada.\n\nConfirmar estorno?`)) return;
+
+    axios.post(`/admin/depositos-pix/${pixId}/estornar`)
+        .then(res => { alert(res.data.mensagem); carregarDepositosPix(); })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao estornar pagamento.'));
+}
+
+function registrarDepositoNoBot(pixId, userId, valorLiquido, nome) {
+    const fmtVal = fmt(valorLiquido);
+    if (!confirm(`Registrar depósito de R$ ${fmtVal} para ${nome} no Bot?\n\nIsso adicionará cotas proporcional ao patrimônio atual.`)) return;
+
+    // 1. Registra o investimento no bot
+    axios.post('/bot/investir-manual', { valor: valorLiquido, userId })
+        .then(() => {
+            // 2. Marca o depósito PIX como registrado
+            return axios.post(`/admin/depositos-pix/${pixId}/registrar`);
+        })
+        .then(() => {
+            carregarDepositosPix();
+            carregarTabela();
+        })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao registrar depósito.'));
+}
+
 function confirmarSaque(id, nome, valorLiquido) {
     const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
     if (!confirm(`Confirma que o PIX de R$ ${fmtVal} foi enviado para ${nome}?\n\nAs cotas serão removidas automaticamente.`)) return;
@@ -626,8 +901,12 @@ function cancelarSaque(id) {
 }
 
 function carregarMeusSaques() {
-    axios.get('/bot/meus-saques').then(res => {
-        const { pendentes, historico } = res.data;
+    Promise.all([
+        axios.get('/bot/meus-saques'),
+        axios.get('/bot/meus-depositos'),
+    ]).then(([resSaques, resDepositos]) => {
+        const { pendentes, historico } = resSaques.data;
+        const depositos = resDepositos.data;
 
         // Pendentes
         const areaPend = document.getElementById('area-saques-pendentes');
@@ -650,16 +929,47 @@ function carregarMeusSaques() {
             areaPend.style.display = 'none';
         }
 
-        // Histórico
-        const areaHist = document.getElementById('area-historico-saques');
+        // Histórico unificado (saques + depósitos), ordenado por data desc
+        const areaHist  = document.getElementById('area-historico-saques');
         const tabelaHist = document.getElementById('tabela-historico-saques');
-        if (historico.length) {
+
+        const linhas = [
+            ...historico.map(s => ({
+                data:  s.confirmado_em,
+                tipo:  'saque',
+                valor: s.valor_liquido,
+            })),
+            ...depositos.map(d => ({
+                data:  d.pago_em,
+                tipo:  'deposito',
+                valor: d.valor,
+            })),
+        ].sort((a, b) => {
+            // dd/mm/yyyy hh:mm → yyyy-mm-dd hh:mm para comparação
+            const parse = str => {
+                const [d, t] = str.split(' ');
+                const [dd, mm, yyyy] = d.split('/');
+                return `${yyyy}-${mm}-${dd} ${t ?? '00:00'}`;
+            };
+            return parse(b.data).localeCompare(parse(a.data));
+        });
+
+        if (linhas.length) {
             areaHist.style.display = '';
-            tabelaHist.innerHTML = historico.map(s => `
+            tabelaHist.innerHTML = linhas.map(l => {
+                const isSaque = l.tipo === 'saque';
+                const cor     = isSaque ? '#ff4757' : '#0ecb81';
+                const sinal   = isSaque ? '−' : '+';
+                const label   = isSaque
+                    ? `<span style="color:#ff4757;font-size:.75rem;font-weight:600;"><i class="fa-solid fa-arrow-up-from-bracket me-1"></i>Saque</span>`
+                    : `<span style="color:#0ecb81;font-size:.75rem;font-weight:600;"><i class="fa-solid fa-arrow-down-to-bracket me-1"></i>Depósito</span>`;
+                return `
                 <tr>
-                    <td class="text-muted">${s.confirmado_em}</td>
-                    <td class="text-green fw-600">R$ ${fmt(s.valor_liquido)}</td>
-                </tr>`).join('');
+                    <td class="text-muted" style="font-size:.83rem;">${l.data}</td>
+                    <td>${label}</td>
+                    <td style="color:${cor};font-weight:700;">${sinal} R$ ${fmt(l.valor)}</td>
+                </tr>`;
+            }).join('');
         } else {
             areaHist.style.display = 'none';
         }
@@ -667,6 +977,109 @@ function carregarMeusSaques() {
 }
 carregarMeusSaques();
 setInterval(carregarMeusSaques, 60000);
+
+// ── Preview depósito ──────────────────────────────────
+function atualizarPreviewDeposito() {
+    const val  = parseFloat(document.getElementById('deposito-valor').value) || 0;
+    const prev = document.getElementById('deposito-liquido-preview');
+    prev.textContent = val > 0 ? 'R$ ' + fmt(val * 0.99) : '—';
+}
+
+// ── PIX Depósito ──────────────────────────────────────
+let pixTxid        = null;
+let pixTimerIntvl  = null;
+let pixPollIntvl   = null;
+const modalPix     = new bootstrap.Modal(document.getElementById('modalPix'));
+
+function mostrarEstado(estado) {
+    ['pix-loading','pix-qr','pix-pago','pix-expirado'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById(estado).style.display = '';
+}
+
+function abrirPix() {
+    const valor = parseFloat(document.getElementById('deposito-valor').value);
+    if (!valor || valor < 1) { alert('Informe um valor de pelo menos R$ 1,00.'); return; }
+
+    // Reseta estado
+    pixTxid = null;
+    clearInterval(pixTimerIntvl);
+    clearInterval(pixPollIntvl);
+    mostrarEstado('pix-loading');
+    modalPix.show();
+
+    const csrf = document.querySelector('meta[name="csrf-token"]').content;
+
+    axios.post('/pix/criar', { valor, descricao: 'Depósito BotBTC' }, {
+        headers: { 'X-CSRF-TOKEN': csrf }
+    }).then(res => {
+        const d = res.data;
+        pixTxid = d.txid;
+
+        // Preenche QR
+        document.getElementById('pix-qr-img').src     = 'data:image/png;base64,' + d.qr_code;
+        document.getElementById('pix-copia-cola').value = d.copia_e_cola;
+        document.getElementById('pix-valor-display').textContent = fmt(d.valor);
+        document.getElementById('pix-copy-icon').className = 'fa-solid fa-copy';
+
+        // Timer
+        const expira = new Date(d.expiracao).getTime();
+        function atualizarTimer() {
+            const resto = Math.max(0, Math.floor((expira - Date.now()) / 1000));
+            const m = String(Math.floor(resto / 60)).padStart(2, '0');
+            const s = String(resto % 60).padStart(2, '0');
+            document.getElementById('pix-timer').textContent = m + ':' + s;
+            if (resto === 0) {
+                clearInterval(pixTimerIntvl);
+                clearInterval(pixPollIntvl);
+                mostrarEstado('pix-expirado');
+            }
+        }
+        atualizarTimer();
+        pixTimerIntvl = setInterval(atualizarTimer, 1000);
+
+        mostrarEstado('pix-qr');
+
+        // Polling: verifica pagamento a cada 5 segundos
+        pixPollIntvl = setInterval(() => verificarPagamento(d.txid, d.valor), 5000);
+
+    }).catch(err => {
+        modalPix.hide();
+        alert(err?.response?.data?.error ?? 'Erro ao gerar PIX. Tente novamente.');
+    });
+}
+
+function verificarPagamento(txid, valor) {
+    axios.get('/pix/status/' + txid).then(res => {
+        if (res.data.status === 'pago') {
+            clearInterval(pixTimerIntvl);
+            clearInterval(pixPollIntvl);
+            document.getElementById('pix-valor-confirmado').textContent = fmt(valor);
+            mostrarEstado('pix-pago');
+            atualizarPainel();
+        } else if (['expirado','cancelado'].includes(res.data.status)) {
+            clearInterval(pixTimerIntvl);
+            clearInterval(pixPollIntvl);
+            mostrarEstado('pix-expirado');
+        }
+    }).catch(() => {});
+}
+
+function copiarPix() {
+    const texto = document.getElementById('pix-copia-cola').value;
+    navigator.clipboard.writeText(texto).then(() => {
+        const icon = document.getElementById('pix-copy-icon');
+        icon.className = 'fa-solid fa-check';
+        setTimeout(() => icon.className = 'fa-solid fa-copy', 2000);
+    });
+}
+
+// Para o polling se o modal for fechado manualmente
+document.getElementById('modalPix').addEventListener('hidden.bs.modal', () => {
+    clearInterval(pixTimerIntvl);
+    clearInterval(pixPollIntvl);
+});
 </script>
 
 @endsection

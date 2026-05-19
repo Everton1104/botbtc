@@ -461,6 +461,20 @@ Route::get('/bot/meus-saques', function () {
 
 })->middleware('auth');
 
+// Usuário: histórico de depósitos PIX
+Route::get('/bot/meus-depositos', function () {
+    $depositos = \App\Models\PixPayment::where('user_id', Auth::id())
+        ->where('status', 'pago')
+        ->orderByDesc('pago_em')
+        ->get()
+        ->map(fn($p) => [
+            'valor'   => (float) $p->valor,
+            'pago_em' => $p->pago_em?->format('d/m/Y H:i') ?? '—',
+        ]);
+
+    return response()->json($depositos);
+})->middleware('auth');
+
 // Admin: listar saques pendentes
 Route::get('/bot/saques-pendentes', function () {
 
@@ -481,6 +495,64 @@ Route::get('/bot/saques-pendentes', function () {
             'criado_em'     => $s->created_at->format('d/m/Y H:i'),
         ]);
 
+})->middleware('auth');
+
+// ── PIX (PagBank) ────────────────────────────────────────────────────────────
+
+// Webhook público — o PagBank chama esta URL após o pagamento (sem CSRF, sem auth)
+Route::post('/pix/webhook', [\App\Http\Controllers\PixController::class, 'webhook'])
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+
+Route::middleware('auth')->group(function () {
+    Route::post('/pix/criar', [\App\Http\Controllers\PixController::class, 'criar']);
+    Route::get('/pix/status/{txid}', [\App\Http\Controllers\PixController::class, 'status']);
+});
+
+// Admin: listar depósitos PIX confirmados (pagos + estornados)
+Route::get('/admin/depositos-pix', function () {
+    if (Auth::id() !== 1) return response()->json([]);
+
+    return \App\Models\PixPayment::whereIn('status', ['pago', 'estornado'])
+        ->with('user:id,name,email')
+        ->orderByDesc('pago_em')
+        ->get()
+        ->map(fn($p) => [
+            'id'         => $p->id,
+            'txid'       => $p->txid,
+            'user_id'    => $p->user_id,
+            'user_name'  => $p->user->name  ?? 'Desconhecido',
+            'user_email' => $p->user->email ?? '—',
+            'valor'      => (float) $p->valor,
+            'pago_em'    => $p->pago_em?->format('d/m/Y H:i'),
+            'registrado' => (bool) $p->registrado,
+            'estornado'  => $p->status === 'estornado',
+        ]);
+})->middleware('auth');
+
+// Admin: estornar pagamento PIX
+Route::post('/admin/depositos-pix/{id}/estornar', function ($id) {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $pix = \App\Models\PixPayment::where('id', $id)->where('status', 'pago')->firstOrFail();
+
+    try {
+        app(\App\Services\MercadoPagoService::class)->estornar($pix->txid);
+        $pix->update(['status' => 'estornado']);
+        return response()->json(['mensagem' => 'Estorno realizado. O cliente receberá o valor integral em até 5 dias úteis.']);
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error('Estorno PIX falhou', ['id' => $id, 'error' => $e->getMessage()]);
+        return response()->json(['mensagem' => 'Erro ao processar estorno: ' . $e->getMessage()], 500);
+    }
+})->middleware('auth');
+
+// Admin: marcar depósito PIX como registrado no bot
+Route::post('/admin/depositos-pix/{id}/registrar', function ($id) {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $pix = \App\Models\PixPayment::where('id', $id)->where('status', 'pago')->firstOrFail();
+    $pix->update(['registrado' => true]);
+
+    return response()->json(['mensagem' => 'Depósito marcado como registrado.']);
 })->middleware('auth');
 
 // Admin: confirmar PIX enviado
