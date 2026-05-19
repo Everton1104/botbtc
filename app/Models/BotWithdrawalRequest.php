@@ -13,6 +13,7 @@ class BotWithdrawalRequest extends Model
         'valor_bruto',
         'valor_liquido',
         'cotas',
+        'cotas_taxa',
         'preco_por_cota',
         'patrimonio_bot',
         'status',

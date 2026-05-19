@@ -72,8 +72,8 @@
             </div>
 
             <div class="mt-3 d-flex gap-2 flex-wrap">
-                <button class="btn btn-sm" style="background:var(--gold);color:#000;font-weight:600;" onclick="aplicarPreset(25,15,10,5,3000)">
-                    Atual (25/15/10/5)
+                <button class="btn btn-sm" id="btn-preset-atual" style="background:var(--gold);color:#000;font-weight:600;" onclick="aplicarPresetAtual()">
+                    Atual
                 </button>
                 <button class="btn btn-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);" onclick="aplicarPreset(50,25,15,10,3000)">
                     Agressivo (50/25/15/10)
@@ -210,16 +210,51 @@ function simular() {
     const p4 = (parseFloat(document.getElementById('s-p4').value) || 5)  / 100;
     const pcts = [p1, p2, p3, p4, 0.01];
 
+    // Igual ao bot: nível 1=p1, 2=p2, 3=p3, 4=p4, 5+=1%
+    function pctPorNivel(n) {
+        return pcts[Math.min(n - 1, pcts.length - 1)];
+    }
+
+    // Estado persistente entre dias — espelha o BotState do servidor
+    let direcao  = null;  // 'up' | 'down'
+    let contador = 0;
+    let nivelAnt = 0;     // profundidade da sequência anterior (offset p2)
+
     return historico.map(dia => {
         const btcPrice  = (dia.open + dia.close) / 2;
         const maxSwings = Math.floor(dia.range / salto);
-        const swings    = Math.round(maxSwings * 0.70); // 70% eficiência
+        const swings    = Math.round(maxSwings * 0.70);
+
+        // Tendência do dia define qual direção inicia os swings
+        const trendUp = dia.close >= dia.open;
 
         let lucro = 0;
+
         for (let i = 0; i < swings; i++) {
-            // A cada 2 swings na mesma direção, o percentual reduz (nível consecutivo)
-            const nivel = Math.min(Math.floor(i / 2), pcts.length - 1);
-            lucro += patrimonio * pcts[nivel] * (salto / btcPrice);
+            // Alterna direção a cada swing; tendência define qual vem primeiro
+            const dir = (i % 2 === 0)
+                ? (trendUp ? 'up' : 'down')
+                : (trendUp ? 'down' : 'up');
+
+            // Reset ao mudar de direção — igual ao processarSubida/processarQueda
+            if (dir !== direcao) {
+                nivelAnt = contador;
+                contador = 0;
+                direcao  = dir;
+            }
+            contador++;
+
+            let pct;
+            if (dir === 'up') {
+                // Reset com proteção p2 após queda funda (≥3 níveis)
+                const offset = nivelAnt >= 3 ? 1 : 0;
+                pct = pctPorNivel(contador + offset);
+            } else {
+                // Queda: escalada normal p1→p2→p3→p4→1%
+                pct = pctPorNivel(contador);
+            }
+
+            lucro += patrimonio * pct * (salto / btcPrice);
         }
 
         return { date: dia.date, close: dia.close, range: dia.range, swings, lucro };
@@ -365,14 +400,30 @@ function fmtBTC(v) {
     document.getElementById(id).addEventListener('input', recalcular);
 });
 
+// ── Config atual do bot (usada também no preset "Atual") ────
+let configAtual = { p1: 25, p2: 15, p3: 10, p4: 5, salto: 3000 };
+
+function aplicarPresetAtual() {
+    aplicarPreset(configAtual.p1, configAtual.p2, configAtual.p3, configAtual.p4, configAtual.salto);
+}
+
 // ── Carregar config salva no bot ───────────────────────────
 axios.get('/bot/config').then(res => {
     const c = res.data;
-    document.getElementById('s-p1').value    = Math.round(c.p1 * 100);
-    document.getElementById('s-p2').value    = Math.round(c.p2 * 100);
-    document.getElementById('s-p3').value    = Math.round(c.p3 * 100);
-    document.getElementById('s-p4').value    = Math.round(c.p4 * 100);
-    document.getElementById('s-salto').value = c.salto;
+    configAtual = {
+        p1:    Math.round(c.p1 * 100),
+        p2:    Math.round(c.p2 * 100),
+        p3:    Math.round(c.p3 * 100),
+        p4:    Math.round(c.p4 * 100),
+        salto: c.salto,
+    };
+    document.getElementById('s-p1').value    = configAtual.p1;
+    document.getElementById('s-p2').value    = configAtual.p2;
+    document.getElementById('s-p3').value    = configAtual.p3;
+    document.getElementById('s-p4').value    = configAtual.p4;
+    document.getElementById('s-salto').value = configAtual.salto;
+    document.getElementById('btn-preset-atual').textContent =
+        `Atual (${configAtual.p1}/${configAtual.p2}/${configAtual.p3}/${configAtual.p4})`;
     recalcular();
 }).catch(() => {});
 </script>

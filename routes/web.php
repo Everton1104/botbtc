@@ -37,6 +37,7 @@ use App\Http\Controllers\BinanceController;
 use App\Models\BotInvestment;
 use App\Models\BotConfig;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 Route::get('/bot/patrimonio', function (BinanceController $binance) {
 
@@ -64,12 +65,11 @@ Route::post('/bot/investir-manual', function (Request $req, BinanceController $b
         return ['mensagem' => 'Valor inválido'];
     }
 
-    // Admin pode investir por outro usuário
     $userId = (Auth::id() === 1 && $req->filled('userId'))
         ? (int) $req->input('userId')
         : Auth::id();
 
-    // Patrimônio atual da Binance
+    // Patrimônio lido ANTES da transaction (chamada externa — Binance)
     $saldos = $binance->getSaldos();
     $preco  = $binance->getPrecoBTC();
 
@@ -79,32 +79,30 @@ Route::post('/bot/investir-manual', function (Request $req, BinanceController $b
     $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
                      + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
-    // Total de cotas em circulação (todos os investidores)
-    $totalCotas = (float) BotInvestment::sum('cotas');
+    DB::transaction(function () use ($userId, $valor, $patrimonioAtual) {
+        // Lock para evitar corrida com outros depósitos simultâneos
+        $totalCotas = (float) BotInvestment::lockForUpdate()->sum('cotas');
 
-    // Remove o valor do aporte do patrimônio atual, pois o dinheiro já está na Binance
-    // mas ainda não deve ser contado no preço da cota (era do investidor antes do registro)
-    $patrimonioSemDeposito = max(0, $patrimonioAtual - $valor);
+        // Remove o aporte do patrimônio — o dinheiro já está na Binance
+        // mas não deve inflar o preço da cota antes do registro
+        $patrimonioSemDeposito = max(0, $patrimonioAtual - $valor);
+        $precoPorCota          = $totalCotas > 0 ? $patrimonioSemDeposito / $totalCotas : 1.0;
+        $novasCotas            = $valor / $precoPorCota;
 
-    // Preço por cota: se ainda não há cotas, começa em R$1
-    $precoPorCota = $totalCotas > 0 ? $patrimonioSemDeposito / $totalCotas : 1.0;
+        $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
 
-    // Cotas que o investidor recebe pelo valor aportado
-    $novasCotas = $valor / $precoPorCota;
-
-    $invest = BotInvestment::where('user_id', $userId)->first();
-
-    if ($invest) {
-        $invest->investimento_inicial += $valor;
-        $invest->cotas += $novasCotas;
-        $invest->save();
-    } else {
-        BotInvestment::create([
-            'user_id'              => $userId,
-            'investimento_inicial' => $valor,
-            'cotas'                => $novasCotas,
-        ]);
-    }
+        if ($invest) {
+            $invest->investimento_inicial += $valor;
+            $invest->cotas                += $novasCotas;
+            $invest->save();
+        } else {
+            BotInvestment::create([
+                'user_id'              => $userId,
+                'investimento_inicial' => $valor,
+                'cotas'                => $novasCotas,
+            ]);
+        }
+    });
 
     return ['mensagem' => 'Investimento realizado com sucesso!'];
 })->middleware('auth');
@@ -182,19 +180,34 @@ Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceCon
     $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
                      + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
-    // O dinheiro já saiu da Binance, então soma de volta para obter o preço correto
+    // O dinheiro já saiu da Binance — soma de volta para calcular o preço correto da cota
     $patrimonioAntes = $patrimonioAtual + $valor;
     $totalCotas      = (float) BotInvestment::sum('cotas');
     $precoPorCota    = $totalCotas > 0 ? $patrimonioAntes / $totalCotas : 1.0;
     $cotasAQueimar   = $valor / $precoPorCota;
 
-    if ($cotasAQueimar >= $invest->cotas) {
-        $invest->delete();
-    } else {
-        $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valor);
-        $invest->cotas -= $cotasAQueimar;
-        $invest->save();
-    }
+    DB::transaction(function () use ($invest, $userId, $valor, $cotasAQueimar, $precoPorCota, $patrimonioAntes) {
+        // Registrar no histórico (sem taxa — retirada manual pelo admin)
+        BotWithdrawalRequest::create([
+            'user_id'        => $invest->user_id,
+            'valor_bruto'    => $valor,
+            'valor_liquido'  => $valor,
+            'cotas'          => $cotasAQueimar,
+            'cotas_taxa'     => 0,
+            'preco_por_cota' => $precoPorCota,
+            'patrimonio_bot' => $patrimonioAntes,
+            'status'         => 'confirmado',
+            'confirmado_at'  => now(),
+        ]);
+
+        if ($cotasAQueimar >= $invest->cotas) {
+            $invest->delete();
+        } else {
+            $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valor);
+            $invest->cotas               -= $cotasAQueimar;
+            $invest->save();
+        }
+    });
 
     return ['mensagem' => 'Retirada registrada com sucesso!'];
 })->middleware('auth');
@@ -214,7 +227,7 @@ Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
     $invest->delete();
 
     return ['mensagem' => 'Investimento removido com sucesso!'];
-});
+})->middleware('auth');
 
 Route::get('/binance/historico', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
@@ -261,7 +274,7 @@ Route::get('/admin/usuarios', function () {
     }
 
     return \App\Models\User::select('id', 'name', 'email')->get();
-});
+})->middleware('auth');
 
 Route::get('/admin/usuarios-investimentos', function (BinanceController $binance) {
 
@@ -320,13 +333,8 @@ Route::get('/admin/usuarios-investimentos', function (BinanceController $binance
 Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $binance) {
 
     $userId = Auth::id();
-    $invest = BotInvestment::where('user_id', $userId)->first();
 
-    if (!$invest || $invest->cotas <= 0) {
-        return response()->json(['mensagem' => 'Nenhum investimento encontrado.'], 422);
-    }
-
-    // Calcular valor atual no momento do pedido
+    // Patrimônio lido ANTES da transaction (chamada externa — Binance)
     $saldos = $binance->getSaldos();
     $preco  = $binance->getPrecoBTC();
 
@@ -336,55 +344,72 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
     $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
                      + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
-    $totalCotas   = (float) BotInvestment::sum('cotas');
-    $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
-    $valorMaximo  = $invest->cotas * $precoPorCota;
+    $valorSolicitado = (float) $req->input('valor', 0);
 
-    // Valor solicitado (padrão = saldo total)
-    $valorBruto = min((float) $req->input('valor', $valorMaximo), $valorMaximo);
+    try {
+        DB::transaction(function () use ($userId, $patrimonioAtual, $valorSolicitado, $req) {
 
-    if ($valorBruto <= 0) {
-        return response()->json(['mensagem' => 'Valor inválido.'], 422);
-    }
+            // Lock: impede dois saques simultâneos do mesmo usuário
+            $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
 
-    $valorLiquido  = $valorBruto * 0.99; // 1% de taxa operacional
-    $cotasAQueimar = $precoPorCota > 0 ? $valorBruto / $precoPorCota : 0;
+            if (!$invest || $invest->cotas <= 0) {
+                throw new \Exception('Nenhum investimento encontrado.', 422);
+            }
 
-    BotWithdrawalRequest::create([
-        'user_id'        => $userId,
-        'valor_bruto'    => $valorBruto,
-        'valor_liquido'  => $valorLiquido,
-        'cotas'          => $cotasAQueimar,
-        'preco_por_cota' => $precoPorCota,
-        'patrimonio_bot' => $patrimonioAtual,
-        'status'         => 'pendente',
-    ]);
+            $totalCotas   = (float) BotInvestment::lockForUpdate()->sum('cotas');
+            $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
+            $valorMaximo  = $invest->cotas * $precoPorCota;
 
-    // Queimar as cotas proporcionais imediatamente
-    if ($cotasAQueimar >= $invest->cotas) {
-        $invest->delete();
-    } else {
-        $invest->cotas -= $cotasAQueimar;
-        $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valorBruto);
-        $invest->save();
-    }
+            $valorBruto = $valorSolicitado > 0
+                ? min($valorSolicitado, $valorMaximo)
+                : $valorMaximo;
 
-    // A taxa de 1% entra como cotas do admin
-    $taxaValor = $valorBruto * 0.01;
-    $cotasTaxa = $precoPorCota > 0 ? $taxaValor / $precoPorCota : 0;
+            if ($valorBruto <= 0) {
+                throw new \Exception('Valor inválido.', 422);
+            }
 
-    if ($cotasTaxa > 0) {
-        $adminInvest = BotInvestment::where('user_id', 1)->first();
-        if ($adminInvest) {
-            $adminInvest->cotas += $cotasTaxa;
-            $adminInvest->save();
-        } else {
-            BotInvestment::create([
-                'user_id'              => 1,
-                'investimento_inicial' => 0,
-                'cotas'                => $cotasTaxa,
+            $valorLiquido  = $valorBruto * 0.99;
+            $cotasAQueimar = $precoPorCota > 0 ? $valorBruto / $precoPorCota : 0;
+            $cotasTaxa     = $precoPorCota > 0 ? ($valorBruto * 0.01) / $precoPorCota : 0;
+
+            BotWithdrawalRequest::create([
+                'user_id'        => $userId,
+                'valor_bruto'    => $valorBruto,
+                'valor_liquido'  => $valorLiquido,
+                'cotas'          => $cotasAQueimar,
+                'cotas_taxa'     => $cotasTaxa,   // salva para reverter exatamente no cancelamento
+                'preco_por_cota' => $precoPorCota,
+                'patrimonio_bot' => $patrimonioAtual,
+                'status'         => 'pendente',
             ]);
-        }
+
+            // Queimar cotas do investidor
+            if ($cotasAQueimar >= $invest->cotas) {
+                $invest->delete();
+            } else {
+                $invest->cotas                -= $cotasAQueimar;
+                $invest->investimento_inicial  = max(0, $invest->investimento_inicial - $valorBruto);
+                $invest->save();
+            }
+
+            // Taxa de 1% vai para o admin
+            if ($cotasTaxa > 0) {
+                $adminInvest = BotInvestment::where('user_id', 1)->lockForUpdate()->first();
+                if ($adminInvest) {
+                    $adminInvest->cotas += $cotasTaxa;
+                    $adminInvest->save();
+                } else {
+                    BotInvestment::create([
+                        'user_id'              => 1,
+                        'investimento_inicial' => 0,
+                        'cotas'                => $cotasTaxa,
+                    ]);
+                }
+            }
+        });
+    } catch (\Exception $e) {
+        $code = $e->getCode() >= 400 ? $e->getCode() : 422;
+        return response()->json(['mensagem' => $e->getMessage()], $code);
     }
 
     return response()->json(['mensagem' => 'Saque solicitado! Aguarde a confirmação do administrador.']);
@@ -403,30 +428,34 @@ Route::delete('/bot/cancelar-saque/{id}', function ($id) {
         return response()->json(['mensagem' => 'Saque não encontrado ou já processado.'], 404);
     }
 
-    // Devolver as cotas ao investidor
-    $invest = BotInvestment::where('user_id', $saque->user_id)->first();
-    if ($invest) {
-        $invest->cotas += $saque->cotas;
-        $invest->investimento_inicial += $saque->valor_bruto;
-        $invest->save();
-    } else {
-        BotInvestment::create([
-            'user_id'              => $saque->user_id,
-            'investimento_inicial' => $saque->valor_bruto,
-            'cotas'                => $saque->cotas,
-        ]);
-    }
+    DB::transaction(function () use ($saque) {
+        // Devolver as cotas ao investidor
+        $invest = BotInvestment::where('user_id', $saque->user_id)->lockForUpdate()->first();
+        if ($invest) {
+            $invest->cotas                += $saque->cotas;
+            $invest->investimento_inicial += $saque->valor_bruto;
+            $invest->save();
+        } else {
+            BotInvestment::create([
+                'user_id'              => $saque->user_id,
+                'investimento_inicial' => $saque->valor_bruto,
+                'cotas'                => $saque->cotas,
+            ]);
+        }
 
-    // Remover a taxa de 1% das cotas do admin
-    $cotasTaxa   = $saque->preco_por_cota > 0 ? ($saque->valor_bruto * 0.01) / $saque->preco_por_cota : 0;
-    $adminInvest = BotInvestment::where('user_id', 1)->first();
-    if ($adminInvest && $cotasTaxa > 0) {
-        $adminInvest->cotas = max(0, $adminInvest->cotas - $cotasTaxa);
-        $adminInvest->cotas > 0 ? $adminInvest->save() : $adminInvest->delete();
-    }
+        // Reverter taxa do admin usando o valor exato registrado no saque
+        $cotasTaxa = (float) ($saque->cotas_taxa ?? 0);
+        if ($cotasTaxa > 0) {
+            $adminInvest = BotInvestment::where('user_id', 1)->lockForUpdate()->first();
+            if ($adminInvest) {
+                $adminInvest->cotas = max(0, $adminInvest->cotas - $cotasTaxa);
+                $adminInvest->cotas > 0 ? $adminInvest->save() : $adminInvest->delete();
+            }
+        }
 
-    $saque->status = 'cancelado';
-    $saque->save();
+        $saque->status = 'cancelado';
+        $saque->save();
+    });
 
     return response()->json(['mensagem' => 'Saque cancelado e valor devolvido ao seu saldo.']);
 

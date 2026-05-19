@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BotState;
 use App\Models\BotConfig;
 use App\Http\Controllers\BinanceController;
+use Illuminate\Support\Facades\Log;
 
 class BotExecutor
 {
@@ -28,6 +29,7 @@ class BotExecutor
         $open = $this->binance->getOpenOrders("BTCBRL");
 
         if (!is_array($open)) {
+            Log::warning("BotExecutor [{$userId}]: falha ao buscar ordens abertas.");
             return "Erro ao buscar ordens abertas.";
         }
 
@@ -36,24 +38,26 @@ class BotExecutor
         // ============================================================
         // PROTEÇÃO: cancelar ordens fora do preço atual com margem
         // ============================================================
-        $margem = $state->salto * 1.5; // margem de tolerância: 1.5x o salto
+        $margem = $state->salto * 1.5;
 
         $cancelledAny = false;
 
         foreach ($open as $ordem) {
             $side  = $ordem['side'];
-            $price = (float)$ordem['price'];
+            $price = (float) $ordem['price'];
 
             // VENDA: só cancela se o preço atual estiver MUITO acima da ordem
             if ($side === 'SELL' && ($precoAtual - $price) > $margem) {
                 $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
                 $cancelledAny = true;
+                Log::info("BotExecutor [{$userId}]: SELL cancelada por fora do range (ordem {$price}, atual {$precoAtual}).");
             }
 
             // COMPRA: só cancela se o preço atual estiver MUITO abaixo da ordem
             if ($side === 'BUY' && ($price - $precoAtual) > $margem) {
                 $this->binance->cancelarOrdem("BTCBRL", $ordem['orderId']);
                 $cancelledAny = true;
+                Log::info("BotExecutor [{$userId}]: BUY cancelada por fora do range (ordem {$price}, atual {$precoAtual}).");
             }
         }
 
@@ -66,7 +70,7 @@ class BotExecutor
         // ============================================================
         if ($qtd === 0) {
             $this->criarOrdensNovas($state, $precoAtual);
-
+            Log::info("BotExecutor [{$userId}]: 0 ordens abertas. Par recriado em {$precoAtual}.");
             return "Nenhuma ordem aberta. Par recriado.";
         }
 
@@ -84,12 +88,12 @@ class BotExecutor
         $side  = $ordem['side'];
 
         // Se cancelamos uma ordem por estar fora do range e sobrou 1,
-        // significa que a ordem cancelada NÃO foi executada — apenas saiu do range.
-        // Não registrar direção: apenas recriar o par no preço atual.
+        // a ordem cancelada NÃO foi executada — apenas saiu do range.
+        // Não registrar direção: recriar o par no preço atual.
         if ($cancelledAny) {
             $this->limparTodasOrdensEAguardar("BTCBRL");
             $this->criarOrdensNovas($state, $precoAtual);
-
+            Log::info("BotExecutor [{$userId}]: ordem fora do range removida. Par recriado em {$precoAtual}.");
             return "Ordem fora do range cancelada (não executada). Par recriado no preço atual.";
         }
 
@@ -97,9 +101,11 @@ class BotExecutor
         if ($side === 'SELL') {
             // BUY foi executada → BTC caiu
             $this->processarQueda($state, $precoAtual);
+            Log::info("BotExecutor [{$userId}]: QUEDA registrada. Contador quedas: {$state->contador_quedas}. Preço: {$precoAtual}.");
         } else {
             // SELL foi executada → BTC subiu
             $this->processarSubida($state, $precoAtual);
+            Log::info("BotExecutor [{$userId}]: SUBIDA registrada. Contador subidas: {$state->contador_subidas}. Preço: {$precoAtual}.");
         }
 
         // Cancelar a ordem restante e criar novo par
@@ -109,33 +115,28 @@ class BotExecutor
         return "Uma ordem restante detectada. Direção registrada e novo par criado.";
     }
 
-
-
     // ============================================================
     // LIMPAR TODAS AS ORDENS E AGUARDAR
     // ============================================================
 
     private function limparTodasOrdensEAguardar(string $symbol)
     {
-        // 1. Cancelar todas as ordens abertas
         $open = $this->binance->getOpenOrders($symbol);
 
         foreach ($open as $ordem) {
             $this->binance->cancelarOrdem($symbol, $ordem['orderId']);
         }
 
-        // 2. Esperar até que a Binance realmente remova todas
-        for ($i = 0; $i < 20; $i++) { // tenta por até 2 segundos
+        // Aguarda até a Binance confirmar remoção (até 2 segundos)
+        for ($i = 0; $i < 20; $i++) {
             usleep(100000); // 100ms
 
-            $open = $this->binance->getOpenOrders($symbol);
-
-            if (empty($open)) {
-                return true; // tudo limpo
+            if (empty($this->binance->getOpenOrders($symbol))) {
+                return true;
             }
         }
 
-        return false; // ainda sobrou algo, mas seguimos mesmo assim
+        return false;
     }
 
     // ============================================================
@@ -157,45 +158,47 @@ class BotExecutor
         }
 
         $precoAtual = $this->binance->getPrecoBTC();
+        $config     = BotConfig::atual();
 
         $state = new BotState();
-        $state->id_user = $userId;
-        $state->preco_referencia = $precoAtual;
-        $config = BotConfig::atual();
-        $state->salto = $config->salto;
-        $state->direcao_atual = null;
-        $state->contador_subidas = 0;
-        $state->contador_quedas = 0;
-        $state->ativo = 1;
+        $state->id_user           = $userId;
+        $state->preco_referencia  = $precoAtual;
+        $state->salto             = $config->salto;
+        $state->direcao_atual     = null;
+        $state->contador_subidas  = 0;
+        $state->contador_quedas   = 0;
+        $state->contador_anterior = 0;
+        $state->ativo             = 1;
         $state->save();
 
-        $this->criarOrdensIniciaisSemDivisao($state, $precoAtual, $saldoBRL, $saldoBTC);
+        $this->criarOrdensIniciaisSemDivisao($state, $config, $precoAtual, $saldoBRL, $saldoBTC);
 
-        return "Bot inicializado (sem divisão de capital) para o usuário {$userId}";
+        Log::info("BotExecutor [{$userId}]: bot inicializado. Preço: {$precoAtual}, salto: {$config->salto}.");
+
+        return "Bot inicializado para o usuário {$userId}";
     }
 
-    private function criarOrdensIniciaisSemDivisao(BotState $state, float $precoAtual, float $saldoBRL, float $saldoBTC)
+    private function criarOrdensIniciaisSemDivisao(BotState $state, BotConfig $config, float $precoAtual, float $saldoBRL, float $saldoBTC)
     {
         $salto = $state->salto;
 
-        $precoCompra = $precoAtual - $salto;
+        $precoCompra = max(1.0, $precoAtual - $salto);
         $precoVenda  = $precoAtual + $salto;
 
-        // Compra inicial (25% do BRL)
-        $valorCompra = $saldoBRL * 0.25;
+        // Compra inicial (p1% do BRL, lido do config)
+        $valorCompra = $saldoBRL * $config->p1;
 
         if ($valorCompra > 10) {
-            $quantidadeBTC = $valorCompra / $precoCompra;
-
-            $orderCompra = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
+            $quantidadeBTC          = $valorCompra / $precoCompra;
+            $orderCompra            = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
-        // Venda inicial (25% do BTC)
-        $quantidadeVenda = $saldoBTC * 0.25;
+        // Venda inicial (p1% do BTC, lido do config)
+        $quantidadeVenda = $saldoBTC * $config->p1;
 
         if ($quantidadeVenda > 0) {
-            $orderVenda = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
+            $orderVenda            = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
             $state->order_id_venda = $orderVenda['orderId'] ?? null;
         }
 
@@ -209,7 +212,6 @@ class BotExecutor
     private function processarSubida(BotState $state, float $precoAtual)
     {
         if ($state->direcao_atual !== 'up') {
-            // Guarda quantas quedas consecutivas vieram antes de inverter
             $state->contador_anterior = $state->contador_quedas;
             $state->contador_subidas  = 0;
             $state->contador_quedas   = 0;
@@ -223,42 +225,29 @@ class BotExecutor
     private function processarQueda(BotState $state, float $precoAtual)
     {
         if ($state->direcao_atual !== 'down') {
-            // Guarda quantas subidas consecutivas vieram antes de inverter
             $state->contador_anterior = $state->contador_subidas;
             $state->contador_subidas  = 0;
             $state->contador_quedas   = 0;
         }
 
-        $state->direcao_atual   = 'down';
+        $state->direcao_atual    = 'down';
         $state->contador_quedas++;
         $state->preco_referencia = $precoAtual;
     }
 
     // ============================================================
-    // PERCENTUAIS
+    // PERCENTUAIS — recebe config já carregado, sem hit extra no DB
     // ============================================================
 
-    // Retorna p1, p2, p3, p4 conforme o contador; p5/p6/p7 = 1%
-    private function percentualPorSalto(int $contador): float
+    private function percentualPorSalto(int $contador, BotConfig $config): float
     {
-        $cfg = BotConfig::atual();
-
         return match (true) {
-            $contador === 1 => $cfg->p1,
-            $contador === 2 => $cfg->p2,
-            $contador === 3 => $cfg->p3,
-            $contador === 4 => $cfg->p4,
-            default         => 0.01,   // saltos 5, 6, 7 = 1%
+            $contador === 1 => $config->p1,
+            $contador === 2 => $config->p2,
+            $contador === 3 => $config->p3,
+            $contador === 4 => $config->p4,
+            default         => 0.01,
         };
-    }
-
-    // Espelho dinâmico: vende no nível (nivelMaximo - contadorSubidas + 1)
-    // Exemplo: nivelMaximo=7, subida 1 → vende 1% (nível 7), subida 4 → vende p4 (5%), etc.
-    private function percentualEspelhoSubida(int $contadorSubidas, int $nivelMaximo): float
-    {
-        $nivel = $nivelMaximo - $contadorSubidas + 1;
-        if ($nivel < 1) return 0.0;
-        return $this->percentualPorSalto($nivel);
     }
 
     // ============================================================
@@ -267,83 +256,60 @@ class BotExecutor
 
     private function criarOrdensNovas(BotState $state, float $precoAtual)
     {
-        $config = BotConfig::atual();
+        $config = BotConfig::atual(); // único hit no DB por execução
         $salto  = $config->salto;
         $state->salto = $salto;
 
-        $precoCompra = $precoAtual - $salto;
+        $precoCompra = max(1.0, $precoAtual - $salto); // guard: nunca ≤ 0
         $precoVenda  = $precoAtual + $salto;
 
-        $saldos = $this->binance->getSaldos();
+        $saldos   = $this->binance->getSaldos();
+        $saldoBRL = (float) (collect($saldos['balances'])->firstWhere('asset', 'BRL')['free'] ?? 0);
+        $saldoBTC = (float) (collect($saldos['balances'])->firstWhere('asset', 'BTC')['free'] ?? 0);
 
-        $contadorAtual = $state->direcao_atual === 'up'
-            ? $state->contador_subidas
-            : $state->contador_quedas;
+        $direcao       = $state->direcao_atual;
+        $contadorAtual = $direcao === 'up' ? $state->contador_subidas : $state->contador_quedas;
+        $nivelMaximo   = (int) ($state->contador_anterior ?? 0);
+        $allin         = $contadorAtual >= 8;
 
-        // Profundidade da sequência anterior (usada como teto do espelho de volta)
-        $nivelMaximo = (int) ($state->contador_anterior ?? 0);
+        // ── COMPRA ───────────────────────────────────────────────────
+        $valorCompra = 0.0;
 
-        // All-in no 8º salto consecutivo na mesma direção.
-        // Compra ou vende 100% do montante e posiciona ordem de saída 1 salto oposto.
-        // A cada salto adicional a saída se atualiza acompanhando o preço.
-        $allin = $contadorAtual >= 8;
-
-        // ============================================================
-        // COMPRA
-        // ============================================================
-
-        $saldoBRL = (float) (collect($saldos['balances'])
-            ->firstWhere('asset', 'BRL')['free'] ?? 0);
-
-        if ($allin && $state->direcao_atual === 'down') {
-            // All-in caindo: compra 100% do BRL disponível
-            $valorCompra = $saldoBRL;
-        } elseif ($state->direcao_atual === 'down') {
-            // Saltos 1–7: percentual progressivo (p1→p2→p3→p4→1%→1%→1%)
-            $percentualCompra = $this->percentualPorSalto($contadorAtual);
-            $valorCompra      = $saldoBRL * $percentualCompra;
-        } else {
-            // Subindo: standby buy reservado para próxima queda (p1)
+        if ($allin && $direcao === 'down') {
+            $valorCompra = $saldoBRL; // all-in caindo: compra tudo
+        } elseif ($direcao === 'down') {
+            $valorCompra = $saldoBRL * $this->percentualPorSalto($contadorAtual, $config);
+        } elseif ($direcao === 'up' || $direcao === null) {
+            // Subindo ou estado inicial: standby de compra em p1
             $valorCompra = $saldoBRL * $config->p1;
         }
 
-        if (!empty($valorCompra) && $valorCompra > 10) {
-            $quantidadeBTC = $valorCompra / $precoCompra;
-            $orderCompra   = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
+        if ($valorCompra > 10) {
+            $quantidadeBTC          = $valorCompra / $precoCompra;
+            $orderCompra            = $this->binance->buyLimit($precoCompra, $quantidadeBTC);
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
-        // ============================================================
-        // VENDA
-        // ============================================================
-
-        $saldoBTC = (float) (collect($saldos['balances'])
-            ->firstWhere('asset', 'BTC')['free'] ?? 0);
+        // ── VENDA ────────────────────────────────────────────────────
+        $percentualVenda = 0.0;
 
         if ($allin) {
-            // All-in (qualquer direção): 100% — saída ou entrada total
-            $percentualVenda = 1.0;
-        } elseif ($state->direcao_atual === 'up') {
-            // Espelho dinâmico: vende no nível (nivelMaximo - passo + 1)
-            // Ex: caiu 7 → subida 1 vende 1% (nível 7), subida 5 vende p3 (10%), etc.
-            $percentualVenda = $nivelMaximo > 0
-                ? $this->percentualEspelhoSubida($contadorAtual, min($nivelMaximo, 3))
-                : $this->percentualPorSalto($contadorAtual);
-        } else {
-            // Caindo: standby sell espelha o nível atual da queda
-            $percentualVenda = $this->percentualPorSalto($contadorAtual);
+            $percentualVenda = 1.0; // all-in: sai com tudo
+        } elseif ($direcao === 'up') {
+            // Reset com proteção p2 após queda funda (≥3 níveis)
+            $offset          = $nivelMaximo >= 3 ? 1 : 0;
+            $percentualVenda = $this->percentualPorSalto($contadorAtual + $offset, $config);
+        } elseif ($direcao === 'down' || $direcao === null) {
+            // Caindo ou estado inicial: standby de venda no nível atual
+            $percentualVenda = $this->percentualPorSalto(max(1, $contadorAtual), $config);
         }
 
-        if ($percentualVenda > 0) {
-            $quantidadeVenda = $saldoBTC * $percentualVenda;
-
-            if ($quantidadeVenda > 0) {
-                $orderVenda = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
-                $state->order_id_venda = $orderVenda['orderId'] ?? null;
-            }
+        if ($percentualVenda > 0 && $saldoBTC > 0) {
+            $quantidadeVenda       = $saldoBTC * $percentualVenda;
+            $orderVenda            = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
+            $state->order_id_venda = $orderVenda['orderId'] ?? null;
         }
 
         $state->save();
     }
-
 }

@@ -153,8 +153,8 @@ class MercadoPagoService
         $secret = config('services.mercadopago.webhook_secret');
 
         if (empty($secret)) {
-            Log::warning('MercadoPago webhook_secret não configurado — validação ignorada');
-            return true;
+            Log::warning('MercadoPago webhook_secret não configurado — webhook rejeitado');
+            return false;
         }
 
         // Extrai ts e v1 do header x-signature

@@ -18,6 +18,15 @@ class BotState extends Model
         'salto',
         'order_id_compra',
         'order_id_venda',
-        'ativo'
+        'ativo',
+    ];
+
+    protected $casts = [
+        'contador_subidas'  => 'integer',
+        'contador_quedas'   => 'integer',
+        'contador_anterior' => 'integer',
+        'salto'             => 'integer',
+        'preco_referencia'  => 'float',
+        'ativo'             => 'boolean',
     ];
 }

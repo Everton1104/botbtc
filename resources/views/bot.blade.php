@@ -528,7 +528,7 @@ function atualizarAdmin() {
     });
 }
 atualizarAdmin();
-setInterval(atualizarAdmin, 10000);
+setInterval(atualizarAdmin, 30000);
 
 // Tabela de investidores
 function carregarTabela() {
@@ -683,7 +683,7 @@ function carregarSaques() {
                     <td class="text-green fw-600">R$ ${fmt(s.valor_liquido)}</td>
                     <td class="text-muted" style="font-size:.8rem;">${parseFloat(s.cotas).toFixed(4)}</td>
                     <td>
-                        <button class="btn btn-success btn-sm px-3" onclick="confirmarSaque(${s.id}, '${s.name}', ${s.valor_liquido})">
+                        <button class="btn btn-success btn-sm px-3" onclick="confirmarSaque(${s.id}, ${JSON.stringify(s.name)}, ${s.valor_liquido})">
                             <i class="fa-solid fa-check me-1"></i>PIX Enviado
                         </button>
                     </td>
@@ -752,11 +752,11 @@ function carregarDepositosPix() {
                     <td>
                         <div class="d-flex gap-1">
                             <button class="btn btn-sm px-3" style="background:#32bcad;border:none;color:#000;font-weight:600;font-size:.8rem;"
-                                    onclick="registrarDepositoNoBot(${d.id}, ${d.user_id}, ${liquido}, '${d.user_name}')">
+                                    onclick="registrarDepositoNoBot(${d.id}, ${d.user_id}, ${liquido}, ${JSON.stringify(d.user_name)})">
                                 <i class="fa-solid fa-plus me-1"></i>Registrar
                             </button>
                             <button class="btn btn-sm btn-danger px-2" title="Estornar pagamento"
-                                    onclick="estornarDeposito(${d.id}, '${d.txid}', ${d.valor}, '${d.user_name}')">
+                                    onclick="estornarDeposito(${d.id}, ${JSON.stringify(d.txid)}, ${d.valor}, ${JSON.stringify(d.user_name)})">
                                 <i class="fa-solid fa-rotate-left"></i>
                             </button>
                         </div>
