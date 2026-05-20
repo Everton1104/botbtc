@@ -254,6 +254,59 @@ class WhatsappController extends Controller
         self::log($numero, Auth::id(), $desc, null, $business_phone_number_id);
     }
 
+    public static function enviarCodigoVerificacao(\App\Models\User $user): void
+    {
+        $codigo = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+        $user->whatsapp_code             = $codigo;
+        $user->whatsapp_code_expires_at  = now()->addMinutes(10);
+        $user->save();
+
+        try {
+            $client   = new \GuzzleHttp\Client();
+            $response = $client->request('POST', "https://graph.facebook.com/v25.0/" . env('PHONE_NUMBER_ID') . "/messages", [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN'),
+                    'Content-Type'  => 'application/json',
+                ],
+                'json' => [
+                    'messaging_product' => 'whatsapp',
+                    'to'                => $user->whatsapp,
+                    'type'              => 'template',
+                    'template'          => [
+                        'name'       => 'user_code',
+                        'language'   => ['code' => 'pt_BR'],
+                        'components' => [
+                            [
+                                'type'       => 'body',
+                                'parameters' => [
+                                    ['type' => 'text', 'text' => $codigo],
+                                ],
+                            ],
+                            [
+                                'type'       => 'button',
+                                'sub_type'   => 'url',
+                                'index'      => 0,
+                                'parameters' => [
+                                    ['type' => 'text', 'text' => $codigo],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ]);
+
+            $body = json_decode($response->getBody(), true);
+            \Illuminate\Support\Facades\Log::info("WhatsApp user_code enviado", ['para' => $user->whatsapp, 'resp' => $body]);
+            self::log($user->whatsapp, $user->id, "Código de verificação enviado", null, env('PHONE_NUMBER_ID'));
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            $erro = json_decode($e->getResponse()->getBody(), true);
+            \Illuminate\Support\Facades\Log::error("WhatsApp user_code ERRO", ['para' => $user->whatsapp, 'erro' => $erro]);
+        } catch (\Throwable $th) {
+            \Illuminate\Support\Facades\Log::error("WhatsApp user_code ERRO", ['para' => $user->whatsapp, 'msg' => $th->getMessage()]);
+        }
+    }
+
     public static function notificarOrdemConcluida(string $tipo, float $valor)
     {
         self::enviarTemplateAdmin('ordem_btc_concluida', [

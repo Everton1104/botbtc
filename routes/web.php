@@ -8,23 +8,107 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('bot');
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 
 Auth::routes();
 
 Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
 
+// ── Verificação de WhatsApp ───────────────────────────────────────────────────
+
+Route::middleware('auth')->group(function () {
+    Route::get('/cadastrar-whatsapp', function () {
+        if (auth()->user()->whatsapp) {
+            return redirect()->route('verificar.whatsapp');
+        }
+        return view('auth.cadastrar-whatsapp');
+    })->name('cadastrar.whatsapp');
+
+    Route::post('/cadastrar-whatsapp', function (\Illuminate\Http\Request $req) {
+        $req->validate(['whatsapp' => 'required|string|max:20']);
+
+        $numero = preg_replace('/\D/', '', $req->whatsapp);
+        if (strlen($numero) <= 11) {
+            $numero = '55' . $numero;
+        }
+
+        $user = auth()->user();
+        $user->whatsapp = $numero;
+        $user->save();
+
+        \App\Http\Controllers\WhatsappController::enviarCodigoVerificacao($user);
+
+        return redirect()->route('verificar.whatsapp')
+            ->with('status', 'Código enviado para ' . $numero . '. Digite-o abaixo.');
+    })->name('cadastrar.whatsapp.salvar');
+
+    Route::get('/verificar-whatsapp', function () {
+        $user = auth()->user();
+
+        if ($user->whatsappVerificado()) {
+            return redirect('/bot');
+        }
+
+        // Segundos restantes até liberar o reenvio (2 min = 120s após o envio)
+        $aguardar = 0;
+        if ($user->whatsapp_code_expires_at) {
+            $aguardar = max(0, $user->whatsapp_code_expires_at->diffInSeconds(now()) - 480);
+        }
+
+        return view('auth.verificar-whatsapp', compact('aguardar'));
+    })->name('verificar.whatsapp');
+
+    Route::post('/verificar-whatsapp', function (\Illuminate\Http\Request $req) {
+        $req->validate(['codigo' => 'required|string|size:6']);
+
+        $user = auth()->user();
+
+        if (!$user->codigoValido($req->codigo)) {
+            return back()->withErrors(['codigo' => 'Código inválido ou expirado.']);
+        }
+
+        $user->whatsapp_verified_at      = now();
+        $user->whatsapp_code             = null;
+        $user->whatsapp_code_expires_at  = null;
+        $user->save();
+
+        return redirect('/bot')->with('status', 'WhatsApp verificado com sucesso!');
+    })->name('verificar.whatsapp.confirmar');
+
+    Route::post('/verificar-whatsapp/reenviar', function () {
+        $user = auth()->user();
+
+        if ($user->whatsappVerificado()) {
+            return back();
+        }
+
+        // Bloqueia reenvio se o último código foi enviado há menos de 2 minutos
+        $aguardar = $user->whatsapp_code_expires_at
+            ? max(0, $user->whatsapp_code_expires_at->diffInSeconds(now()) - 480)
+            : 0;
+
+        if ($aguardar > 0) {
+            return redirect()->route('verificar.whatsapp')
+                ->with('error', "Aguarde {$aguardar} segundos antes de solicitar um novo código.");
+        }
+
+        \App\Http\Controllers\WhatsappController::enviarCodigoVerificacao($user);
+
+        return back()->with('status', 'Novo código enviado para o seu WhatsApp.');
+    })->name('verificar.whatsapp.reenviar');
+});
+
 Route::get('/bot', function () {
     return view('bot');
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
-Route::get('/binance/getConf', [\App\Http\Controllers\BinanceController::class, 'getConf'])->middleware('auth');
-Route::get('/binance/getSaldos', [\App\Http\Controllers\BinanceController::class, 'getSaldos'])->middleware('auth');
-Route::get('/binance/getPrecos', [\App\Http\Controllers\BinanceController::class, 'getPrecos'])->middleware('auth');
-Route::get('/binance/getOrdens', [\App\Http\Controllers\BinanceController::class, 'getOpenOrders'])->middleware('auth');
-Route::post('/binance/buy', [\App\Http\Controllers\BinanceController::class, 'buy'])->middleware('auth');
-Route::post('/binance/sell', [\App\Http\Controllers\BinanceController::class, 'sell'])->middleware('auth');
+Route::get('/binance/getConf', [\App\Http\Controllers\BinanceController::class, 'getConf'])->middleware(['auth', 'whatsapp.verified']);
+Route::get('/binance/getSaldos', [\App\Http\Controllers\BinanceController::class, 'getSaldos'])->middleware(['auth', 'whatsapp.verified']);
+Route::get('/binance/getPrecos', [\App\Http\Controllers\BinanceController::class, 'getPrecos'])->middleware(['auth', 'whatsapp.verified']);
+Route::get('/binance/getOrdens', [\App\Http\Controllers\BinanceController::class, 'getOpenOrders'])->middleware(['auth', 'whatsapp.verified']);
+Route::post('/binance/buy', [\App\Http\Controllers\BinanceController::class, 'buy'])->middleware(['auth', 'whatsapp.verified']);
+Route::post('/binance/sell', [\App\Http\Controllers\BinanceController::class, 'sell'])->middleware(['auth', 'whatsapp.verified']);
 
 
 
@@ -105,7 +189,7 @@ Route::post('/bot/investir-manual', function (Request $req, BinanceController $b
     });
 
     return ['mensagem' => 'Investimento realizado com sucesso!'];
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 
 
@@ -152,7 +236,7 @@ Route::get('/bot/valor-atual', function (BinanceController $binance) {
         'valor_atual'          => $valorAtual,
         'lucro'                => $lucro,
     ];
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 
 Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceController $binance) {
@@ -210,7 +294,7 @@ Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceCon
     });
 
     return ['mensagem' => 'Retirada registrada com sucesso!'];
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
 
@@ -227,7 +311,7 @@ Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
     $invest->delete();
 
     return ['mensagem' => 'Investimento removido com sucesso!'];
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/binance/historico', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
@@ -242,17 +326,17 @@ Route::get('/binance/historico', function (Request $req) {
         'close' => (float) $k[4],
         'range' => (float) $k[2] - (float) $k[3],
     ]);
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/simulacao', function () {
     if (Auth::id() !== 1) abort(403);
     return view('simulacao');
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/bot/config', function () {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
     return BotConfig::atual();
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::post('/bot/config', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
@@ -266,7 +350,7 @@ Route::post('/bot/config', function (Request $req) {
     $cfg->save();
 
     return ['mensagem' => 'Configuração salva com sucesso!'];
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/admin/usuarios', function () {
     if (Auth::id() !== 1) {
@@ -274,7 +358,7 @@ Route::get('/admin/usuarios', function () {
     }
 
     return \App\Models\User::select('id', 'name', 'email')->get();
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/admin/usuarios-investimentos', function (BinanceController $binance) {
 
@@ -325,7 +409,7 @@ Route::get('/admin/usuarios-investimentos', function (BinanceController $binance
             'lucro'                => $valorAtual - $inv->investimento_inicial,
         ];
     });
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // ── SAQUES ──────────────────────────────────────────────────────────────────
 
@@ -417,7 +501,7 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
 
     return response()->json(['mensagem' => 'Saque solicitado! Aguarde a confirmação do administrador.']);
 
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Usuário: cancelar saque pendente (devolve cotas)
 Route::delete('/bot/cancelar-saque/{id}', function ($id) {
@@ -462,7 +546,7 @@ Route::delete('/bot/cancelar-saque/{id}', function ($id) {
 
     return response()->json(['mensagem' => 'Saque cancelado e valor devolvido ao seu saldo.']);
 
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Usuário: saques pendentes e histórico
 Route::get('/bot/meus-saques', function () {
@@ -491,7 +575,7 @@ Route::get('/bot/meus-saques', function () {
 
     return response()->json(['pendentes' => $pendentes, 'historico' => $historico]);
 
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Usuário: histórico de depósitos PIX
 Route::get('/bot/meus-depositos', function () {
@@ -505,7 +589,7 @@ Route::get('/bot/meus-depositos', function () {
         ]);
 
     return response()->json($depositos);
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: listar saques pendentes
 Route::get('/bot/saques-pendentes', function () {
@@ -527,7 +611,7 @@ Route::get('/bot/saques-pendentes', function () {
             'criado_em'     => $s->created_at->format('d/m/Y H:i'),
         ]);
 
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // ── PIX (PagBank) ────────────────────────────────────────────────────────────
 
@@ -535,7 +619,7 @@ Route::get('/bot/saques-pendentes', function () {
 Route::post('/pix/webhook', [\App\Http\Controllers\PixController::class, 'webhook'])
     ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 
-Route::middleware('auth')->group(function () {
+Route::middleware(['auth', 'whatsapp.verified'])->group(function () {
     Route::post('/pix/criar', [\App\Http\Controllers\PixController::class, 'criar']);
     Route::get('/pix/status/{txid}', [\App\Http\Controllers\PixController::class, 'status']);
 });
@@ -559,7 +643,7 @@ Route::get('/admin/depositos-pix', function () {
             'registrado' => (bool) $p->registrado,
             'estornado'  => $p->status === 'estornado',
         ]);
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: estornar pagamento PIX
 Route::post('/admin/depositos-pix/{id}/estornar', function ($id) {
@@ -575,7 +659,7 @@ Route::post('/admin/depositos-pix/{id}/estornar', function ($id) {
         \Illuminate\Support\Facades\Log::error('Estorno PIX falhou', ['id' => $id, 'error' => $e->getMessage()]);
         return response()->json(['mensagem' => 'Erro ao processar estorno: ' . $e->getMessage()], 500);
     }
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: marcar depósito PIX como registrado no bot
 Route::post('/admin/depositos-pix/{id}/registrar', function ($id) {
@@ -585,7 +669,7 @@ Route::post('/admin/depositos-pix/{id}/registrar', function ($id) {
     $pix->update(['registrado' => true]);
 
     return response()->json(['mensagem' => 'Depósito marcado como registrado.']);
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 
 // ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────────
 
@@ -617,5 +701,5 @@ Route::post('/bot/confirmar-saque/{id}', function ($id) {
 
     return response()->json(['mensagem' => 'PIX confirmado com sucesso!']);
 
-})->middleware('auth');
+})->middleware(['auth', 'whatsapp.verified']);
 

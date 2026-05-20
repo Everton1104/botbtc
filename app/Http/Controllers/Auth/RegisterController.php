@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\WhatsappController;
 use App\Models\User;
 use Illuminate\Foundation\Auth\RegistersUsers;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 use App\Models\BotInvestment;
 use App\Http\Controllers\BinanceController;
@@ -50,9 +53,29 @@ class RegisterController extends Controller
     protected function validator(array $data)
     {
         return Validator::make($data, [
-            'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'name'                 => ['required', 'string', 'max:255'],
+            'whatsapp'             => ['required', 'string', 'max:20'],
+            'email'                => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password'             => ['required', 'string', 'min:8', 'confirmed'],
+            'g-recaptcha-response' => [
+                'required',
+                function ($attribute, $value, $fail) {
+                    $secret = env('RECAPTCHA_SECRET_KEY');
+
+                    if (!$secret) return; // chave não configurada (dev local)
+
+                    $res = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+                        'secret'   => $secret,
+                        'response' => $value,
+                    ])->json();
+
+                    if (!($res['success'] ?? false)) {
+                        $fail('Confirme que você não é um robô.');
+                    }
+                },
+            ],
+        ], [
+            'g-recaptcha-response.required' => 'Confirme que você não é um robô.',
         ]);
     }
 
@@ -63,10 +86,26 @@ class RegisterController extends Controller
      */
     protected function create(array $data)
     {
+        $numero = preg_replace('/\D/', '', $data['whatsapp']);
+
+        // Adiciona código do Brasil (55) se o usuário não informou
+        if (strlen($numero) <= 11) {
+            $numero = '55' . $numero;
+        }
+
         return User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
+            'name'     => $data['name'],
+            'whatsapp' => $numero,
+            'email'    => $data['email'],
             'password' => Hash::make($data['password']),
         ]);
+    }
+
+    protected function registered(Request $request, User $user)
+    {
+        WhatsappController::enviarCodigoVerificacao($user);
+
+        return redirect()->route('verificar.whatsapp')
+            ->with('status', 'Enviamos um código de 6 dígitos para o seu WhatsApp. Digite-o abaixo para ativar sua conta.');
     }
 }
