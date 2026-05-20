@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BotState;
 use App\Models\BotConfig;
 use App\Http\Controllers\BinanceController;
+use App\Http\Controllers\WhatsappController;
 use Illuminate\Support\Facades\Log;
 
 class BotExecutor
@@ -98,14 +99,18 @@ class BotExecutor
         }
 
         // Registrar direção ANTES de apagar tudo
+        $valorOrdem = (float) $ordem['price'] * (float) $ordem['origQty'];
+
         if ($side === 'SELL') {
             // BUY foi executada → BTC caiu
             $this->processarQueda($state, $precoAtual);
             Log::info("BotExecutor [{$userId}]: QUEDA registrada. Contador quedas: {$state->contador_quedas}. Preço: {$precoAtual}.");
+            WhatsappController::notificarOrdemConcluida('Compra', $valorOrdem);
         } else {
             // SELL foi executada → BTC subiu
             $this->processarSubida($state, $precoAtual);
             Log::info("BotExecutor [{$userId}]: SUBIDA registrada. Contador subidas: {$state->contador_subidas}. Preço: {$precoAtual}.");
+            WhatsappController::notificarOrdemConcluida('Venda', $valorOrdem);
         }
 
         // Cancelar a ordem restante e criar novo par

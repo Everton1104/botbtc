@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\WhatsappController;
 use App\Models\PixPayment;
 use App\Services\MercadoPagoService;
 use Illuminate\Http\Request;
@@ -130,11 +131,11 @@ class PixController extends Controller
 
                 Log::info('PIX aprovado via webhook', ['txid' => $paymentId, 'valor' => $pagamento->valor]);
 
-                // -------------------------------------------------------
-                // AQUI você adiciona a lógica após pagamento confirmado:
-                // Ex: $pagamento->user->incrementSaldo($pagamento->valor);
-                // Ex: event(new PagamentoConfirmado($pagamento));
-                // -------------------------------------------------------
+                $pagamento->loadMissing('user');
+                WhatsappController::notificarDeposito(
+                    (float) $pagamento->valor,
+                    $pagamento->user?->name ?? 'Desconhecido'
+                );
             }
         } catch (\Exception $e) {
             Log::error('Erro ao confirmar pagamento via webhook', ['error' => $e->getMessage()]);

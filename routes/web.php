@@ -345,9 +345,10 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
                      + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
     $valorSolicitado = (float) $req->input('valor', 0);
+    $valorBruto = 0.0;
 
     try {
-        DB::transaction(function () use ($userId, $patrimonioAtual, $valorSolicitado, $req) {
+        DB::transaction(function () use ($userId, $patrimonioAtual, $valorSolicitado, $req, &$valorBruto) {
 
             // Lock: impede dois saques simultâneos do mesmo usuário
             $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
@@ -411,6 +412,8 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
         $code = $e->getCode() >= 400 ? $e->getCode() : 422;
         return response()->json(['mensagem' => $e->getMessage()], $code);
     }
+
+    \App\Http\Controllers\WhatsappController::notificarSaque($valorBruto, auth()->user()->name);
 
     return response()->json(['mensagem' => 'Saque solicitado! Aguarde a confirmação do administrador.']);
 
@@ -516,8 +519,8 @@ Route::get('/bot/saques-pendentes', function () {
         ->map(fn($s) => [
             'id'            => $s->id,
             'user_id'       => $s->user_id,
-            'name'          => $s->user->name,
-            'email'         => $s->user->email,
+            'name'          => $s->user?->name ?? 'Desconhecido',
+            'email'         => $s->user?->email ?? '—',
             'valor_bruto'   => $s->valor_bruto,
             'valor_liquido' => $s->valor_liquido,
             'cotas'         => $s->cotas,
@@ -549,8 +552,8 @@ Route::get('/admin/depositos-pix', function () {
             'id'         => $p->id,
             'txid'       => $p->txid,
             'user_id'    => $p->user_id,
-            'user_name'  => $p->user->name  ?? 'Desconhecido',
-            'user_email' => $p->user->email ?? '—',
+            'user_name'  => $p->user?->name  ?? 'Desconhecido',
+            'user_email' => $p->user?->email ?? '—',
             'valor'      => (float) $p->valor,
             'pago_em'    => $p->pago_em?->format('d/m/Y H:i'),
             'registrado' => (bool) $p->registrado,
@@ -583,6 +586,17 @@ Route::post('/admin/depositos-pix/{id}/registrar', function ($id) {
 
     return response()->json(['mensagem' => 'Depósito marcado como registrado.']);
 })->middleware('auth');
+
+// ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────────
+
+// Verificação do webhook (GET)
+Route::get('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::class, 'virifyToken']);
+
+// Recebimento de mensagens (POST) — sem CSRF pois vem da Meta
+Route::post('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::class, 'getMsgs'])
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+
+// ── PIX (PagBank) ─────────────────────────────────────────────────────────────
 
 // Admin: confirmar PIX enviado
 Route::post('/bot/confirmar-saque/{id}', function ($id) {
