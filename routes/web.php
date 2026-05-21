@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
 
+Route::get('/politicabot', function () {
+    return view('politicabot');
+});
+
 Route::get('/', function () {
     return view('bot');
 })->middleware(['auth', 'whatsapp.verified']);
