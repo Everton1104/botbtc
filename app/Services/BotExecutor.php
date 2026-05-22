@@ -26,6 +26,13 @@ class BotExecutor
             return $this->inicializarBotSemDivisao($userId);
         }
 
+        // Verificar pausa (saque em andamento)
+        if ($state->pausado_ate && now()->lessThan($state->pausado_ate)) {
+            $restam = now()->diffInSeconds($state->pausado_ate);
+            Log::info("BotExecutor [{$userId}]: pausado por saque. Retoma em {$restam}s.");
+            return "Bot pausado. Retoma em {$restam}s.";
+        }
+
         // Buscar ordens abertas
         $open = $this->binance->getOpenOrders("BTCBRL");
 

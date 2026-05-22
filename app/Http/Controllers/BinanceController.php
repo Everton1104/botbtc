@@ -281,6 +281,39 @@ class BinanceController extends Controller
     }
 
     // ============================================================
+    // VENDER BTC A MERCADO (recebe BRL)
+    // ============================================================
+
+    public function sellMarketBTC(float $quantidade): array
+    {
+        $timestamp = now()->getTimestampMs();
+        $qty       = number_format($quantidade, 5, '.', '');
+
+        $params = http_build_query([
+            'symbol'    => 'BTCBRL',
+            'side'      => 'SELL',
+            'type'      => 'MARKET',
+            'quantity'  => $qty,
+            'timestamp' => $timestamp,
+        ]);
+
+        $signature = $this->assinar($params);
+
+        $url = $this->baseUrl . '/api/v3/order';
+
+        return Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
+            ->asForm()
+            ->post($url, [
+                'symbol'    => 'BTCBRL',
+                'side'      => 'SELL',
+                'type'      => 'MARKET',
+                'quantity'  => $qty,
+                'timestamp' => $timestamp,
+                'signature' => $signature,
+            ])->json();
+    }
+
+    // ============================================================
     // CONFIGURACAO DO BOT
     // ============================================================
     public function getConf()

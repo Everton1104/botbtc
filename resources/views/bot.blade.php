@@ -148,6 +148,24 @@
         </div>
     </div>
 
+    {{-- Banner: bot pausado aguardando transferência --}}
+    <div id="banner-pausa" class="mb-4" style="display:none;">
+        <div style="background:#1a1a2e;border:1px solid #f0b90b;border-radius:10px;padding:16px 20px;">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <i class="fa-solid fa-hourglass-half fa-lg" style="color:#f0b90b;animation:spin 2s linear infinite;"></i>
+                    <div>
+                        <div style="color:#f0b90b;font-weight:700;font-size:.95rem;">Bot pausado — aguardando transferência PIX</div>
+                        <div style="color:#aaa;font-size:.82rem;">O bot retoma automaticamente em <span id="pausa-countdown" style="color:#fff;font-weight:700;">—</span></div>
+                    </div>
+                </div>
+                <button onclick="liberarBot()" class="btn btn-sm" style="background:#f0b90b;color:#000;font-weight:700;white-space:nowrap;">
+                    <i class="fa-solid fa-circle-check me-1"></i> Transferência concluída — Liberar bot
+                </button>
+            </div>
+        </div>
+    </div>
+
     {{-- Depósitos PIX confirmados --}}
     <div class="section-title mt-2">
         <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
@@ -799,11 +817,62 @@ function registrarDepositoNoBot(pixId, userId, valorLiquido, nome) {
 
 function confirmarSaque(id, nome, valorLiquido) {
     const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
-    if (!confirm(`Confirma que o PIX de R$ ${fmtVal} foi enviado para ${nome}?\n\nAs cotas serão removidas automaticamente.`)) return;
+    if (!confirm(`Confirmar saque de R$ ${fmtVal} para ${nome}?\n\nSe necessário, o bot venderá BTC automaticamente para cobrir o valor.\nO bot ficará pausado por 3 minutos para você fazer a transferência.`)) return;
     axios.post(`/bot/confirmar-saque/${id}`)
-        .then(res => { alert(res.data.mensagem); carregarSaques(); carregarTabela(); })
+        .then(res => { alert(res.data.mensagem); carregarSaques(); carregarTabela(); iniciarPollingPausa(); })
         .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao confirmar saque.'));
 }
+
+// ── Pausa do bot ──────────────────────────────────────
+let pausaInterval = null;
+let pausaSegundos = 0;
+
+function iniciarPollingPausa() {
+    verificarPausa();
+}
+
+function verificarPausa() {
+    axios.get('/bot/status-pausa').then(res => {
+        if (res.data.pausado) {
+            pausaSegundos = res.data.segundos;
+            document.getElementById('banner-pausa').style.display = 'block';
+            if (!pausaInterval) {
+                pausaInterval = setInterval(() => {
+                    pausaSegundos--;
+                    if (pausaSegundos <= 0) {
+                        clearInterval(pausaInterval);
+                        pausaInterval = null;
+                        document.getElementById('banner-pausa').style.display = 'none';
+                    } else {
+                        const m = String(Math.floor(pausaSegundos / 60)).padStart(2, '0');
+                        const s = String(pausaSegundos % 60).padStart(2, '0');
+                        document.getElementById('pausa-countdown').textContent = m + ':' + s;
+                    }
+                }, 1000);
+            }
+            const m = String(Math.floor(pausaSegundos / 60)).padStart(2, '0');
+            const s = String(pausaSegundos % 60).padStart(2, '0');
+            document.getElementById('pausa-countdown').textContent = m + ':' + s;
+        } else {
+            document.getElementById('banner-pausa').style.display = 'none';
+            if (pausaInterval) { clearInterval(pausaInterval); pausaInterval = null; }
+        }
+    }).catch(() => {});
+}
+
+function liberarBot() {
+    if (!confirm('Confirma que a transferência foi concluída e deseja liberar o bot agora?')) return;
+    axios.post('/bot/cancelar-pausa')
+        .then(res => {
+            alert(res.data.mensagem);
+            document.getElementById('banner-pausa').style.display = 'none';
+            if (pausaInterval) { clearInterval(pausaInterval); pausaInterval = null; }
+        })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao liberar bot.'));
+}
+
+// Verificar ao carregar a página (caso o admin recarregue com pausa ativa)
+iniciarPollingPausa();
 @endif
 
 // ── Salto ─────────────────────────────────────────────

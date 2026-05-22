@@ -211,6 +211,8 @@
         /* ── Invalid feedback ── */
         .invalid-feedback { font-size: .8rem; }
         .is-invalid { border-color: var(--red) !important; }
+
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>

@@ -687,7 +687,7 @@ Route::post('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::clas
 // ── PIX (PagBank) ─────────────────────────────────────────────────────────────
 
 // Admin: confirmar PIX enviado
-Route::post('/bot/confirmar-saque/{id}', function ($id) {
+Route::post('/bot/confirmar-saque/{id}', function ($id, \App\Http\Controllers\BinanceController $binance) {
 
     if (Auth::id() !== 1) {
         return response()->json(['mensagem' => 'Acesso negado.'], 403);
@@ -699,11 +699,68 @@ Route::post('/bot/confirmar-saque/{id}', function ($id) {
         return response()->json(['mensagem' => 'Saque não encontrado ou já confirmado.'], 404);
     }
 
+    $valorLiquido = (float) $saque->valor_liquido;
+
+    // Verificar saldo BRL livre
+    $saldos      = $binance->getSaldos();
+    $brl         = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
+    $saldoBRLLivre = (float) ($brl['free'] ?? 0);
+
+    if ($saldoBRLLivre < $valorLiquido) {
+        $falta      = $valorLiquido - $saldoBRLLivre;
+        $precoAtual = $binance->getPrecoBTC();
+
+        // Cancelar todas as ordens abertas do bot
+        $ordensAbertas = $binance->getOpenOrders('BTCBRL');
+        foreach ($ordensAbertas as $ordem) {
+            $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
+        }
+
+        // Vender BTC suficiente (margem de 0.5% para cobrir taxa da Binance)
+        $btcNecessario = ($falta / $precoAtual) * 1.005;
+        $resultado     = $binance->sellMarketBTC($btcNecessario);
+
+        if (isset($resultado['code'])) {
+            \Illuminate\Support\Facades\Log::error("Saque atípico [{$id}]: falha ao vender BTC — " . json_encode($resultado));
+            return response()->json(['mensagem' => 'Erro ao converter BTC para BRL. Verifique o saldo e tente novamente.'], 500);
+        }
+
+        \Illuminate\Support\Facades\Log::info("Saque atípico [{$id}]: vendidos {$btcNecessario} BTC a mercado para cobrir R$ {$falta}. BRL disponível era R$ {$saldoBRLLivre}.");
+    }
+
+    // Pausar o bot por 3 minutos para o admin fazer a transferência
+    BotState::where('id_user', 1)->update(['pausado_ate' => now()->addMinutes(3)]);
+
     $saque->status        = 'confirmado';
     $saque->confirmado_at = now();
     $saque->save();
 
     return response()->json(['mensagem' => 'PIX confirmado com sucesso!']);
 
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Admin: status da pausa do bot
+Route::get('/bot/status-pausa', function () {
+    if (Auth::id() !== 1) return response()->json(['pausado' => false, 'segundos' => 0]);
+
+    $state = BotState::where('id_user', 1)->first();
+
+    if (!$state || !$state->pausado_ate || now()->greaterThan($state->pausado_ate)) {
+        return response()->json(['pausado' => false, 'segundos' => 0]);
+    }
+
+    return response()->json([
+        'pausado'  => true,
+        'segundos' => (int) now()->diffInSeconds($state->pausado_ate),
+    ]);
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Admin: cancelar pausa manualmente
+Route::post('/bot/cancelar-pausa', function () {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    BotState::where('id_user', 1)->update(['pausado_ate' => null]);
+
+    return response()->json(['mensagem' => 'Bot liberado com sucesso.']);
 })->middleware(['auth', 'whatsapp.verified']);
 
