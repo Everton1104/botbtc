@@ -40,4 +40,9 @@ return [
         'webhook_secret' => env('MP_WEBHOOK_SECRET'),
     ],
 
+    'binance' => [
+        'key'    => env('BINANCE_API_KEY'),
+        'secret' => env('BINANCE_SECRET_KEY'),
+    ],
+
 ];

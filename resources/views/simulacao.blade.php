@@ -37,53 +37,13 @@
                     <input type="number" id="s-salto" class="form-control form-control-sm" value="3000" min="100" step="100">
                 </div>
 
-                <div class="col-6 col-md-2">
-                    <label class="form-label">1º Salto <span style="color:var(--gold)">(%)</span></label>
-                    <div class="input-group input-group-sm">
-                        <input type="number" id="s-p1" class="form-control" value="25" min="1" max="100" step="1">
-                        <span class="input-group-text">%</span>
-                    </div>
-                </div>
-
-                <div class="col-6 col-md-2">
-                    <label class="form-label">2º Salto <span style="color:var(--muted)">(%)</span></label>
-                    <div class="input-group input-group-sm">
-                        <input type="number" id="s-p2" class="form-control" value="15" min="1" max="100" step="1">
-                        <span class="input-group-text">%</span>
-                    </div>
-                </div>
-
-                <div class="col-6 col-md-2">
-                    <label class="form-label">3º Salto <span style="color:var(--muted)">(%)</span></label>
-                    <div class="input-group input-group-sm">
-                        <input type="number" id="s-p3" class="form-control" value="10" min="1" max="100" step="1">
-                        <span class="input-group-text">%</span>
-                    </div>
-                </div>
-
-                <div class="col-6 col-md-2">
-                    <label class="form-label">4º Salto <span style="color:var(--muted)">(%)</span></label>
-                    <div class="input-group input-group-sm">
-                        <input type="number" id="s-p4" class="form-control" value="5" min="1" max="100" step="1">
-                        <span class="input-group-text">%</span>
-                    </div>
-                </div>
-
             </div>
 
-            <div class="mt-3 d-flex gap-2 flex-wrap">
+            <div class="mt-3 d-flex gap-2 flex-wrap align-items-center">
                 <button class="btn btn-sm" id="btn-preset-atual" style="background:var(--gold);color:#000;font-weight:600;" onclick="aplicarPresetAtual()">
                     Atual
                 </button>
-                <button class="btn btn-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);" onclick="aplicarPreset(50,25,15,10,3000)">
-                    Agressivo (50/25/15/10)
-                </button>
-                <button class="btn btn-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);" onclick="aplicarPreset(55,20,8,3,2500)">
-                    Recomendado (55/20/8/3 · 2.5k)
-                </button>
-                <button class="btn btn-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);" onclick="aplicarPreset(70,30,10,3,2500)">
-                    Máximo (70/30/10/3 · 2.5k)
-                </button>
+                <span style="font-size:.78rem;color:#888;">Limites fixos: 1º&nbsp;85% · 2º&nbsp;60% · 3º&nbsp;30% · 4º&nbsp;10% · all-in&nbsp;≥8</span>
             </div>
         </div>
     </div>
@@ -201,16 +161,13 @@ document.querySelectorAll('.periodo-btn').forEach(btn => {
 });
 
 // ── Simulação ──────────────────────────────────────────────
+const TAXA = 0.00075; // 0,075% por ordem (Binance com BNB)
+
 function simular() {
     const patrimonio = parseFloat(document.getElementById('s-patrimonio').value) || 64000;
     const salto      = parseFloat(document.getElementById('s-salto').value)      || 3000;
-    const p1 = (parseFloat(document.getElementById('s-p1').value) || 25) / 100;
-    const p2 = (parseFloat(document.getElementById('s-p2').value) || 15) / 100;
-    const p3 = (parseFloat(document.getElementById('s-p3').value) || 10) / 100;
-    const p4 = (parseFloat(document.getElementById('s-p4').value) || 5)  / 100;
-    const pcts = [p1, p2, p3, p4, 0.01];
+    const pcts = [0.85, 0.60, 0.30, 0.10, 0.01]; // limites fixos: p1=85% p2=60% p3=30% p4=10%
 
-    // Igual ao bot: nível 1=p1, 2=p2, 3=p3, 4=p4, 5+=1%
     function pctPorNivel(n) {
         return pcts[Math.min(n - 1, pcts.length - 1)];
     }
@@ -254,7 +211,8 @@ function simular() {
                 pct = pctPorNivel(contador);
             }
 
-            lucro += patrimonio * pct * (salto / btcPrice);
+            // lucro bruto - taxa nas duas pontas (compra + venda)
+            lucro += patrimonio * pct * (salto / btcPrice) - 2 * patrimonio * pct * TAXA;
         }
 
         return { date: dia.date, close: dia.close, range: dia.range, swings, lucro };
@@ -377,16 +335,6 @@ function atualizarChart(resultado) {
     chart.update();
 }
 
-// ── Presets ────────────────────────────────────────────────
-function aplicarPreset(p1, p2, p3, p4, salto) {
-    document.getElementById('s-p1').value    = p1;
-    document.getElementById('s-p2').value    = p2;
-    document.getElementById('s-p3').value    = p3;
-    document.getElementById('s-p4').value    = p4;
-    document.getElementById('s-salto').value = salto;
-    recalcular();
-}
-
 // ── Helpers ────────────────────────────────────────────────
 function fmt(v) {
     return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -396,34 +344,21 @@ function fmtBTC(v) {
 }
 
 // ── Listeners ──────────────────────────────────────────────
-['s-patrimonio','s-salto','s-p1','s-p2','s-p3','s-p4'].forEach(id => {
+['s-patrimonio', 's-salto'].forEach(id => {
     document.getElementById(id).addEventListener('input', recalcular);
 });
 
-// ── Config atual do bot (usada também no preset "Atual") ────
-let configAtual = { p1: 25, p2: 15, p3: 10, p4: 5, salto: 3000 };
-
+// ── Preset "Atual" — carrega salto salvo no bot ─────────────
 function aplicarPresetAtual() {
-    aplicarPreset(configAtual.p1, configAtual.p2, configAtual.p3, configAtual.p4, configAtual.salto);
+    document.getElementById('s-salto').value = configAtual.salto;
+    recalcular();
 }
 
-// ── Carregar config salva no bot ───────────────────────────
+let configAtual = { salto: 3000 };
+
 axios.get('/bot/config').then(res => {
-    const c = res.data;
-    configAtual = {
-        p1:    Math.round(c.p1 * 100),
-        p2:    Math.round(c.p2 * 100),
-        p3:    Math.round(c.p3 * 100),
-        p4:    Math.round(c.p4 * 100),
-        salto: c.salto,
-    };
-    document.getElementById('s-p1').value    = configAtual.p1;
-    document.getElementById('s-p2').value    = configAtual.p2;
-    document.getElementById('s-p3').value    = configAtual.p3;
-    document.getElementById('s-p4').value    = configAtual.p4;
+    configAtual.salto = res.data.salto;
     document.getElementById('s-salto').value = configAtual.salto;
-    document.getElementById('btn-preset-atual').textContent =
-        `Atual (${configAtual.p1}/${configAtual.p2}/${configAtual.p3}/${configAtual.p4})`;
     recalcular();
 }).catch(() => {});
 </script>

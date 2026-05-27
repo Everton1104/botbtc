@@ -198,35 +198,7 @@
     <div class="card mb-5">
         <div class="card-body">
             <form id="form-config-bot">
-                <div class="row g-3">
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" style="font-size:.8rem;color:#aaa;">1º Salto (%)</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" id="cfg-p1" class="form-control" min="1" max="100" step="1" placeholder="25">
-                            <span class="input-group-text">%</span>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" style="font-size:.8rem;color:#aaa;">2º Salto (%)</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" id="cfg-p2" class="form-control" min="1" max="100" step="1" placeholder="15">
-                            <span class="input-group-text">%</span>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" style="font-size:.8rem;color:#aaa;">3º Salto (%)</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" id="cfg-p3" class="form-control" min="1" max="100" step="1" placeholder="10">
-                            <span class="input-group-text">%</span>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" style="font-size:.8rem;color:#aaa;">4º Salto (%)</label>
-                        <div class="input-group input-group-sm">
-                            <input type="number" id="cfg-p4" class="form-control" min="1" max="100" step="1" placeholder="5">
-                            <span class="input-group-text">%</span>
-                        </div>
-                    </div>
+                <div class="row g-3 align-items-end">
                     <div class="col-6 col-md-3">
                         <label class="form-label" style="font-size:.8rem;color:#aaa;">Salto (R$)</label>
                         <div class="input-group input-group-sm">
@@ -239,6 +211,9 @@
                             <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
                         </button>
                     </div>
+                </div>
+                <div class="mt-3" style="font-size:.78rem;color:#888;">
+                    Limites por nível (fixos): 1º&nbsp;85% · 2º&nbsp;60% · 3º&nbsp;30% · 4º&nbsp;10% · all-in&nbsp;≥8
                 </div>
                 <div id="cfg-msg" class="mt-2" style="font-size:.82rem;"></div>
             </form>
@@ -625,26 +600,17 @@ setInterval(carregarOrdens, 10000);
 // ── Config do bot ──────────────────────────────────────
 function carregarConfig() {
     axios.get('/bot/config').then(res => {
-        const c = res.data;
-        document.getElementById('cfg-p1').value    = Math.round(c.p1 * 100);
-        document.getElementById('cfg-p2').value    = Math.round(c.p2 * 100);
-        document.getElementById('cfg-p3').value    = Math.round(c.p3 * 100);
-        document.getElementById('cfg-p4').value    = Math.round(c.p4 * 100);
-        document.getElementById('cfg-salto').value = c.salto;
+        document.getElementById('cfg-salto').value = res.data.salto;
     }).catch(() => {});
 }
 carregarConfig();
 
 document.getElementById('form-config-bot').addEventListener('submit', function(e) {
     e.preventDefault();
-    const p1    = parseFloat(document.getElementById('cfg-p1').value) / 100;
-    const p2    = parseFloat(document.getElementById('cfg-p2').value) / 100;
-    const p3    = parseFloat(document.getElementById('cfg-p3').value) / 100;
-    const p4    = parseFloat(document.getElementById('cfg-p4').value) / 100;
     const salto = parseInt(document.getElementById('cfg-salto').value);
     const msg   = document.getElementById('cfg-msg');
 
-    axios.post('/bot/config', { p1, p2, p3, p4, salto })
+    axios.post('/bot/config', { salto })
         .then(res => {
             msg.style.color = '#2ecc71';
             msg.textContent = res.data.mensagem;

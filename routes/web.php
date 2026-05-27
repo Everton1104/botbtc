@@ -345,11 +345,7 @@ Route::get('/bot/config', function () {
 Route::post('/bot/config', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
 
-    $cfg = BotConfig::atual();
-    $cfg->p1    = max(0.01, min(1.0, (float) $req->input('p1', $cfg->p1)));
-    $cfg->p2    = max(0.01, min(1.0, (float) $req->input('p2', $cfg->p2)));
-    $cfg->p3    = max(0.01, min(1.0, (float) $req->input('p3', $cfg->p3)));
-    $cfg->p4    = max(0.01, min(1.0, (float) $req->input('p4', $cfg->p4)));
+    $cfg        = BotConfig::atual();
     $cfg->salto = max(100, (int) $req->input('salto', $cfg->salto));
     $cfg->save();
 

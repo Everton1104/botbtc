@@ -5,244 +5,167 @@ namespace App\Http\Controllers;
 use App\Models\BotState;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class BinanceController extends Controller
 {
+    private const SYMBOL = 'BTCBRL';
+
     private string $apiKey;
     private string $secretKey;
     private string $baseUrl;
 
     public function __construct()
     {
-        $this->apiKey    = env('BINANCE_API_KEY');
-        $this->secretKey = env('BINANCE_SECRET_KEY');
-        $this->baseUrl   = "https://api.binance.com";
+        $this->apiKey    = config('services.binance.key');
+        $this->secretKey = config('services.binance.secret');
+        $this->baseUrl   = 'https://api.binance.com';
     }
 
     // ============================================================
-    // ASSINAR REQUISIÇÕES
+    // HELPERS INTERNOS
     // ============================================================
 
-    private function assinar(string $queryString)
+    private function assinar(string $queryString): string
     {
         return hash_hmac('sha256', $queryString, $this->secretKey);
     }
 
-    // ============================================================
-    // ENVIAR REQUISIÇÃO
-    // ============================================================
-
-    private function enviar(string $endpoint, string $params, string $method = "POST")
+    private function timestamp(): int
     {
-        $url = $this->baseUrl . $endpoint . "?" . $params;
+        return now()->getTimestampMs();
+    }
 
-        $headers = [
-            "X-MBX-APIKEY" => $this->apiKey
-        ];
+    // GET / DELETE — parâmetros e assinatura na URL
+    private function enviar(string $endpoint, string $params, string $method = 'GET'): ?array
+    {
+        $url      = "{$this->baseUrl}{$endpoint}?{$params}";
+        $headers  = ['X-MBX-APIKEY' => $this->apiKey];
 
-        if ($method === "GET") {
-            $response = Http::withHeaders($headers)->get($url);
-        } elseif ($method === "DELETE") {
-            $response = Http::withHeaders($headers)->delete($url);
-        } else {
-            $response = Http::withHeaders($headers)->post($url);
+        $response = match ($method) {
+            'DELETE' => Http::withHeaders($headers)->delete($url),
+            default  => Http::withHeaders($headers)->get($url),
+        };
+
+        if (!$response->successful()) {
+            Log::warning("BinanceController [{$method} {$endpoint}]: HTTP {$response->status()} — {$response->body()}");
         }
 
         return $response->json();
     }
 
-    // ============================================================
-    // ORDEM LIMIT BUY
-    // ============================================================
-
-    public function buyLimit(float $preco, float $quantidade)
+    // POST — parâmetros assinados no corpo (application/x-www-form-urlencoded)
+    private function enviarPost(string $endpoint, array $params): array
     {
-        $symbol = "BTCBRL";
-        $timestamp = now()->getTimestampMs();
+        $params['signature'] = $this->assinar(http_build_query($params));
 
-        // Formatar corretamente
-        $preco = number_format($preco, 2, '.', '');
-        $quantidade = number_format($quantidade, 5, '.', '');
+        $response = Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
+            ->asForm()
+            ->post("{$this->baseUrl}{$endpoint}", $params);
 
-        $params = http_build_query([
-            'symbol'      => $symbol,
-            'side'        => 'BUY',
-            'type'        => 'LIMIT',
-            'timeInForce' => 'GTC',
-            'price'       => $preco,
-            'quantity'    => $quantidade,
-            'timestamp'   => $timestamp
-        ]);
+        if (!$response->successful()) {
+            Log::warning("BinanceController [POST {$endpoint}]: HTTP {$response->status()} — {$response->body()}");
+        }
 
-        $signature = $this->assinar($params);
-
-        // Enviar parâmetros no corpo, não na URL
-        $url = $this->baseUrl . "/api/v3/order";
-
-        return Http::withHeaders([
-            "X-MBX-APIKEY" => $this->apiKey
-        ])->asForm()->post($url, [
-            'symbol'      => $symbol,
-            'side'        => 'BUY',
-            'type'        => 'LIMIT',
-            'timeInForce' => 'GTC',
-            'price'       => $preco,
-            'quantity'    => $quantidade,
-            'timestamp'   => $timestamp,
-            'signature'   => $signature
-        ])->json();
+        return $response->json() ?? [];
     }
 
-
     // ============================================================
-    // ORDEM LIMIT SELL
+    // ORDENS LIMIT (BUY / SELL)
     // ============================================================
 
-    public function sellLimit(float $preco, float $quantidade)
+    private function ordemLimit(string $side, float $preco, float $quantidade): array
     {
-        $symbol = "BTCBRL";
-        $timestamp = now()->getTimestampMs();
-
-        // Formatar corretamente
-        $preco = number_format($preco, 2, '.', '');
-        $quantidade = number_format($quantidade, 5, '.', '');
-
-        $params = http_build_query([
-            'symbol'      => $symbol,
-            'side'        => 'SELL',
+        return $this->enviarPost('/api/v3/order', [
+            'symbol'      => self::SYMBOL,
+            'side'        => $side,
             'type'        => 'LIMIT',
             'timeInForce' => 'GTC',
-            'price'       => $preco,
-            'quantity'    => $quantidade,
-            'timestamp'   => $timestamp
+            'price'       => number_format($preco, 2, '.', ''),
+            'quantity'    => number_format($quantidade, 5, '.', ''),
+            'timestamp'   => $this->timestamp(),
         ]);
-
-        $signature = $this->assinar($params);
-
-        // Enviar no corpo, não na URL
-        $url = $this->baseUrl . "/api/v3/order";
-
-        return Http::withHeaders([
-            "X-MBX-APIKEY" => $this->apiKey
-        ])->asForm()->post($url, [
-            'symbol'      => $symbol,
-            'side'        => 'SELL',
-            'type'        => 'LIMIT',
-            'timeInForce' => 'GTC',
-            'price'       => $preco,
-            'quantity'    => $quantidade,
-            'timestamp'   => $timestamp,
-            'signature'   => $signature
-        ])->json();
     }
 
+    public function buyLimit(float $preco, float $quantidade): array
+    {
+        return $this->ordemLimit('BUY', $preco, $quantidade);
+    }
+
+    public function sellLimit(float $preco, float $quantidade): array
+    {
+        return $this->ordemLimit('SELL', $preco, $quantidade);
+    }
 
     // ============================================================
     // CANCELAR ORDEM
     // ============================================================
 
-    public function cancelarOrdem(string $symbol, string $orderId)
+    public function cancelarOrdem(string $symbol, string $orderId): ?array
     {
-        $timestamp = now()->getTimestampMs();
-
         $params = http_build_query([
             'symbol'    => $symbol,
             'orderId'   => $orderId,
-            'timestamp' => $timestamp
+            'timestamp' => $this->timestamp(),
         ]);
 
-        $signature = $this->assinar($params);
-
-        return $this->enviar(
-            "/api/v3/order",
-            "{$params}&signature={$signature}",
-            "DELETE"
-        );
+        return $this->enviar('/api/v3/order', "{$params}&signature={$this->assinar($params)}", 'DELETE');
     }
 
     // ============================================================
     // CONSULTAR ORDEM
     // ============================================================
 
-    public function getOrder(string $symbol, string $orderId)
+    public function getOrder(string $symbol, string $orderId): ?array
     {
-        $timestamp = now()->getTimestampMs();
-
         $params = http_build_query([
             'symbol'    => $symbol,
             'orderId'   => $orderId,
-            'timestamp' => $timestamp
+            'timestamp' => $this->timestamp(),
         ]);
 
-        $signature = $this->assinar($params);
-
-        return $this->enviar(
-            "/api/v3/order",
-            "{$params}&signature={$signature}",
-            "GET"
-        );
+        return $this->enviar('/api/v3/order', "{$params}&signature={$this->assinar($params)}");
     }
 
     // ============================================================
     // LISTAR ORDENS ABERTAS
     // ============================================================
 
-    public function getOpenOrders(string $symbol = "BTCBRL")
+    public function getOpenOrders(string $symbol = self::SYMBOL): ?array
     {
-        $timestamp = now()->getTimestampMs();
-
         $params = http_build_query([
             'symbol'    => $symbol,
-            'timestamp' => $timestamp
+            'timestamp' => $this->timestamp(),
         ]);
 
-        $signature = $this->assinar($params);
-
-        return $this->enviar(
-            "/api/v3/openOrders",
-            "{$params}&signature={$signature}",
-            "GET"
-        );
+        return $this->enviar('/api/v3/openOrders', "{$params}&signature={$this->assinar($params)}");
     }
 
     // ============================================================
     // SALDOS DA CONTA
     // ============================================================
 
-    public function getSaldos()
+    public function getSaldos(): ?array
     {
-        $timestamp = now()->getTimestampMs();
+        $params = http_build_query(['timestamp' => $this->timestamp()]);
 
-        $params = http_build_query([
-            'timestamp' => $timestamp
-        ]);
-
-        $signature = $this->assinar($params);
-
-        return $this->enviar(
-            "/api/v3/account",
-            "{$params}&signature={$signature}",
-            "GET"
-        );
+        return $this->enviar('/api/v3/account', "{$params}&signature={$this->assinar($params)}");
     }
 
     // ============================================================
-    // PREÇO ATUAL DO BTC
+    // PREÇO ATUAL
     // ============================================================
 
-    public function getPrecoBTC()
+    public function getPrecoBTC(): float
     {
-        $url = $this->baseUrl . "/api/v3/ticker/price?symbol=BTCBRL";
-
-        $response = Http::get($url);
-
-        return (float) $response->json()['price'];
+        $response = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=" . self::SYMBOL);
+        return (float) ($response->json()['price'] ?? 0.0);
     }
 
-    public function getPrecos()
+    public function getPrecos(): array
     {
-        $btc = Http::get($this->baseUrl . "/api/v3/ticker/price?symbol=BTCBRL")->json()['price'];
-        $bnb = Http::get($this->baseUrl . "/api/v3/ticker/price?symbol=BNBBRL")->json()['price'];
+        $btc = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=BTCBRL")->json()['price'] ?? 0;
+        $bnb = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=BNBBRL")->json()['price'] ?? 0;
 
         return ['BTCBRL' => (float) $btc, 'BNBBRL' => (float) $bnb];
     }
@@ -253,31 +176,13 @@ class BinanceController extends Controller
 
     public function comprarBNBMercado(float $valorBRL): array
     {
-        $timestamp = now()->getTimestampMs();
-        $qty       = number_format($valorBRL, 2, '.', '');
-
-        $params = http_build_query([
+        return $this->enviarPost('/api/v3/order', [
             'symbol'        => 'BNBBRL',
             'side'          => 'BUY',
             'type'          => 'MARKET',
-            'quoteOrderQty' => $qty,
-            'timestamp'     => $timestamp,
+            'quoteOrderQty' => number_format($valorBRL, 2, '.', ''),
+            'timestamp'     => $this->timestamp(),
         ]);
-
-        $signature = $this->assinar($params);
-
-        $url = $this->baseUrl . '/api/v3/order';
-
-        return Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
-            ->asForm()
-            ->post($url, [
-                'symbol'        => 'BNBBRL',
-                'side'          => 'BUY',
-                'type'          => 'MARKET',
-                'quoteOrderQty' => $qty,
-                'timestamp'     => $timestamp,
-                'signature'     => $signature,
-            ])->json();
     }
 
     // ============================================================
@@ -286,37 +191,30 @@ class BinanceController extends Controller
 
     public function sellMarketBTC(float $quantidade): array
     {
-        $timestamp = now()->getTimestampMs();
-        $qty       = number_format($quantidade, 5, '.', '');
-
-        $params = http_build_query([
-            'symbol'    => 'BTCBRL',
+        return $this->enviarPost('/api/v3/order', [
+            'symbol'    => self::SYMBOL,
             'side'      => 'SELL',
             'type'      => 'MARKET',
-            'quantity'  => $qty,
-            'timestamp' => $timestamp,
+            'quantity'  => number_format($quantidade, 5, '.', ''),
+            'timestamp' => $this->timestamp(),
         ]);
-
-        $signature = $this->assinar($params);
-
-        $url = $this->baseUrl . '/api/v3/order';
-
-        return Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
-            ->asForm()
-            ->post($url, [
-                'symbol'    => 'BTCBRL',
-                'side'      => 'SELL',
-                'type'      => 'MARKET',
-                'quantity'  => $qty,
-                'timestamp' => $timestamp,
-                'signature' => $signature,
-            ])->json();
     }
 
     // ============================================================
-    // CONFIGURACAO DO BOT
+    // KLINES (velas — endpoint público, sem autenticação)
     // ============================================================
-    public function getConf()
+
+    public function getKlines(string $symbol, string $interval, int $limit): array
+    {
+        $response = Http::get("{$this->baseUrl}/api/v3/klines?symbol={$symbol}&interval={$interval}&limit={$limit}");
+        return $response->json() ?? [];
+    }
+
+    // ============================================================
+    // CONFIGURAÇÃO DO BOT (usado pelo frontend autenticado)
+    // ============================================================
+
+    public function getConf(): ?BotState
     {
         return BotState::where('id_user', Auth::user()->id)->first();
     }
