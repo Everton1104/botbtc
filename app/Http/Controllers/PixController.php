@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\BinanceController;
 use App\Http\Controllers\WhatsappController;
 use App\Models\PixPayment;
 use App\Services\MercadoPagoService;
@@ -61,8 +62,11 @@ class PixController extends Controller
             try {
                 $dados = $this->mp->consultarPagamento($txid);
 
+                $btcPrice = null;
+                try { $btcPrice = app(BinanceController::class)->getPrecoBTC(); } catch (\Throwable) {}
+
                 match ($dados['status'] ?? '') {
-                    'approved' => $pagamento->update(['status' => 'pago',      'pago_em' => now()]),
+                    'approved' => $pagamento->update(['status' => 'pago', 'pago_em' => now(), 'btc_price' => $btcPrice]),
                     'cancelled',
                     'rejected' => $pagamento->update(['status' => 'cancelado']),
                     default    => $pagamento->isExpirado() ? $pagamento->update(['status' => 'expirado']) : null,
@@ -123,9 +127,13 @@ class PixController extends Controller
             $dados = $this->mp->consultarPagamento($paymentId);
 
             if (($dados['status'] ?? '') === 'approved') {
+                $btcPrice = null;
+                try { $btcPrice = app(BinanceController::class)->getPrecoBTC(); } catch (\Throwable) {}
+
                 $pagamento->update([
                     'status'          => 'pago',
                     'pago_em'         => now(),
+                    'btc_price'       => $btcPrice,
                     'payload_webhook' => $data,
                 ]);
 

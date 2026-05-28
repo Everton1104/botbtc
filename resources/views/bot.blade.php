@@ -228,7 +228,7 @@
     ══════════════════════════════════════════ --}}
     <div class="section-title"><i class="fa-solid fa-wallet me-2"></i>Meu Investimento</div>
 
-    <div class="row g-3 mb-5">
+    <div class="row g-3 mb-4">
 
         <div class="col-6 col-md-3">
             <div class="stat-tile">
@@ -261,6 +261,59 @@
             </div>
         </div>
 
+    </div>
+
+    {{-- Preço BTC atual --}}
+    <div class="row g-3 mb-5">
+
+        <div class="col-12 col-md-6">
+            <div class="stat-tile" style="border-color:rgba(240,185,11,.3);">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="label"><i class="fa-brands fa-bitcoin me-1" style="color:#f0b90b;"></i>Preço BTC Atual</div>
+                        <div class="value text-gold">R$ <span id="inv-btc-price">—</span></div>
+                        <div class="sub" id="inv-btc-sub" style="color:var(--muted);">Atualizado em tempo real</div>
+                    </div>
+                    <i class="fa-brands fa-bitcoin" style="font-size:2.2rem;color:rgba(240,185,11,.25);"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-6" id="btc-influencia-resumo" style="display:none;">
+            <div class="stat-tile" style="border-color:rgba(120,120,120,.2);">
+                <div class="label">Influência do BTC nos seus Aportes</div>
+                <div class="value" id="btc-influencia-valor">—</div>
+                <div class="sub" id="btc-influencia-desc"></div>
+            </div>
+        </div>
+
+    </div>
+
+    {{-- Detalhes BTC por aporte --}}
+    <div id="area-btc-aportes" style="display:none;" class="mb-5">
+        <div class="section-title"><i class="fa-brands fa-bitcoin me-2" style="color:#f0b90b;"></i>BTC na Época de Cada Aporte</div>
+        <div class="card">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Data do Aporte</th>
+                                <th>Valor Depositado</th>
+                                <th>BTC no Aporte</th>
+                                <th>BTC Hoje</th>
+                                <th>Variação do BTC</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-btc-aportes"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="mt-2" style="font-size:.76rem;color:var(--muted);">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            A variação do BTC indica o quanto o preço do Bitcoin subiu ou caiu desde cada aporte, influenciando diretamente o valor do seu investimento.
+        </div>
     </div>
 
     {{-- Depósito PIX --}}
@@ -847,6 +900,8 @@ axios.get("/bot/config")
     .catch(() => {});
 
 // ── Painel do investidor ───────────────────────────────
+let precoBTCAtual = 0;
+
 function atualizarPainel() {
     axios.get("/bot/valor-atual").then(res => {
         const d = res.data;
@@ -855,11 +910,17 @@ function atualizarPainel() {
         const valorAtual = safe(d.valor_atual);
         const pixLiquido = valorAtual * 0.99;
         valorAtualCache  = valorAtual;
+        precoBTCAtual    = safe(d.preco_btc);
 
         $('#investimento-inicial').text(fmt(safe(d.investimento_inicial)));
         $('#lucro-total').text(fmt(safe(d.lucro)));
         $('#saldo-total').text(fmt(valorAtual));
         $('#valor-pix').text(fmt(pixLiquido));
+
+        // Preço BTC no painel do investidor
+        if (precoBTCAtual > 0) {
+            $('#inv-btc-price').text(fmt(precoBTCAtual, 2));
+        }
 
         const lucro  = safe(d.lucro);
         const aporte = safe(d.investimento_inicial);
@@ -872,6 +933,9 @@ function atualizarPainel() {
             const pct = (lucro / aporte * 100).toFixed(2);
             $('#lucro-pct').text((lucro >= 0 ? '▲ ' : '▼ ') + pct + '% do aportado');
         }
+
+        // Atualiza tabela de BTC por aporte com o preço atual
+        renderizarTabelaBTC();
     }).catch(() => {});
 }
 atualizarPainel();
@@ -935,6 +999,59 @@ function cancelarSaque(id) {
         .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao cancelar.'));
 }
 
+let depositosCache = [];
+
+function renderizarTabelaBTC() {
+    const deps = depositosCache.filter(d => d.btc_price && d.btc_price > 0);
+    const area  = document.getElementById('area-btc-aportes');
+    const tbody = document.getElementById('tabela-btc-aportes');
+    const resumo = document.getElementById('btc-influencia-resumo');
+
+    if (!deps.length) { area.style.display = 'none'; resumo.style.display = 'none'; return; }
+
+    area.style.display = '';
+
+    let somaVarPonderada = 0;
+    let somaValor = 0;
+
+    tbody.innerHTML = deps.map(d => {
+        const var_pct = precoBTCAtual > 0 ? ((precoBTCAtual - d.btc_price) / d.btc_price) * 100 : null;
+        const cor     = var_pct === null ? 'var(--muted)' : var_pct >= 0 ? '#0ecb81' : '#ff4757';
+        const sinal   = var_pct === null ? '' : var_pct >= 0 ? '▲ ' : '▼ ';
+        const varText = var_pct === null
+            ? '<span class="text-muted">—</span>'
+            : `<span style="color:${cor};font-weight:700;">${sinal}${Math.abs(var_pct).toFixed(2)}%</span>`;
+
+        if (var_pct !== null) {
+            somaVarPonderada += var_pct * d.valor;
+            somaValor += d.valor;
+        }
+
+        return `
+        <tr>
+            <td class="text-muted" style="font-size:.83rem;">${d.pago_em}</td>
+            <td class="fw-600">R$ ${fmt(d.valor)}</td>
+            <td>R$ ${fmt(d.btc_price)}</td>
+            <td class="text-gold fw-600">R$ ${precoBTCAtual > 0 ? fmt(precoBTCAtual) : '—'}</td>
+            <td>${varText}</td>
+        </tr>`;
+    }).join('');
+
+    // Resumo ponderado pelo valor de cada aporte
+    if (somaValor > 0) {
+        const varMedia = somaVarPonderada / somaValor;
+        const corRes   = varMedia >= 0 ? '#0ecb81' : '#ff4757';
+        const sinRes   = varMedia >= 0 ? '▲ ' : '▼ ';
+        resumo.style.display = '';
+        document.getElementById('btc-influencia-valor').innerHTML =
+            `<span style="color:${corRes};font-weight:700;">${sinRes}${Math.abs(varMedia).toFixed(2)}%</span>`;
+        document.getElementById('btc-influencia-desc').textContent =
+            varMedia >= 0
+                ? 'O BTC subiu em média desde seus aportes — impacto positivo no portfólio.'
+                : 'O BTC caiu em média desde seus aportes — impacto negativo no portfólio.';
+    }
+}
+
 function carregarMeusSaques() {
     Promise.all([
         axios.get('/bot/meus-saques'),
@@ -942,6 +1059,9 @@ function carregarMeusSaques() {
     ]).then(([resSaques, resDepositos]) => {
         const { pendentes, historico } = resSaques.data;
         const depositos = resDepositos.data;
+
+        depositosCache = depositos;
+        renderizarTabelaBTC();
 
         // Pendentes
         const areaPend = document.getElementById('area-saques-pendentes');

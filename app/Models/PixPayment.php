@@ -17,6 +17,7 @@ class PixPayment extends Model
         'copia_e_cola',
         'expiracao',
         'pago_em',
+        'btc_price',
         'registrado',
         'payload_webhook',
     ];
@@ -27,6 +28,7 @@ class PixPayment extends Model
         'registrado'      => 'boolean',
         'payload_webhook' => 'array',
         'valor'           => 'decimal:2',
+        'btc_price'       => 'decimal:2',
     ];
 
     public function user(): BelongsTo

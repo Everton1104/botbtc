@@ -584,8 +584,9 @@ Route::get('/bot/meus-depositos', function () {
         ->orderByDesc('pago_em')
         ->get()
         ->map(fn($p) => [
-            'valor'   => (float) $p->valor,
-            'pago_em' => $p->pago_em?->format('d/m/Y H:i') ?? '—',
+            'valor'     => (float) $p->valor,
+            'pago_em'   => $p->pago_em?->format('d/m/Y H:i') ?? '—',
+            'btc_price' => $p->btc_price ? (float) $p->btc_price : null,
         ]);
 
     return response()->json($depositos);
@@ -662,11 +663,17 @@ Route::post('/admin/depositos-pix/{id}/estornar', function ($id) {
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: marcar depósito PIX como registrado no bot
-Route::post('/admin/depositos-pix/{id}/registrar', function ($id) {
+Route::post('/admin/depositos-pix/{id}/registrar', function ($id, \App\Http\Controllers\BinanceController $binance) {
     if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
 
     $pix = \App\Models\PixPayment::where('id', $id)->where('status', 'pago')->firstOrFail();
-    $pix->update(['registrado' => true]);
+
+    $updates = ['registrado' => true];
+    if (!$pix->btc_price) {
+        try { $updates['btc_price'] = $binance->getPrecoBTC(); } catch (\Throwable) {}
+    }
+
+    $pix->update($updates);
 
     return response()->json(['mensagem' => 'Depósito marcado como registrado.']);
 })->middleware(['auth', 'whatsapp.verified']);
