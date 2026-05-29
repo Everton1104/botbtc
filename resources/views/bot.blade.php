@@ -198,23 +198,36 @@
     <div class="card mb-5">
         <div class="card-body">
             <form id="form-config-bot">
-                <div class="row g-3 align-items-end">
+
+                {{-- All-in --}}
+                <div class="row g-3 align-items-end mb-3">
                     <div class="col-6 col-md-3">
-                        <label class="form-label" style="font-size:.8rem;color:#aaa;">Salto (R$)</label>
+                        <label class="form-label" style="font-size:.8rem;color:#aaa;">All-in a partir do nível</label>
+                        <input type="number" id="cfg-allin" class="form-control form-control-sm" min="5" max="50" step="1" placeholder="15">
+                    </div>
+                </div>
+
+                {{-- Níveis 1-7 --}}
+                <div style="font-size:.8rem;color:#aaa;margin-bottom:.5rem;">Percentual por nível (0.01 – 1.00)</div>
+                <div class="row g-2 mb-3">
+                    @foreach(range(1,7) as $n)
+                    <div class="col-6 col-md-3 col-lg-2">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Nível {{ $n }}</label>
                         <div class="input-group input-group-sm">
-                            <span class="input-group-text">R$</span>
-                            <input type="number" id="cfg-salto" class="form-control" min="100" step="100" placeholder="3000">
+                            <input type="number" id="cfg-nivel{{ $n }}" class="form-control" min="0.01" max="1" step="0.01" placeholder="—">
+                            <span class="input-group-text" style="font-size:.75rem;">%×</span>
                         </div>
                     </div>
-                    <div class="col-6 col-md-3 d-flex align-items-end">
-                        <button type="submit" class="btn btn-sm btn-warning w-100">
-                            <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
-                        </button>
-                    </div>
+                    @endforeach
                 </div>
-                <div class="mt-3" style="font-size:.78rem;color:#888;">
-                    Limites por nível (fixos): 1º&nbsp;85% · 2º&nbsp;60% · 3º&nbsp;30% · 4º&nbsp;10% · all-in&nbsp;≥8
+
+                <div class="d-flex align-items-center gap-3">
+                    <button type="submit" class="btn btn-sm btn-warning px-4">
+                        <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
+                    </button>
+                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa 1% até atingir o all-in · all-in cap: 95% · salto calculado automaticamente pelo ATR</span>
                 </div>
+
                 <div id="cfg-msg" class="mt-2" style="font-size:.82rem;"></div>
             </form>
         </div>
@@ -287,6 +300,33 @@
             </div>
         </div>
 
+    </div>
+
+    {{-- Tendência do mercado --}}
+    <div class="row g-3 mb-5">
+        <div class="col-12">
+            <div class="stat-tile" id="tile-tendencia" style="border-color:rgba(120,120,120,.2);">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <div class="label"><i class="fa-solid fa-chart-line me-1"></i>Tendência do Mercado (MA21 · EMA9)</div>
+                        <div class="d-flex align-items-center gap-3 mt-1 flex-wrap">
+                            <span id="tend-badge" style="font-size:1rem;font-weight:700;">—</span>
+                            <span class="text-muted" style="font-size:.8rem;">Distância do preço à MA21: <strong id="tend-distancia">—</strong></span>
+                        </div>
+                        <div class="mt-2 d-flex gap-3 flex-wrap" style="font-size:.78rem;color:var(--muted);">
+                            <span>MA21: <strong id="tend-ma21" class="text-gold">—</strong></span>
+                            <span>EMA9: <strong id="tend-ema9" class="text-gold">—</strong></span>
+                            <span>RSI(14): <strong id="tend-rsi">—</strong></span>
+                            <span>MACD: <strong id="tend-macd">—</strong></span>
+                            <span>Bollinger %B: <strong id="tend-boll">—</strong></span>
+                            <span>Salto (ATR): <strong id="tend-salto" class="text-gold">—</strong></span>
+                            <span>Agressividade: <strong id="tend-fator-compra">—</strong></span>
+                        </div>
+                    </div>
+                    <div id="tend-icone" style="font-size:2rem;opacity:.4;">—</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {{-- Detalhes BTC por aporte --}}
@@ -653,17 +693,30 @@ setInterval(carregarOrdens, 10000);
 // ── Config do bot ──────────────────────────────────────
 function carregarConfig() {
     axios.get('/bot/config').then(res => {
-        document.getElementById('cfg-salto').value = res.data.salto;
+        const d = res.data;
+        document.getElementById('cfg-allin').value  = d.allin_threshold;
+        for (let n = 1; n <= 7; n++) {
+            const el = document.getElementById('cfg-nivel' + n);
+            if (el) el.value = d['nivel' + n] ?? '';
+        }
     }).catch(() => {});
 }
 carregarConfig();
 
 document.getElementById('form-config-bot').addEventListener('submit', function(e) {
     e.preventDefault();
-    const salto = parseInt(document.getElementById('cfg-salto').value);
-    const msg   = document.getElementById('cfg-msg');
+    const msg     = document.getElementById('cfg-msg');
+    const payload = {};
 
-    axios.post('/bot/config', { salto })
+    const allin = document.getElementById('cfg-allin').value;
+    if (allin) payload.allin_threshold = parseInt(allin);
+
+    for (let n = 1; n <= 7; n++) {
+        const val = document.getElementById('cfg-nivel' + n)?.value;
+        if (val) payload['nivel' + n] = parseFloat(val);
+    }
+
+    axios.post('/bot/config', payload)
         .then(res => {
             msg.style.color = '#2ecc71';
             msg.textContent = res.data.mensagem;
@@ -894,10 +947,77 @@ function liberarBot() {
 iniciarPollingPausa();
 @endif
 
-// ── Salto ─────────────────────────────────────────────
-axios.get("/bot/config")
-    .then(res => { if (res.data.salto) $('#salto').text(fmt(res.data.salto, 0)); })
+// ── Salto (via tendência/ATR) ──────────────────────────
+axios.get("/bot/tendencia")
+    .then(res => { if (res.data.salto_dinamico) $('#salto').text(fmt(res.data.salto_dinamico, 0)); })
     .catch(() => {});
+
+// ── Tendência do mercado ──────────────────────────────
+function atualizarTendencia() {
+    axios.get('/bot/tendencia').then(res => {
+        const d = res.data;
+        const tile = document.getElementById('tile-tendencia');
+        const badge = document.getElementById('tend-badge');
+        const icone = document.getElementById('tend-icone');
+
+        const cfg = {
+            alta:   { cor: '#0ecb81', label: '▲ ALTA',   icon: '<i class="fa-solid fa-arrow-trend-up"></i>',  border: 'rgba(14,203,129,.35)' },
+            baixa:  { cor: '#ff4757', label: '▼ BAIXA',  icon: '<i class="fa-solid fa-arrow-trend-down"></i>', border: 'rgba(255,71,87,.35)' },
+            neutra: { cor: '#f0b90b', label: '→ NEUTRA', icon: '<i class="fa-solid fa-minus"></i>',           border: 'rgba(240,185,11,.35)' },
+        }[d.tendencia] ?? { cor: '#aaa', label: '—', icon: '—', border: 'rgba(120,120,120,.2)' };
+
+        tile.style.borderColor    = cfg.border;
+        badge.style.color         = cfg.cor;
+        badge.textContent         = cfg.label;
+        icone.style.color         = cfg.cor;
+        icone.innerHTML           = cfg.icon;
+
+        const sinalDist = d.distancia_pct >= 0 ? '+' : '';
+        document.getElementById('tend-distancia').textContent  = sinalDist + d.distancia_pct + '%';
+        document.getElementById('tend-distancia').style.color  = d.distancia_pct >= 0 ? '#0ecb81' : '#ff4757';
+        document.getElementById('tend-ma21').textContent       = 'R$ ' + fmt(d.ma21);
+        document.getElementById('tend-ema9').textContent       = 'R$ ' + fmt(d.ema9);
+
+        // RSI
+        const rsi    = d.rsi ?? 50;
+        const corRsi = rsi <= 30 ? '#0ecb81' : rsi >= 70 ? '#ff4757' : '#f0b90b';
+        const lblRsi = rsi <= 30 ? rsi + ' (sobrevendido)' : rsi >= 70 ? rsi + ' (sobrecomprado)' : rsi;
+        document.getElementById('tend-rsi').textContent = lblRsi;
+        document.getElementById('tend-rsi').style.color = corRsi;
+
+        // ATR / salto dinâmico
+        if (d.salto_dinamico) {
+            document.getElementById('tend-salto').textContent = 'R$ ' + fmt(d.salto_dinamico, 0);
+        }
+
+        // MACD
+        const macdEl = document.getElementById('tend-macd');
+        if (d.macd !== undefined) {
+            const bullish = d.macd > d.macd_signal;
+            macdEl.textContent = bullish ? '▲ Bullish' : '▼ Bearish';
+            macdEl.style.color = bullish ? '#0ecb81' : '#ff4757';
+        }
+
+        // Bollinger %B
+        const bollEl = document.getElementById('tend-boll');
+        if (d.boll_pct_b !== undefined) {
+            const pctB = d.boll_pct_b;
+            const bollLbl = pctB >= 0.80 ? `${(pctB*100).toFixed(0)}% ↑ banda sup.`
+                          : pctB <= 0.20 ? `${(pctB*100).toFixed(0)}% ↓ banda inf.`
+                          : `${(pctB*100).toFixed(0)}%`;
+            const bollCor = pctB >= 0.80 ? '#ff4757' : pctB <= 0.20 ? '#0ecb81' : '#f0b90b';
+            bollEl.textContent = d.boll_width < 0.02 ? bollLbl + ' (bandas contraindo)' : bollLbl;
+            bollEl.style.color = d.boll_width < 0.02 ? '#888' : bollCor;
+        }
+
+        const pct = Math.round(Math.max(d.fator_compra, d.fator_venda) * 100);
+        const corFator = pct >= 60 ? '#0ecb81' : pct >= 35 ? '#f0b90b' : '#ff4757';
+        document.getElementById('tend-fator-compra').textContent = pct + '%';
+        document.getElementById('tend-fator-compra').style.color = corFator;
+    }).catch(() => {});
+}
+atualizarTendencia();
+setInterval(atualizarTendencia, 60000);
 
 // ── Painel do investidor ───────────────────────────────
 let precoBTCAtual = 0;

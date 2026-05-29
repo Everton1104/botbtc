@@ -13,7 +13,7 @@ class BotExecutor
     protected BinanceController $binance;
 
     private const SYMBOL  = 'BTCBRL';
-    private const LIMITES = [1 => 0.85, 2 => 0.60, 3 => 0.30, 4 => 0.10];
+    private const ALLIN_CAP = 0.95;
 
     public function __construct(BinanceController $binance)
     {
@@ -231,14 +231,15 @@ class BotExecutor
         $precoCompra = max(1.0, $precoAtual - $salto);
         $precoVenda  = $precoAtual + $salto;
 
-        $valorCompra = $saldoBRL * self::LIMITES[1];
+        $config      = BotConfig::atual();
+        $valorCompra = $saldoBRL * $config->nivel1;
 
         if ($valorCompra > 10) {
             $orderCompra            = $this->binance->buyLimit($precoCompra, $valorCompra / $precoCompra);
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
-        $quantidadeVenda = $saldoBTC * self::LIMITES[1];
+        $quantidadeVenda = $saldoBTC * $config->nivel1;
 
         if ($quantidadeVenda > 0) {
             $orderVenda            = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
@@ -279,26 +280,27 @@ class BotExecutor
     }
 
     // ============================================================
-    // PERCENTUAIS — limites máximos fixos por nível
+    // PERCENTUAIS — lidos do banco, fallback 0.01 abaixo do nível 7
     // ============================================================
 
-    private function percentualPorSalto(int $contador): float
+    private function percentualPorSalto(int $contador, BotConfig $config): float
     {
-        return self::LIMITES[$contador] ?? 0.01;
+        return $config->niveis()[max(1, $contador)] ?? 0.01;
     }
 
     // ============================================================
-    // ANÁLISE DE TENDÊNCIA — MA21, EMA9, distância do preço
-    // Retorna fator_compra e fator_venda entre 0.15 e 1.0
+    // ANÁLISE DE TENDÊNCIA — MA21, EMA9, RSI14, ATR14, MACD, Bollinger
     // ============================================================
 
     private function analisarTendencia(float $precoAtual): array
     {
-        $fallback = ['fator_compra' => 0.5, 'fator_venda' => 0.5];
+        $fallback = ['fator_compra' => 0.5, 'fator_venda' => 0.5, 'rsi' => 50.0, 'atr' => 0.0, 'salto_dinamico' => 2500,
+                     'macd' => 0.0, 'macd_signal' => 0.0, 'macd_hist' => 0.0,
+                     'boll_upper' => 0.0, 'boll_lower' => 0.0, 'boll_pct_b' => 0.5, 'boll_width' => 0.0];
 
         $klines = $this->binance->getKlines(self::SYMBOL, '1h', 50);
 
-        if (!is_array($klines) || count($klines) < 21) {
+        if (!is_array($klines) || count($klines) < 26) {
             Log::warning("BotExecutor: klines insuficientes para análise de tendência.");
             return $fallback;
         }
@@ -313,29 +315,84 @@ class BotExecutor
         }
 
         $ema9 = $this->calcularEMA($closes, 9);
+        $rsi  = $this->calcularRSI($closes, 14);
 
-        // Distância percentual do preço atual em relação à MA21
-        // Positivo = preço acima da MA (sobrecomprado)
-        // Negativo = preço abaixo da MA (sobrevendido)
-        $distancia = ($precoAtual - $ma21) / $ma21;
+        // ATR calculado em candles diários — volatilidade na escala do grid
+        $klinesD  = $this->binance->getKlines(self::SYMBOL, '1d', 30);
+        $atr      = 0.0;
+        if (is_array($klinesD) && count($klinesD) >= 15) {
+            $highsD  = array_map(fn($k) => (float) $k[2], $klinesD);
+            $lowsD   = array_map(fn($k) => (float) $k[3], $klinesD);
+            $closesD = array_map(fn($k) => (float) $k[4], $klinesD);
+            $atr     = $this->calcularATR($highsD, $lowsD, $closesD, 14);
+        }
+        $saltoDin = $atr > 0
+            ? max(1500, min(15000, (int) (round($atr * 0.3 / 500) * 500)))
+            : 2500;
+        $macdData  = $this->calcularMACD($closes);
+        $bollData  = $this->calcularBollinger($closes, 21);
 
-        // Fator linear centrado em 0.5 com amplitude ±15%
-        $fatorCompra = max(0.15, min(1.0, 0.5 - ($distancia / 0.30)));
-        $fatorVenda  = max(0.15, min(1.0, 0.5 + ($distancia / 0.30)));
+        $distancia   = ($precoAtual - $ma21) / $ma21;
+        $fatorCompra = max(0.30, min(1.0, 0.5 - ($distancia / 0.30)));
+        $fatorVenda  = max(0.30, min(1.0, 0.5 + ($distancia / 0.30)));
 
-        // Ajuste pelo cruzamento EMA9 × MA21 (±0.10)
-        // EMA9 > MA21 = tendência de alta → vende mais, compra menos
-        // EMA9 < MA21 = tendência de baixa → compra mais, vende menos
+        // EMA9 × MA21 boost ±0.10
         $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-        $fatorCompra = max(0.15, min(1.0, $fatorCompra - $boost));
-        $fatorVenda  = max(0.15, min(1.0, $fatorVenda  + $boost));
+        $fatorCompra = max(0.30, min(1.0, $fatorCompra - $boost));
+        $fatorVenda  = max(0.30, min(1.0, $fatorVenda  + $boost));
+
+        // RSI boost ±0.20 nos extremos
+        if ($rsi <= 30) {
+            $fatorCompra = min(1.0,  $fatorCompra + 0.20);
+            $fatorVenda  = max(0.30, $fatorVenda  - 0.10);
+        } elseif ($rsi >= 70) {
+            $fatorVenda  = min(1.0,  $fatorVenda  + 0.20);
+            $fatorCompra = max(0.30, $fatorCompra - 0.10);
+        }
+
+        // MACD boost ±0.10 conforme cruzamento MACD × Signal
+        if ($macdData['macd'] > $macdData['signal']) {
+            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
+            $fatorCompra = max(0.30, $fatorCompra - 0.05);
+        } else {
+            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
+            $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+        }
+
+        // Bollinger: posição %B boost ±0.10 nos extremos
+        if ($bollData['pct_b'] <= 0.20) {
+            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
+        } elseif ($bollData['pct_b'] >= 0.80) {
+            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
+        }
+
+        // Bollinger: bandas contraindo → mercado lateral, reduz agressividade 20%
+        if ($bollData['width'] < 0.02) {
+            $fatorCompra = max(0.30, $fatorCompra * 0.80);
+            $fatorVenda  = max(0.30, $fatorVenda  * 0.80);
+        }
 
         Log::info(sprintf(
-            "BotExecutor Tendência: MA21=%.2f EMA9=%.2f dist=%.2f%% fC=%.2f fV=%.2f",
-            $ma21, $ema9, $distancia * 100, $fatorCompra, $fatorVenda
+            "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f fC=%.2f fV=%.2f",
+            $ma21, $ema9, $rsi, $atr, $saltoDin, $distancia * 100,
+            $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
+            $fatorCompra, $fatorVenda
         ));
 
-        return ['fator_compra' => $fatorCompra, 'fator_venda' => $fatorVenda];
+        return [
+            'fator_compra'   => $fatorCompra,
+            'fator_venda'    => $fatorVenda,
+            'rsi'            => $rsi,
+            'atr'            => $atr,
+            'salto_dinamico' => $saltoDin,
+            'macd'           => $macdData['macd'],
+            'macd_signal'    => $macdData['signal'],
+            'macd_hist'      => $macdData['histogram'],
+            'boll_upper'     => $bollData['upper'],
+            'boll_lower'     => $bollData['lower'],
+            'boll_pct_b'     => $bollData['pct_b'],
+            'boll_width'     => $bollData['width'],
+        ];
     }
 
     private function calcularEMA(array $closes, int $periodo): float
@@ -348,14 +405,110 @@ class BotExecutor
         return $ema;
     }
 
+    private function calcularRSI(array $closes, int $periodo = 14): float
+    {
+        if (count($closes) < $periodo + 1) return 50.0;
+
+        $changes = [];
+        for ($i = 1; $i < count($closes); $i++) {
+            $changes[] = $closes[$i] - $closes[$i - 1];
+        }
+
+        $avgGain = $avgLoss = 0.0;
+        for ($i = 0; $i < $periodo; $i++) {
+            if ($changes[$i] > 0) $avgGain += $changes[$i];
+            else                  $avgLoss += abs($changes[$i]);
+        }
+        $avgGain /= $periodo;
+        $avgLoss /= $periodo;
+
+        for ($i = $periodo; $i < count($changes); $i++) {
+            $gain    = $changes[$i] > 0 ? $changes[$i] : 0.0;
+            $loss    = $changes[$i] < 0 ? abs($changes[$i]) : 0.0;
+            $avgGain = ($avgGain * ($periodo - 1) + $gain) / $periodo;
+            $avgLoss = ($avgLoss * ($periodo - 1) + $loss) / $periodo;
+        }
+
+        if ($avgLoss == 0) return 100.0;
+        return round(100 - (100 / (1 + $avgGain / $avgLoss)), 2);
+    }
+
+    private function calcularMACD(array $closes): array
+    {
+        if (count($closes) < 26) return ['macd' => 0.0, 'signal' => 0.0, 'histogram' => 0.0];
+
+        $k12 = 2 / 13; $k26 = 2 / 27; $k9 = 2 / 10;
+        $e12 = $e26 = $closes[0];
+        $macdSeries = [];
+
+        foreach ($closes as $c) {
+            $e12 = $c * $k12 + $e12 * (1 - $k12);
+            $e26 = $c * $k26 + $e26 * (1 - $k26);
+            $macdSeries[] = $e12 - $e26;
+        }
+
+        $signal = $macdSeries[0];
+        foreach ($macdSeries as $m) {
+            $signal = $m * $k9 + $signal * (1 - $k9);
+        }
+
+        $macd = end($macdSeries);
+        return ['macd' => round($macd, 2), 'signal' => round($signal, 2), 'histogram' => round($macd - $signal, 2)];
+    }
+
+    private function calcularBollinger(array $closes, int $periodo = 21): array
+    {
+        if (count($closes) < $periodo) return ['upper' => 0.0, 'lower' => 0.0, 'width' => 0.0, 'pct_b' => 0.5];
+
+        $slice = array_slice($closes, -$periodo);
+        $ma    = array_sum($slice) / $periodo;
+        $std   = sqrt(array_sum(array_map(fn($c) => ($c - $ma) ** 2, $slice)) / $periodo);
+        $upper = $ma + 2 * $std;
+        $lower = $ma - 2 * $std;
+        $range = $upper - $lower;
+        $pctB  = $range > 0 ? (end($closes) - $lower) / $range : 0.5;
+        $width = $ma > 0 ? $range / $ma : 0.0;
+
+        return [
+            'upper' => round($upper, 2),
+            'lower' => round($lower, 2),
+            'width' => round($width, 4),
+            'pct_b' => round($pctB, 4),
+        ];
+    }
+
+    private function calcularATR(array $highs, array $lows, array $closes, int $periodo = 14): float
+    {
+        $n = count($closes);
+        if ($n < 2) return 0.0;
+
+        $trs = [];
+        for ($i = 1; $i < $n; $i++) {
+            $trs[] = max(
+                $highs[$i]  - $lows[$i],
+                abs($highs[$i]  - $closes[$i - 1]),
+                abs($lows[$i]   - $closes[$i - 1])
+            );
+        }
+
+        $atr = array_sum(array_slice($trs, 0, $periodo)) / min($periodo, count($trs));
+        foreach (array_slice($trs, $periodo) as $tr) {
+            $atr = ($atr * ($periodo - 1) + $tr) / $periodo;
+        }
+
+        return round($atr, 2);
+    }
+
     // ============================================================
     // CRIAÇÃO DE NOVAS ORDENS
     // ============================================================
 
     private function criarOrdensNovas(BotState $state, float $precoAtual): bool
     {
-        $config       = BotConfig::atual();
-        $salto        = $config->salto;
+        $config    = BotConfig::atual();
+        $tendencia = $this->analisarTendencia($precoAtual);
+
+        $salto        = $tendencia['salto_dinamico'];
         $state->salto = $salto;
 
         $precoCompra = max(1.0, $precoAtual - $salto);
@@ -375,9 +528,8 @@ class BotExecutor
         $direcao       = $state->direcao_atual;
         $contadorAtual = $direcao === 'up' ? $state->contador_subidas : $state->contador_quedas;
         $nivelMaximo   = (int) ($state->contador_anterior ?? 0);
-        $allin         = $contadorAtual >= 8;
+        $allin         = $contadorAtual >= $config->allin_threshold;
 
-        $tendencia   = $this->analisarTendencia($precoAtual);
         $fatorCompra = $tendencia['fator_compra'];
         $fatorVenda  = $tendencia['fator_venda'];
 
@@ -385,11 +537,11 @@ class BotExecutor
         $valorCompra = 0.0;
 
         if ($allin && $direcao === 'down') {
-            $valorCompra = $saldoBRL;
+            $valorCompra = $saldoBRL * self::ALLIN_CAP;
         } elseif ($direcao === 'down') {
-            $valorCompra = $saldoBRL * $this->percentualPorSalto($contadorAtual) * $fatorCompra;
+            $valorCompra = $saldoBRL * $this->percentualPorSalto($contadorAtual, $config) * $fatorCompra;
         } elseif ($direcao === 'up' || $direcao === null) {
-            $valorCompra = $saldoBRL * self::LIMITES[1] * $fatorCompra;
+            $valorCompra = $saldoBRL * $config->nivel1 * $fatorCompra;
         }
 
         if ($valorCompra > 10) {
@@ -401,12 +553,12 @@ class BotExecutor
         $percentualVenda = 0.0;
 
         if ($allin) {
-            $percentualVenda = 1.0;
+            $percentualVenda = self::ALLIN_CAP;
         } elseif ($direcao === 'up') {
             $offset          = $nivelMaximo >= 3 ? 1 : 0;
-            $percentualVenda = $this->percentualPorSalto($contadorAtual + $offset) * $fatorVenda;
+            $percentualVenda = $this->percentualPorSalto($contadorAtual + $offset, $config) * $fatorVenda;
         } elseif ($direcao === 'down' || $direcao === null) {
-            $percentualVenda = $this->percentualPorSalto(max(1, $contadorAtual)) * $fatorVenda;
+            $percentualVenda = $this->percentualPorSalto(max(1, $contadorAtual), $config) * $fatorVenda;
         }
 
         if ($percentualVenda > 0 && $saldoBTC > 0) {
