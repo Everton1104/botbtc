@@ -328,36 +328,36 @@ class BotExecutor
             $atr     = $this->calcularATR($highsD, $lowsD, $closesD, 14);
         }
         $saltoDin = $atr > 0
-            ? max(1500, min(15000, (int) (round($atr * 0.3 / 500) * 500)))
+            ? max(1500, min(15000, (int) (round($atr * 0.5 / 500) * 500)))
             : 2500;
         $macdData  = $this->calcularMACD($closes);
         $bollData  = $this->calcularBollinger($closes, 21);
 
         $distancia   = ($precoAtual - $ma21) / $ma21;
-        $fatorCompra = max(0.30, min(1.0, 0.5 - ($distancia / 0.30)));
-        $fatorVenda  = max(0.30, min(1.0, 0.5 + ($distancia / 0.30)));
+        $fatorCompra = max(0.45, min(1.0, 0.5 - ($distancia / 0.30)));
+        $fatorVenda  = max(0.45, min(1.0, 0.5 + ($distancia / 0.30)));
 
         // EMA9 × MA21 boost ±0.10
         $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-        $fatorCompra = max(0.30, min(1.0, $fatorCompra - $boost));
-        $fatorVenda  = max(0.30, min(1.0, $fatorVenda  + $boost));
+        $fatorCompra = max(0.45, min(1.0, $fatorCompra - $boost));
+        $fatorVenda  = max(0.45, min(1.0, $fatorVenda  + $boost));
 
         // RSI boost ±0.20 nos extremos
         if ($rsi <= 30) {
             $fatorCompra = min(1.0,  $fatorCompra + 0.20);
-            $fatorVenda  = max(0.30, $fatorVenda  - 0.10);
+            $fatorVenda  = max(0.45, $fatorVenda  - 0.10);
         } elseif ($rsi >= 70) {
             $fatorVenda  = min(1.0,  $fatorVenda  + 0.20);
-            $fatorCompra = max(0.30, $fatorCompra - 0.10);
+            $fatorCompra = max(0.45, $fatorCompra - 0.10);
         }
 
         // MACD boost ±0.10 conforme cruzamento MACD × Signal
         if ($macdData['macd'] > $macdData['signal']) {
             $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-            $fatorCompra = max(0.30, $fatorCompra - 0.05);
+            $fatorCompra = max(0.45, $fatorCompra - 0.05);
         } else {
             $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-            $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+            $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
         }
 
         // Bollinger: posição %B boost ±0.10 nos extremos
@@ -365,12 +365,6 @@ class BotExecutor
             $fatorCompra = min(1.0,  $fatorCompra + 0.10);
         } elseif ($bollData['pct_b'] >= 0.80) {
             $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-        }
-
-        // Bollinger: bandas contraindo → mercado lateral, reduz agressividade 20%
-        if ($bollData['width'] < 0.02) {
-            $fatorCompra = max(0.30, $fatorCompra * 0.80);
-            $fatorVenda  = max(0.30, $fatorVenda  * 0.80);
         }
 
         // 4h multi-timeframe: confirmação de tendência de médio prazo
@@ -389,10 +383,10 @@ class BotExecutor
 
             if ($trend4h === 1) {
                 $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-                $fatorCompra = max(0.30, $fatorCompra - 0.05);
+                $fatorCompra = max(0.45, $fatorCompra - 0.05);
             } elseif ($trend4h === -1) {
                 $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-                $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+                $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
             }
 
             if ($rsi4h <= 35)     $fatorCompra = min(1.0,  $fatorCompra + 0.10);

@@ -302,7 +302,8 @@
 
     </div>
 
-    {{-- Tendência do mercado --}}
+    @if(auth()->user()->id == 1)
+    {{-- Tendência do mercado — visível apenas ao admin --}}
     <div class="row g-3 mb-5">
         <div class="col-12">
             <div class="stat-tile" id="tile-tendencia" style="border-color:rgba(120,120,120,.2);">
@@ -328,6 +329,7 @@
             </div>
         </div>
     </div>
+    @endif
 
     {{-- Detalhes BTC por aporte --}}
     <div id="area-btc-aportes" style="display:none;" class="mb-5">
@@ -947,6 +949,7 @@ function liberarBot() {
 iniciarPollingPausa();
 @endif
 
+@if(auth()->user()->id == 1)
 // ── Salto (via tendência/ATR) ──────────────────────────
 axios.get("/bot/tendencia")
     .then(res => { if (res.data.salto_dinamico) $('#salto').text(fmt(res.data.salto_dinamico, 0)); })
@@ -1018,6 +1021,7 @@ function atualizarTendencia() {
 }
 atualizarTendencia();
 setInterval(atualizarTendencia, 60000);
+@endif
 
 // ── Painel do investidor ───────────────────────────────
 let precoBTCAtual = 0;
