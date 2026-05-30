@@ -176,8 +176,7 @@ function calcularFatores(array $allCloses, int $idx, float $precoAtual): array
         ? array_sum(array_slice($historico, -21)) / 21
         : array_sum($historico) / $n;
 
-    $warmup = array_slice($historico, max(0, $n - 20));
-    $ema9   = calcularEMA($warmup, 9);
+    $ema9 = calcularEMA($historico, 9);
     $rsi    = calcularRSI($historico, 14);
     $atr    = calcularATRSimulado($historico, 14);
     $salto  = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.3 / 500) * 500))) : 2500;

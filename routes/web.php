@@ -420,6 +420,39 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
     elseif ($pctB >= 0.80)  { $fatorVenda  = min(1.0, $fatorVenda  + 0.10); }
     if ($bWidth < 0.02)     { $fatorCompra = max(0.30, $fatorCompra * 0.80); $fatorVenda = max(0.30, $fatorVenda * 0.80); }
 
+    // 4h multi-timeframe: confirmação de tendência de médio prazo
+    $trend4h = 0; $ma21_4h = 0.0; $rsi4h = 50.0;
+    $klines4h = $binance->getKlines('BTCBRL', '4h', 30);
+    if (is_array($klines4h) && count($klines4h) >= 22) {
+        $c4h = array_map(fn($k) => (float) $k[4], $klines4h);
+        $ma21_4h = array_sum(array_slice($c4h, -21)) / 21;
+        $k4 = 2/10; $e4h = $c4h[0];
+        foreach (array_slice($c4h, 1) as $v) $e4h = $v * $k4 + $e4h * (1 - $k4);
+        // RSI(14) 4h — Wilder
+        $ch4 = []; for ($i=1; $i<count($c4h); $i++) $ch4[] = $c4h[$i] - $c4h[$i-1];
+        $ag4 = $al4 = 0.0;
+        for ($i=0; $i<14; $i++) { if ($ch4[$i]>0) $ag4+=$ch4[$i]; else $al4+=abs($ch4[$i]); }
+        $ag4/=14; $al4/=14;
+        for ($i=14; $i<count($ch4); $i++) {
+            $ag4 = ($ag4*13 + ($ch4[$i]>0 ? $ch4[$i] : 0)) / 14;
+            $al4 = ($al4*13 + ($ch4[$i]<0 ? abs($ch4[$i]) : 0)) / 14;
+        }
+        $rsi4h = $al4 == 0 ? 100.0 : round(100 - (100 / (1 + $ag4/$al4)), 2);
+
+        if ($preco > $ma21_4h && $e4h > $ma21_4h)       $trend4h =  1;
+        elseif ($preco < $ma21_4h && $e4h < $ma21_4h)   $trend4h = -1;
+
+        if ($trend4h === 1) {
+            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
+            $fatorCompra = max(0.30, $fatorCompra - 0.05);
+        } elseif ($trend4h === -1) {
+            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
+            $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+        }
+        if ($rsi4h <= 35)     $fatorCompra = min(1.0, $fatorCompra + 0.10);
+        elseif ($rsi4h >= 65) $fatorVenda  = min(1.0, $fatorVenda  + 0.10);
+    }
+
     if ($distancia > 0.05 && $ema9 > $ma21)      $tendencia = 'alta';
     elseif ($distancia < -0.05 && $ema9 < $ma21) $tendencia = 'baixa';
     else                                          $tendencia = 'neutra';
@@ -441,6 +474,9 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
         'boll_lower'    => $bLower,
         'boll_pct_b'    => $pctB,
         'boll_width'    => $bWidth,
+        'trend_4h'      => $trend4h,
+        'ma21_4h'       => round($ma21_4h, 2),
+        'rsi_4h'        => $rsi4h,
         'preco'         => $preco,
     ]);
 })->middleware(['auth', 'whatsapp.verified']);

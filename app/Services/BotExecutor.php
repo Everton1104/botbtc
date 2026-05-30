@@ -296,7 +296,8 @@ class BotExecutor
     {
         $fallback = ['fator_compra' => 0.5, 'fator_venda' => 0.5, 'rsi' => 50.0, 'atr' => 0.0, 'salto_dinamico' => 2500,
                      'macd' => 0.0, 'macd_signal' => 0.0, 'macd_hist' => 0.0,
-                     'boll_upper' => 0.0, 'boll_lower' => 0.0, 'boll_pct_b' => 0.5, 'boll_width' => 0.0];
+                     'boll_upper' => 0.0, 'boll_lower' => 0.0, 'boll_pct_b' => 0.5, 'boll_width' => 0.0,
+                     'trend_4h' => 0, 'ma21_4h' => 0.0, 'rsi_4h' => 50.0];
 
         $klines = $this->binance->getKlines(self::SYMBOL, '1h', 50);
 
@@ -372,11 +373,37 @@ class BotExecutor
             $fatorVenda  = max(0.30, $fatorVenda  * 0.80);
         }
 
+        // 4h multi-timeframe: confirmação de tendência de médio prazo
+        $trend4h = 0;
+        $ma21_4h = 0.0;
+        $rsi4h   = 50.0;
+        $klines4h = $this->binance->getKlines(self::SYMBOL, '4h', 30);
+        if (is_array($klines4h) && count($klines4h) >= 22) {
+            $closes4h = array_map(fn($k) => (float) $k[4], $klines4h);
+            $ma21_4h  = array_sum(array_slice($closes4h, -21)) / 21;
+            $ema9_4h  = $this->calcularEMA($closes4h, 9);
+            $rsi4h    = $this->calcularRSI($closes4h, 14);
+
+            if ($precoAtual > $ma21_4h && $ema9_4h > $ma21_4h)     $trend4h =  1;
+            elseif ($precoAtual < $ma21_4h && $ema9_4h < $ma21_4h) $trend4h = -1;
+
+            if ($trend4h === 1) {
+                $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
+                $fatorCompra = max(0.30, $fatorCompra - 0.05);
+            } elseif ($trend4h === -1) {
+                $fatorCompra = min(1.0,  $fatorCompra + 0.10);
+                $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+            }
+
+            if ($rsi4h <= 35)     $fatorCompra = min(1.0,  $fatorCompra + 0.10);
+            elseif ($rsi4h >= 65) $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
+        }
+
         Log::info(sprintf(
-            "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f fC=%.2f fV=%.2f",
+            "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f",
             $ma21, $ema9, $rsi, $atr, $saltoDin, $distancia * 100,
             $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
-            $fatorCompra, $fatorVenda
+            $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda
         ));
 
         return [
@@ -392,6 +419,9 @@ class BotExecutor
             'boll_lower'     => $bollData['lower'],
             'boll_pct_b'     => $bollData['pct_b'],
             'boll_width'     => $bollData['width'],
+            'trend_4h'       => $trend4h,
+            'ma21_4h'        => $ma21_4h,
+            'rsi_4h'         => $rsi4h,
         ];
     }
 
