@@ -381,7 +381,7 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
         foreach (array_slice($trs, 14) as $tr) { $atrV = ($atrV * 13 + $tr) / 14; }
         $atr = round($atrV, 2);
     }
-    $saltoDin = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.3 / 500) * 500))) : 2500;
+    $saltoDin = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.5 / 500) * 500))) : 2500;
 
     // MACD (EMA12 - EMA26, Signal EMA9 do MACD)
     $k12 = 2/13; $k26 = 2/27; $k9s = 2/10;
@@ -401,24 +401,23 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
 
     // Fatores MA21 + EMA9
     $distancia   = ($preco - $ma21) / $ma21;
-    $fatorCompra = max(0.30, min(1.0, 0.5 - ($distancia / 0.30)));
-    $fatorVenda  = max(0.30, min(1.0, 0.5 + ($distancia / 0.30)));
+    $fatorCompra = max(0.45, min(1.0, 0.5 - ($distancia / 0.30)));
+    $fatorVenda  = max(0.45, min(1.0, 0.5 + ($distancia / 0.30)));
     $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-    $fatorCompra = max(0.30, min(1.0, $fatorCompra - $boost));
-    $fatorVenda  = max(0.30, min(1.0, $fatorVenda  + $boost));
+    $fatorCompra = max(0.45, min(1.0, $fatorCompra - $boost));
+    $fatorVenda  = max(0.45, min(1.0, $fatorVenda  + $boost));
 
     // RSI boost
-    if ($rsi <= 30)     { $fatorCompra = min(1.0, $fatorCompra + 0.20); $fatorVenda  = max(0.30, $fatorVenda  - 0.10); }
-    elseif ($rsi >= 70) { $fatorVenda  = min(1.0, $fatorVenda  + 0.20); $fatorCompra = max(0.30, $fatorCompra - 0.10); }
+    if ($rsi <= 30)     { $fatorCompra = min(1.0, $fatorCompra + 0.20); $fatorVenda  = max(0.45, $fatorVenda  - 0.10); }
+    elseif ($rsi >= 70) { $fatorVenda  = min(1.0, $fatorVenda  + 0.20); $fatorCompra = max(0.45, $fatorCompra - 0.10); }
 
     // MACD boost
-    if ($macd > $macdSig) { $fatorVenda  = min(1.0,  $fatorVenda  + 0.10); $fatorCompra = max(0.30, $fatorCompra - 0.05); }
-    else                  { $fatorCompra = min(1.0,  $fatorCompra + 0.10); $fatorVenda  = max(0.30, $fatorVenda  - 0.05); }
+    if ($macd > $macdSig) { $fatorVenda  = min(1.0,  $fatorVenda  + 0.10); $fatorCompra = max(0.45, $fatorCompra - 0.05); }
+    else                  { $fatorCompra = min(1.0,  $fatorCompra + 0.10); $fatorVenda  = max(0.45, $fatorVenda  - 0.05); }
 
     // Bollinger boost
     if ($pctB <= 0.20)      { $fatorCompra = min(1.0, $fatorCompra + 0.10); }
     elseif ($pctB >= 0.80)  { $fatorVenda  = min(1.0, $fatorVenda  + 0.10); }
-    if ($bWidth < 0.02)     { $fatorCompra = max(0.30, $fatorCompra * 0.80); $fatorVenda = max(0.30, $fatorVenda * 0.80); }
 
     // 4h multi-timeframe: confirmação de tendência de médio prazo
     $trend4h = 0; $ma21_4h = 0.0; $rsi4h = 50.0;
@@ -444,10 +443,10 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
 
         if ($trend4h === 1) {
             $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-            $fatorCompra = max(0.30, $fatorCompra - 0.05);
+            $fatorCompra = max(0.45, $fatorCompra - 0.05);
         } elseif ($trend4h === -1) {
             $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-            $fatorVenda  = max(0.30, $fatorVenda  - 0.05);
+            $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
         }
         if ($rsi4h <= 35)     $fatorCompra = min(1.0, $fatorCompra + 0.10);
         elseif ($rsi4h >= 65) $fatorVenda  = min(1.0, $fatorVenda  + 0.10);
@@ -491,7 +490,8 @@ Route::post('/bot/config', function (Request $req) {
 
     $cfg = BotConfig::atual();
 
-    $cfg->salto = max(100, (int) $req->input('salto', $cfg->salto));
+    $saltoInput = (int) $req->input('salto', $cfg->salto);
+    $cfg->salto = $saltoInput === 0 ? 0 : max(100, $saltoInput);
 
     foreach (['nivel1','nivel2','nivel3','nivel4','nivel5','nivel6','nivel7'] as $n) {
         if ($req->has($n)) {

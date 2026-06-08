@@ -27,14 +27,18 @@
  * Capital inicial: R$ 1.000 | Sem BTC inicial
  */
 
-// Fechamentos diários BTC/BRL (Binance, 16/05/2026, limit=30)
-$closes = [
-    385163, 378244, 368451, 376858, 380661, 388776, 393578,
-    387561, 388647, 393452, 385503, 380432, 379335, 379121,
-    388818, 390613, 389735, 397334, 397761, 401252, 395070,
-    393573, 395953, 403742, 400511, 394788, 397853, 405317,
-    401084, 396603,
-];
+// Busca candles diários ao vivo da Binance (OHLC real — highs/lows para ATR preciso)
+// Uso: php simulate_strategies.php [dias=30]
+$limit = isset($argv[1]) ? max(15, min(90, (int) $argv[1])) : 30;
+$url   = "https://api.binance.com/api/v3/klines?symbol=BTCBRL&interval=1d&limit={$limit}";
+$raw   = json_decode(file_get_contents($url), true);
+if (!is_array($raw) || count($raw) < 15) {
+    fwrite(STDERR, "Erro: não foi possível buscar klines da Binance.\n");
+    exit(1);
+}
+$closes = array_map(fn($k) => (float) $k[4], $raw);
+$highs  = array_map(fn($k) => (float) $k[2], $raw);
+$lows   = array_map(fn($k) => (float) $k[3], $raw);
 
 // ── Helpers de percentual fixo (Modos A e B) ─────────────────────────
 
@@ -107,12 +111,18 @@ function calcularRSI(array $closes, int $periodo = 14): float
     return $al == 0 ? 100.0 : round(100 - (100 / (1 + $ag / $al)), 2);
 }
 
-// Simulação usa closes como aproximação de high/low (sem dados OHLC reais)
-function calcularATRSimulado(array $closes, int $periodo = 14): float
+function calcularATRSimulado(array $closes, int $periodo = 14, array $highs = [], array $lows = []): float
 {
     if (count($closes) < 2) return 0.0;
+    $useOHLC = count($highs) === count($closes) && count($lows) === count($closes);
     $trs = [];
-    for ($i = 1; $i < count($closes); $i++) $trs[] = abs($closes[$i] - $closes[$i - 1]);
+    for ($i = 1; $i < count($closes); $i++) {
+        if ($useOHLC) {
+            $trs[] = max($highs[$i] - $lows[$i], abs($highs[$i] - $closes[$i-1]), abs($lows[$i] - $closes[$i-1]));
+        } else {
+            $trs[] = abs($closes[$i] - $closes[$i - 1]);
+        }
+    }
     $atr = array_sum(array_slice($trs, 0, $periodo)) / min($periodo, count($trs));
     foreach (array_slice($trs, $periodo) as $tr) $atr = ($atr * ($periodo - 1) + $tr) / $periodo;
     return round($atr, 2);
@@ -163,9 +173,11 @@ function limiteModoC(int $n): float
     return NIVEIS_C[$n] ?? 0.01;
 }
 
-function calcularFatores(array $allCloses, int $idx, float $precoAtual): array
+function calcularFatores(array $allCloses, int $idx, float $precoAtual, array $allHighs = [], array $allLows = []): array
 {
     $historico = array_slice($allCloses, 0, $idx);
+    $histHighs = count($allHighs) ? array_slice($allHighs, 0, $idx) : [];
+    $histLows  = count($allLows)  ? array_slice($allLows,  0, $idx) : [];
 
     if (count($historico) < 9) {
         return ['compra' => 0.50, 'venda' => 0.50, 'ma21' => null, 'ema9' => null, 'rsi' => 50.0, 'atr' => 0.0, 'salto' => 2500];
@@ -178,31 +190,30 @@ function calcularFatores(array $allCloses, int $idx, float $precoAtual): array
 
     $ema9 = calcularEMA($historico, 9);
     $rsi    = calcularRSI($historico, 14);
-    $atr    = calcularATRSimulado($historico, 14);
-    $salto  = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.3 / 500) * 500))) : 2500;
+    $atr    = calcularATRSimulado($historico, 14, $histHighs, $histLows);
+    $salto  = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.5 / 500) * 500))) : 2500;
     $macdD  = calcularMACDSim($historico);
     $bollD  = calcularBollingerSim($historico, 21);
 
     $distancia   = ($precoAtual - $ma21) / $ma21;
-    $fatorCompra = max(0.30, min(1.0, 0.5 - ($distancia / 0.30)));
-    $fatorVenda  = max(0.30, min(1.0, 0.5 + ($distancia / 0.30)));
+    $fatorCompra = max(0.45, min(1.0, 0.5 - ($distancia / 0.30)));
+    $fatorVenda  = max(0.45, min(1.0, 0.5 + ($distancia / 0.30)));
 
     $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-    $fatorCompra = max(0.30, min(1.0, $fatorCompra - $boost));
-    $fatorVenda  = max(0.30, min(1.0, $fatorVenda  + $boost));
+    $fatorCompra = max(0.45, min(1.0, $fatorCompra - $boost));
+    $fatorVenda  = max(0.45, min(1.0, $fatorVenda  + $boost));
 
     // RSI boost
-    if ($rsi <= 30)     { $fatorCompra = min(1.0, $fatorCompra + 0.20); $fatorVenda  = max(0.30, $fatorVenda  - 0.10); }
-    elseif ($rsi >= 70) { $fatorVenda  = min(1.0, $fatorVenda  + 0.20); $fatorCompra = max(0.30, $fatorCompra - 0.10); }
+    if ($rsi <= 30)     { $fatorCompra = min(1.0, $fatorCompra + 0.20); $fatorVenda  = max(0.45, $fatorVenda  - 0.10); }
+    elseif ($rsi >= 70) { $fatorVenda  = min(1.0, $fatorVenda  + 0.20); $fatorCompra = max(0.45, $fatorCompra - 0.10); }
 
     // MACD boost
-    if ($macdD['macd'] > $macdD['signal']) { $fatorVenda  = min(1.0,  $fatorVenda  + 0.10); $fatorCompra = max(0.30, $fatorCompra - 0.05); }
-    else                                   { $fatorCompra = min(1.0,  $fatorCompra + 0.10); $fatorVenda  = max(0.30, $fatorVenda  - 0.05); }
+    if ($macdD['macd'] > $macdD['signal']) { $fatorVenda  = min(1.0,  $fatorVenda  + 0.10); $fatorCompra = max(0.45, $fatorCompra - 0.05); }
+    else                                   { $fatorCompra = min(1.0,  $fatorCompra + 0.10); $fatorVenda  = max(0.45, $fatorVenda  - 0.05); }
 
     // Bollinger boost
     if ($bollD['pct_b'] <= 0.20)     { $fatorCompra = min(1.0, $fatorCompra + 0.10); }
     elseif ($bollD['pct_b'] >= 0.80) { $fatorVenda  = min(1.0, $fatorVenda  + 0.10); }
-    if ($bollD['width'] < 0.02)      { $fatorCompra = max(0.30, $fatorCompra * 0.80); $fatorVenda = max(0.30, $fatorVenda * 0.80); }
 
     return ['compra'=>$fatorCompra,'venda'=>$fatorVenda,'ma21'=>$ma21,'ema9'=>$ema9,
             'rsi'=>$rsi,'atr'=>$atr,'salto'=>$salto,
@@ -277,7 +288,7 @@ function simularAB(array $closes, string $nome, bool $modoB): array
     ];
 }
 
-function simularC(array $closes, string $nome): array
+function simularC(array $closes, string $nome, array $highs = [], array $lows = []): array
 {
     $brl             = 1000.0;
     $btc             = 0.0;
@@ -294,7 +305,7 @@ function simularC(array $closes, string $nome): array
         $event  = $price > $prev ? 'UP' : 'DOWN';
         $newDir = $event === 'UP' ? 'up' : 'down';
 
-        $fatores = calcularFatores($closes, $i, $price);
+        $fatores = calcularFatores($closes, $i, $price, $highs, $lows);
         $fC      = $fatores['compra'];
         $fV      = $fatores['venda'];
         $ma21    = $fatores['ma21'];
@@ -447,7 +458,7 @@ $sep = str_repeat('─', 120);
 $resultados = [
     simularAB($closes, 'MODO A — Atual   (p1=50% p2=25% / queda p1→p2→pausa  / subida p1→p2→pausa )', false),
     simularAB($closes, 'MODO B — Espelho (p1=50% p2=25% / queda p1→p2→p3     / subida p3→p2→p1   )', true),
-    simularC ($closes, 'MODO C — Tendência MA/EMA (limites p1=85% p2=60% p3=30% p4=10%, % real = limite × fator)'),
+    simularC ($closes, 'MODO C — Tendência MA/EMA (limites p1=85% p2=60% p3=30% p4=10%, % real = limite × fator)', $highs, $lows),
 ];
 
 foreach ($resultados as $r) {
@@ -469,7 +480,7 @@ foreach ($resultados as $r) {
 
 [$a, $b, $c_res] = $resultados;
 
-echo "\n{$sep}\n COMPARATIVO — Capital inicial: R\$1.000,00\n{$sep}\n";
+echo "\n{$sep}\n COMPARATIVO — Capital inicial: R\$1.000,00 · Período: {$limit} dias · ATR dinâmico (OHLC real)\n{$sep}\n";
 printf(" Modo A: R\$%s  (lucro R\$%s  /  %+.2f%%)\n",
     number_format($a['total'], 2), number_format($a['lucro'], 2), $a['pct']);
 printf(" Modo B: R\$%s  (lucro R\$%s  /  %+.2f%%)\n",
@@ -496,7 +507,7 @@ echo "  Ideal para altas em 3+ passos; ruim se revirar cedo.\n\n";
 
 echo " [Modo C — Tendência MA21 + EMA9 — BotExecutor atual]\n";
 echo "  7 níveis: 85% 60% 35% 18% 10% 6% 3% (fallback 1%). All-in 95% a partir do nível 15.\n";
-echo "  % real = limite × fator (piso 0.30, teto 1.0).\n";
+echo "  % real = limite × fator (piso 0.45, teto 1.0).\n";
 echo "  fator_compra sobe quando preço está abaixo da MA21 (sobrevendido).\n";
 echo "  fator_venda  sobe quando preço está acima  da MA21 (sobrecomprado).\n";
 echo "  EMA9 > MA21 → boost venda +0.10 / redução compra -0.10.\n";

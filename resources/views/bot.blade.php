@@ -92,9 +92,13 @@
     </div>
 
     {{-- Oscilação --}}
-    <div class="d-flex align-items-center gap-2 mb-4">
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-4">
         <span class="text-muted" style="font-size:.82rem;">Oscilação (salto):</span>
         <span class="badge-gold"><i class="fa-solid fa-arrows-up-down me-1"></i>R$ <span id="salto">—</span></span>
+        <span id="salto-atr-wrapper" style="display:none;">
+            <span class="text-muted" style="font-size:.78rem;">· ATR dinâmico:</span>
+            <span style="font-size:.82rem;color:#aaa;">R$ <span id="salto-atr-val">—</span></span>
+        </span>
     </div>
 
     {{-- Tabela de investidores --}}
@@ -199,11 +203,18 @@
         <div class="card-body">
             <form id="form-config-bot">
 
-                {{-- All-in --}}
+                {{-- All-in + Salto --}}
                 <div class="row g-3 align-items-end mb-3">
                     <div class="col-6 col-md-3">
                         <label class="form-label" style="font-size:.8rem;color:#aaa;">All-in a partir do nível</label>
                         <input type="number" id="cfg-allin" class="form-control form-control-sm" min="5" max="50" step="1" placeholder="15">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label" style="font-size:.8rem;color:#aaa;">Salto fixo (R$) — 0 = ATR dinâmico</label>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">R$</span>
+                            <input type="number" id="cfg-salto" class="form-control" min="0" step="100" placeholder="0">
+                        </div>
                     </div>
                 </div>
 
@@ -225,7 +236,7 @@
                     <button type="submit" class="btn btn-sm btn-warning px-4">
                         <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
                     </button>
-                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa 1% até atingir o all-in · all-in cap: 95% · salto calculado automaticamente pelo ATR</span>
+                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa 1% até atingir o all-in · all-in cap: 95% · salto 0 = ATR dinâmico</span>
                 </div>
 
                 <div id="cfg-msg" class="mt-2" style="font-size:.82rem;"></div>
@@ -693,10 +704,18 @@ carregarOrdens();
 setInterval(carregarOrdens, 10000);
 
 // ── Config do bot ──────────────────────────────────────
+let saltoFixoConfig = 0; // 0 = ATR dinâmico
+
 function carregarConfig() {
     axios.get('/bot/config').then(res => {
         const d = res.data;
         document.getElementById('cfg-allin').value  = d.allin_threshold;
+        document.getElementById('cfg-salto').value  = d.salto ?? 0;
+        saltoFixoConfig = d.salto ?? 0;
+        // Atualiza display imediatamente se salto fixo
+        if (saltoFixoConfig > 0) {
+            $('#salto').text(fmt(saltoFixoConfig, 0));
+        }
         for (let n = 1; n <= 7; n++) {
             const el = document.getElementById('cfg-nivel' + n);
             if (el) el.value = d['nivel' + n] ?? '';
@@ -712,6 +731,9 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
 
     const allin = document.getElementById('cfg-allin').value;
     if (allin) payload.allin_threshold = parseInt(allin);
+
+    const salto = document.getElementById('cfg-salto').value;
+    payload.salto = salto !== '' ? parseInt(salto) : 0;
 
     for (let n = 1; n <= 7; n++) {
         const val = document.getElementById('cfg-nivel' + n)?.value;
@@ -950,9 +972,21 @@ iniciarPollingPausa();
 @endif
 
 @if(auth()->user()->id == 1)
-// ── Salto (via tendência/ATR) ──────────────────────────
+// ── Salto (fixo ou ATR dinâmico) ──────────────────────
 axios.get("/bot/tendencia")
-    .then(res => { if (res.data.salto_dinamico) $('#salto').text(fmt(res.data.salto_dinamico, 0)); })
+    .then(res => {
+        const atr = res.data.salto_dinamico;
+        if (saltoFixoConfig > 0) {
+            $('#salto').text(fmt(saltoFixoConfig, 0));
+            if (atr) {
+                document.getElementById('salto-atr-val').textContent = fmt(atr, 0);
+                document.getElementById('salto-atr-wrapper').style.display = 'inline';
+            }
+        } else if (atr) {
+            $('#salto').text(fmt(atr, 0));
+            document.getElementById('salto-atr-wrapper').style.display = 'none';
+        }
+    })
     .catch(() => {});
 
 // ── Tendência do mercado ──────────────────────────────

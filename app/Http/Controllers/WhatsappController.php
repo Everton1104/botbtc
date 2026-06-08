@@ -307,14 +307,6 @@ class WhatsappController extends Controller
         }
     }
 
-    public static function notificarOrdemConcluida(string $tipo, float $valor)
-    {
-        self::enviarTemplateAdmin('ordem_btc_concluida', [
-            ['type' => 'text', 'text' => $tipo],
-            ['type' => 'text', 'text' => number_format($valor, 2, ',', '.')],
-        ]);
-    }
-
     public static function notificarSaque(float $valor, string $nomeUsuario)
     {
         self::enviarTemplateAdmin('btc_saque', [

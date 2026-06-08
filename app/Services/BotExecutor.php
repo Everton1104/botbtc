@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\BotState;
 use App\Models\BotConfig;
 use App\Http\Controllers\BinanceController;
-use App\Http\Controllers\WhatsappController;
 use Illuminate\Support\Facades\Log;
 
 class BotExecutor
@@ -53,23 +52,27 @@ class BotExecutor
         // ============================================================
         // PROTEÇÃO: cancelar ordens fora do preço atual com margem
         // ============================================================
-        $margem       = $state->salto * 1.5;
+        // Margem de proteção: 3× salto para não cancelar a ordem restante válida
+        // (após uma execução, a ordem restante fica ~2× salto do preço atual)
+        $margem       = $state->salto > 0 ? $state->salto * 3.0 : $precoAtual * 0.03;
         $cancelledAny = false;
 
         foreach ($open as $ordem) {
             $side  = $ordem['side'];
             $price = (float) $ordem['price'];
 
+            // SELL zombie: preço subiu muito acima da ordem sem ela ter executado
             if ($side === 'SELL' && ($precoAtual - $price) > $margem) {
                 $this->binance->cancelarOrdem(self::SYMBOL, $ordem['orderId']);
                 $cancelledAny = true;
-                Log::info("BotExecutor [{$userId}]: SELL cancelada por fora do range (ordem {$price}, atual {$precoAtual}).");
+                Log::warning("BotExecutor [{$userId}]: SELL zombie cancelada — ordem={$price} atual={$precoAtual} margem={$margem}.");
             }
 
+            // BUY zombie: preço caiu muito abaixo da ordem sem ela ter executado
             if ($side === 'BUY' && ($price - $precoAtual) > $margem) {
                 $this->binance->cancelarOrdem(self::SYMBOL, $ordem['orderId']);
                 $cancelledAny = true;
-                Log::info("BotExecutor [{$userId}]: BUY cancelada por fora do range (ordem {$price}, atual {$precoAtual}).");
+                Log::warning("BotExecutor [{$userId}]: BUY zombie cancelada — ordem={$price} atual={$precoAtual} margem={$margem}.");
             }
         }
 
@@ -120,30 +123,41 @@ class BotExecutor
             return "Ordem fora do range cancelada (não executada). Par recriado no preço atual.";
         }
 
-        // Registrar direção e persistir estado ANTES de operações que podem falhar
-        $valorOrdem = (float) $ordem['price'] * (float) $ordem['origQty'];
+        // Calcular preço de execução da ordem que foi preenchida.
+        // A ordem restante + o salto anterior revelam onde o par estava centrado,
+        // garantindo que o novo par seja centrado no fill price e não no preço atual.
+        $precoOrdemRestante = (float) $ordem['price'];
+        // salto > 0 sempre após criarOrdensNovas; fallback usa 1% do preço atual
+        $saltoAnterior      = $state->salto > 0 ? (float) $state->salto : $precoAtual * 0.01;
 
         if ($side === 'SELL') {
-            // BUY foi executada → BTC caiu
-            $this->processarQueda($state, $precoAtual);
-            $state->save();
-            Log::info("BotExecutor [{$userId}]: QUEDA registrada. Contador quedas: {$state->contador_quedas}. Preço: {$precoAtual}.");
-            WhatsappController::notificarOrdemConcluida('Compra', $valorOrdem);
+            // BUY foi executada → fill price = SELL_restante − 2 × salto
+            $precoExecucao = max(1.0, $precoOrdemRestante - 2 * $saltoAnterior);
         } else {
-            // SELL foi executada → BTC subiu
-            $this->processarSubida($state, $precoAtual);
-            $state->save();
-            Log::info("BotExecutor [{$userId}]: SUBIDA registrada. Contador subidas: {$state->contador_subidas}. Preço: {$precoAtual}.");
-            WhatsappController::notificarOrdemConcluida('Venda', $valorOrdem);
+            // SELL foi executada → fill price = BUY_restante + 2 × salto
+            $precoExecucao = $precoOrdemRestante + 2 * $saltoAnterior;
         }
 
-        // Cancelar ordem restante e criar novo par
+        // Registrar direção e persistir estado ANTES de operações que podem falhar
+        if ($side === 'SELL') {
+            // BUY foi executada → BTC caiu
+            $this->processarQueda($state, $precoExecucao);
+            $state->save();
+            Log::info("BotExecutor [{$userId}]: QUEDA registrada. Contador quedas: {$state->contador_quedas}. Fill: {$precoExecucao} (mercado atual: {$precoAtual}).");
+        } else {
+            // SELL foi executada → BTC subiu
+            $this->processarSubida($state, $precoExecucao);
+            $state->save();
+            Log::info("BotExecutor [{$userId}]: SUBIDA registrada. Contador subidas: {$state->contador_subidas}. Fill: {$precoExecucao} (mercado atual: {$precoAtual}).");
+        }
+
+        // Cancelar ordem restante e criar novo par centrado no fill price
         if (!$this->limparTodasOrdensEAguardar(self::SYMBOL)) {
             Log::warning("BotExecutor [{$userId}]: timeout ao cancelar ordem restante. Abortando criação de par.");
             return "Timeout ao cancelar ordem restante. Direção já registrada.";
         }
 
-        if (!$this->criarOrdensNovas($state, $precoAtual)) {
+        if (!$this->criarOrdensNovas($state, $precoExecucao)) {
             return "Direção registrada mas erro ao criar novo par. Verifique os logs.";
         }
 
@@ -158,22 +172,32 @@ class BotExecutor
     {
         $open = $this->binance->getOpenOrders($symbol);
 
-        if (is_array($open)) {
-            foreach ($open as $ordem) {
-                $this->binance->cancelarOrdem($symbol, $ordem['orderId']);
-            }
+        if (!is_array($open)) {
+            Log::warning("BotExecutor: falha ao listar ordens antes de limpar ({$symbol}).");
+            return false;
         }
 
-        // Aguarda até a Binance confirmar remoção (até 2 segundos)
-        for ($i = 0; $i < 20; $i++) {
+        foreach ($open as $ordem) {
+            $this->binance->cancelarOrdem($symbol, $ordem['orderId']);
+        }
+
+        // Aguarda até a Binance confirmar remoção (até 3 segundos)
+        for ($i = 0; $i < 30; $i++) {
             usleep(100000); // 100ms
 
             $restantes = $this->binance->getOpenOrders($symbol);
-            if (is_array($restantes) && empty($restantes)) {
+
+            if (!is_array($restantes)) {
+                Log::warning("BotExecutor: falha ao confirmar remoção de ordens (tentativa {$i}).");
+                continue;
+            }
+
+            if (empty($restantes)) {
                 return true;
             }
         }
 
+        Log::warning("BotExecutor: timeout ao aguardar remoção de ordens em {$symbol}.");
         return false;
     }
 
@@ -207,10 +231,14 @@ class BotExecutor
 
         $config = BotConfig::atual();
 
+        // Resolve salto inicial: se config = 0, usa ATR dinâmico
+        $tendenciaInit = $this->analisarTendencia($precoAtual);
+        $saltoInit     = $config->salto > 0 ? $config->salto : $tendenciaInit['salto_dinamico'];
+
         $state = new BotState();
         $state->id_user           = $userId;
         $state->preco_referencia  = $precoAtual;
-        $state->salto             = $config->salto;
+        $state->salto             = $saltoInit;
         $state->direcao_atual     = null;
         $state->contador_subidas  = 0;
         $state->contador_quedas   = 0;
@@ -220,7 +248,7 @@ class BotExecutor
 
         $this->criarOrdensIniciaisSemDivisao($state, $precoAtual, $saldoBRL, $saldoBTC);
 
-        Log::info("BotExecutor [{$userId}]: bot inicializado. Preço: {$precoAtual}, salto: {$config->salto}.");
+        Log::info("BotExecutor [{$userId}]: bot inicializado. Preço: {$precoAtual}, salto: {$saltoInit}.");
 
         return "Bot inicializado para o usuário {$userId}";
     }
@@ -532,7 +560,13 @@ class BotExecutor
         $config    = BotConfig::atual();
         $tendencia = $this->analisarTendencia($precoAtual);
 
-        $salto        = $tendencia['salto_dinamico'];
+        if ($config->salto > 0) {
+            $salto = $config->salto;
+            Log::info("BotExecutor: salto fixo (config) = {$salto}");
+        } else {
+            $salto = $tendencia['salto_dinamico'];
+            Log::info("BotExecutor: salto dinâmico (ATR) = {$salto} | ATR={$tendencia['atr']}");
+        }
         $state->salto = $salto;
 
         $precoCompra = max(1.0, $precoAtual - $salto);

@@ -29,12 +29,12 @@
 
                 <div class="col-6 col-md-2">
                     <label class="form-label">Patrimônio (R$)</label>
-                    <input type="number" id="s-patrimonio" class="form-control form-control-sm" value="64000" min="1000" step="1000">
+                    <input type="number" id="s-patrimonio" class="form-control form-control-sm" value="1000" min="1000" step="1000">
                 </div>
 
                 <div class="col-6 col-md-2">
-                    <label class="form-label">Salto (R$)</label>
-                    <input type="number" id="s-salto" class="form-control form-control-sm" value="3000" min="100" step="100">
+                    <label class="form-label">Salto (R$) <span id="lbl-atr" style="font-size:.72rem;color:var(--gold);display:none;">(ATR dinâmico)</span></label>
+                    <input type="number" id="s-salto" class="form-control form-control-sm" value="0" min="0" step="100">
                 </div>
 
             </div>
@@ -116,9 +116,29 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Estado global ──────────────────────────────────────────
-let historico  = [];
-let chart      = null;
+let historico    = [];
+let chart        = null;
 let periodoAtual = 30;
+
+// ── ATR real (high/low dos candles diários) ────────────────
+function calcularATR(dados, periodo = 14) {
+    if (dados.length < 2) return 0;
+    const trs = [];
+    for (let i = 1; i < dados.length; i++) {
+        const high      = dados[i].high;
+        const low       = dados[i].low;
+        const prevClose = dados[i - 1].close;
+        trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+    }
+    let atr = trs.slice(0, periodo).reduce((s, v) => s + v, 0) / Math.min(periodo, trs.length);
+    for (const tr of trs.slice(periodo)) atr = (atr * (periodo - 1) + tr) / periodo;
+    return Math.round(atr);
+}
+
+function saltoDeATR(atr) {
+    if (atr <= 0) return 2500;
+    return Math.max(1500, Math.min(15000, Math.round(atr * 0.5 / 500) * 500));
+}
 
 // ── Estilo dos botões de período ───────────────────────────
 function atualizarBotoesPeriodo(dias) {
@@ -164,8 +184,12 @@ document.querySelectorAll('.periodo-btn').forEach(btn => {
 const TAXA = 0.00075; // 0,075% por ordem (Binance com BNB)
 
 function simular() {
-    const patrimonio = parseFloat(document.getElementById('s-patrimonio').value) || 64000;
-    const salto      = parseFloat(document.getElementById('s-salto').value)      || 3000;
+    const patrimonio = parseFloat(document.getElementById('s-patrimonio').value) || 1000;
+    let   salto      = parseFloat(document.getElementById('s-salto').value)      || 0;
+    if (salto === 0 && historico.length >= 15) {
+        salto = saltoDeATR(calcularATR(historico));
+    }
+    if (salto <= 0) salto = 2500;
     const pcts = [0.85, 0.60, 0.30, 0.10, 0.01]; // limites fixos: p1=85% p2=60% p3=30% p4=10%
 
     function pctPorNivel(n) {
@@ -227,7 +251,7 @@ function recalcular() {
 
     const totalLucro  = resultado.reduce((s, d) => s + d.lucro, 0);
     const totalSwings = resultado.reduce((s, d) => s + d.swings, 0);
-    const patrimonio  = parseFloat(document.getElementById('s-patrimonio').value) || 64000;
+    const patrimonio  = parseFloat(document.getElementById('s-patrimonio').value) || 1000;
     const roi         = (totalLucro / patrimonio) * 100;
     const mediaDia    = totalLucro / resultado.length;
 
@@ -357,8 +381,19 @@ function aplicarPresetAtual() {
 let configAtual = { salto: 3000 };
 
 axios.get('/bot/config').then(res => {
-    configAtual.salto = res.data.salto;
-    document.getElementById('s-salto').value = configAtual.salto;
+    configAtual.salto = res.data.salto ?? 0;
+    const inputSalto = document.getElementById('s-salto');
+    const lblAtr     = document.getElementById('lbl-atr');
+    if (configAtual.salto === 0 && historico.length >= 15) {
+        const atr  = calcularATR(historico);
+        const din  = saltoDeATR(atr);
+        inputSalto.value = din;
+        inputSalto.placeholder = 'ATR dinâmico';
+        lblAtr.style.display = 'inline';
+        lblAtr.title = 'ATR14 = R$ ' + atr.toLocaleString('pt-BR');
+    } else {
+        inputSalto.value = configAtual.salto || 3000;
+    }
     recalcular();
 }).catch(() => {});
 </script>
