@@ -45,4 +45,11 @@ return [
         'secret' => env('BINANCE_SECRET_KEY'),
     ],
 
+    'whatsapp' => [
+        'graph_token'  => env('GRAPH_API_TOKEN'),
+        'app_secret'   => env('WHATSAPP_APP_SECRET'),
+        'phone_id'     => env('PHONE_NUMBER_ID'),
+        'verify_token' => env('WEBHOOK_VERIFY_TOKEN'),
+    ],
+
 ];

@@ -13,10 +13,9 @@ class WhatsappController extends Controller
 
     // ── Webhook ──────────────────────────────────────────────────────────────
 
-    public function virifyToken(Request $request)
+    public function verificarToken(Request $request)
     {
-        $request     = Request::capture();
-        $verifyToken = env('WEBHOOK_VERIFY_TOKEN');
+        $verifyToken = config('services.whatsapp.verify_token');
         $challenge   = $request['hub_challenge'];
         $token       = $request['hub_verify_token'];
 
@@ -29,6 +28,11 @@ class WhatsappController extends Controller
 
     public function getMsgs(Request $request)
     {
+        if (!$this->assinaturaValida($request)) {
+            \Log::channel('single')->warning('[WA-WEBHOOK] assinatura X-Hub-Signature-256 inválida');
+            return response()->json(['error' => 'invalid signature'], 403);
+        }
+
         $business_phone_number_id = $request['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? 0;
         $msg                      = $request['entry'][0]['changes'][0]['value']['messages'][0] ?? '';
         $status                   = $request['entry'][0]['changes'][0]['value']['statuses'] ?? null;
@@ -54,23 +58,48 @@ class WhatsappController extends Controller
         }
     }
 
+    // Confirma que o POST veio mesmo da Meta: o corpo bruto é assinado por ela
+    // (HMAC-SHA256 com o App Secret) no header X-Hub-Signature-256. Sem isso,
+    // qualquer um que descubra a URL poderia injetar eventos falsos.
+    // Se WHATSAPP_APP_SECRET não estiver configurado, não bloqueia (fail-open),
+    // para não derrubar ambientes ainda não configurados.
+    private function assinaturaValida(Request $request): bool
+    {
+        $appSecret = config('services.whatsapp.app_secret');
+        if (!$appSecret) {
+            return true;
+        }
+
+        $assinatura = (string) $request->header('X-Hub-Signature-256', '');
+        if (!str_starts_with($assinatura, 'sha256=')) {
+            return false;
+        }
+
+        $esperado = 'sha256=' . hash_hmac('sha256', $request->getContent(), $appSecret);
+        return hash_equals($esperado, $assinatura);
+    }
+
     // ── Envio de mensagens ────────────────────────────────────────────────────
+
+    // Cliente Graph centralizado: monta o POST para /messages com o token e o
+    // phone id, evitando repetir new Client() + headers em cada método de envio.
+    private static function postGraph($phoneId, array $payload): \Psr\Http\Message\ResponseInterface
+    {
+        $client = new \GuzzleHttp\Client();
+        return $client->request('POST', "https://graph.facebook.com/v25.0/{$phoneId}/messages", [
+            'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
+            'json'    => $payload,
+        ]);
+    }
 
     public static function enviarMsg($business_phone_number_id, $numero, $msg)
     {
         try {
-            $client   = new \GuzzleHttp\Client();
-            $response = $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN'),
-                    'Content-Type'  => 'application/json',
-                ],
-                'json' => [
-                    'messaging_product' => 'whatsapp',
-                    'to'                => $numero,
-                    'type'              => 'text',
-                    'text'              => ['body' => $msg],
-                ],
+            $response = self::postGraph($business_phone_number_id, [
+                'messaging_product' => 'whatsapp',
+                'to'                => $numero,
+                'type'              => 'text',
+                'text'              => ['body' => $msg],
             ]);
 
             $body      = json_decode($response->getBody(), true);
@@ -97,18 +126,14 @@ class WhatsappController extends Controller
             $btns = [['type' => 'reply', 'reply' => ['id' => 'sim' . $id, 'title' => $title1]]];
         }
 
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'interactive',
-                'interactive'       => [
-                    'type'   => 'button',
-                    'body'   => ['text' => $msg],
-                    'action' => ['buttons' => $btns],
-                ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'interactive',
+            'interactive'       => [
+                'type'   => 'button',
+                'body'   => ['text' => $msg],
+                'action' => ['buttons' => $btns],
             ],
         ]);
 
@@ -117,22 +142,18 @@ class WhatsappController extends Controller
 
     public static function enviarMsgSimNaoCancel($business_phone_number_id, $numero, $msg, $id = 0, $title1 = 'Sim', $title2 = 'Não', $title3 = 'Cancelar')
     {
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'interactive',
-                'interactive'       => [
-                    'type'   => 'button',
-                    'body'   => ['text' => $msg],
-                    'action' => [
-                        'buttons' => [
-                            ['type' => 'reply', 'reply' => ['id' => 'sim' . $id,    'title' => $title1]],
-                            ['type' => 'reply', 'reply' => ['id' => 'nao' . $id,    'title' => $title2]],
-                            ['type' => 'reply', 'reply' => ['id' => 'cancel' . $id, 'title' => $title3]],
-                        ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'interactive',
+            'interactive'       => [
+                'type'   => 'button',
+                'body'   => ['text' => $msg],
+                'action' => [
+                    'buttons' => [
+                        ['type' => 'reply', 'reply' => ['id' => 'sim' . $id,    'title' => $title1]],
+                        ['type' => 'reply', 'reply' => ['id' => 'nao' . $id,    'title' => $title2]],
+                        ['type' => 'reply', 'reply' => ['id' => 'cancel' . $id, 'title' => $title3]],
                     ],
                 ],
             ],
@@ -145,20 +166,16 @@ class WhatsappController extends Controller
     {
         $sections = $secoes ?? [['rows' => $lista]];
 
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'interactive',
-                'interactive'       => [
-                    'type'   => 'list',
-                    'body'   => ['text' => $msg],
-                    'action' => [
-                        'button'   => 'Selecione uma opção:',
-                        'sections' => $sections,
-                    ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'interactive',
+            'interactive'       => [
+                'type'   => 'list',
+                'body'   => ['text' => $msg],
+                'action' => [
+                    'button'   => 'Selecione uma opção:',
+                    'sections' => $sections,
                 ],
             ],
         ]);
@@ -168,15 +185,11 @@ class WhatsappController extends Controller
 
     public static function enviarImg($business_phone_number_id, $numero, $link, $desc = 'imagem')
     {
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'image',
-                'image'             => ['link' => $link, 'caption' => $desc],
-            ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'image',
+            'image'             => ['link' => $link, 'caption' => $desc],
         ]);
 
         self::log($numero, Auth::id(), $desc, null, $business_phone_number_id);
@@ -184,15 +197,11 @@ class WhatsappController extends Controller
 
     public static function enviarAudio($business_phone_number_id, $numero, $link)
     {
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'audio',
-                'audio'             => ['link' => $link],
-            ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'audio',
+            'audio'             => ['link' => $link],
         ]);
 
         self::log($numero, Auth::id(), 'audio', null, $business_phone_number_id);
@@ -201,15 +210,11 @@ class WhatsappController extends Controller
     public static function enviarAudioId($business_phone_number_id, $numero, $mediaId)
     {
         try {
-            $client = new \GuzzleHttp\Client();
-            $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-                'json'    => [
-                    'messaging_product' => 'whatsapp',
-                    'to'                => $numero,
-                    'type'              => 'audio',
-                    'audio'             => ['id' => $mediaId],
-                ],
+            self::postGraph($business_phone_number_id, [
+                'messaging_product' => 'whatsapp',
+                'to'                => $numero,
+                'type'              => 'audio',
+                'audio'             => ['id' => $mediaId],
             ]);
 
             self::log($numero, Auth::id(), 'audio', null, $business_phone_number_id);
@@ -224,15 +229,11 @@ class WhatsappController extends Controller
 
     public static function enviarVideo($business_phone_number_id, $numero, $link, $desc = 'video')
     {
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'video',
-                'video'             => ['link' => $link, 'caption' => $desc],
-            ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'video',
+            'video'             => ['link' => $link, 'caption' => $desc],
         ]);
 
         self::log($numero, Auth::id(), $desc, null, $business_phone_number_id);
@@ -240,15 +241,11 @@ class WhatsappController extends Controller
 
     public static function enviarDoc($business_phone_number_id, $numero, $link, $desc = 'arquivo')
     {
-        $client = new \GuzzleHttp\Client();
-        $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-            'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
-            'json'    => [
-                'messaging_product' => 'whatsapp',
-                'to'                => $numero,
-                'type'              => 'document',
-                'document'          => ['link' => $link, 'caption' => $desc],
-            ],
+        self::postGraph($business_phone_number_id, [
+            'messaging_product' => 'whatsapp',
+            'to'                => $numero,
+            'type'              => 'document',
+            'document'          => ['link' => $link, 'caption' => $desc],
         ]);
 
         self::log($numero, Auth::id(), $desc, null, $business_phone_number_id);
@@ -263,33 +260,26 @@ class WhatsappController extends Controller
         $user->save();
 
         try {
-            $client   = new \GuzzleHttp\Client();
-            $response = $client->request('POST', "https://graph.facebook.com/v25.0/" . env('PHONE_NUMBER_ID') . "/messages", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN'),
-                    'Content-Type'  => 'application/json',
-                ],
-                'json' => [
-                    'messaging_product' => 'whatsapp',
-                    'to'                => $user->whatsapp,
-                    'type'              => 'template',
-                    'template'          => [
-                        'name'       => 'user_code',
-                        'language'   => ['code' => 'pt_BR'],
-                        'components' => [
-                            [
-                                'type'       => 'body',
-                                'parameters' => [
-                                    ['type' => 'text', 'text' => $codigo],
-                                ],
+            $response = self::postGraph(config('services.whatsapp.phone_id'), [
+                'messaging_product' => 'whatsapp',
+                'to'                => $user->whatsapp,
+                'type'              => 'template',
+                'template'          => [
+                    'name'       => 'user_code',
+                    'language'   => ['code' => 'pt_BR'],
+                    'components' => [
+                        [
+                            'type'       => 'body',
+                            'parameters' => [
+                                ['type' => 'text', 'text' => $codigo],
                             ],
-                            [
-                                'type'       => 'button',
-                                'sub_type'   => 'url',
-                                'index'      => 0,
-                                'parameters' => [
-                                    ['type' => 'text', 'text' => $codigo],
-                                ],
+                        ],
+                        [
+                            'type'       => 'button',
+                            'sub_type'   => 'url',
+                            'index'      => 0,
+                            'parameters' => [
+                                ['type' => 'text', 'text' => $codigo],
                             ],
                         ],
                     ],
@@ -298,7 +288,7 @@ class WhatsappController extends Controller
 
             $body = json_decode($response->getBody(), true);
             \Illuminate\Support\Facades\Log::info("WhatsApp user_code enviado", ['para' => $user->whatsapp, 'resp' => $body]);
-            self::log($user->whatsapp, $user->id, "Código de verificação enviado", null, env('PHONE_NUMBER_ID'));
+            self::log($user->whatsapp, $user->id, "Código de verificação enviado", null, config('services.whatsapp.phone_id'));
         } catch (\GuzzleHttp\Exception\ClientException $e) {
             $erro = json_decode($e->getResponse()->getBody(), true);
             \Illuminate\Support\Facades\Log::error("WhatsApp user_code ERRO", ['para' => $user->whatsapp, 'erro' => $erro]);
@@ -326,27 +316,20 @@ class WhatsappController extends Controller
     private static function enviarTemplateAdmin(string $template, array $parametros)
     {
         try {
-            $client = new \GuzzleHttp\Client();
-            $client->request('POST', "https://graph.facebook.com/v25.0/" . env('PHONE_NUMBER_ID') . "/messages", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN'),
-                    'Content-Type'  => 'application/json',
-                ],
-                'json' => [
-                    'messaging_product' => 'whatsapp',
-                    'to'                => self::ADMIN,
-                    'type'              => 'template',
-                    'template'          => [
-                        'name'       => $template,
-                        'language'   => ['code' => 'pt_BR'],
-                        'components' => [
-                            ['type' => 'body', 'parameters' => $parametros],
-                        ],
+            self::postGraph(config('services.whatsapp.phone_id'), [
+                'messaging_product' => 'whatsapp',
+                'to'                => self::ADMIN,
+                'type'              => 'template',
+                'template'          => [
+                    'name'       => $template,
+                    'language'   => ['code' => 'pt_BR'],
+                    'components' => [
+                        ['type' => 'body', 'parameters' => $parametros],
                     ],
                 ],
             ]);
 
-            self::log(self::ADMIN, null, "Template {$template}", null, env('PHONE_NUMBER_ID'));
+            self::log(self::ADMIN, null, "Template {$template}", null, config('services.whatsapp.phone_id'));
         } catch (\Throwable $th) {
             \Illuminate\Support\Facades\Log::error("WhatsApp {$template}: " . $th->getMessage());
         }
@@ -355,20 +338,13 @@ class WhatsappController extends Controller
     public static function enviarModelo($business_phone_number_id, $numero, $templateName, $language = 'pt_BR')
     {
         try {
-            $client   = new \GuzzleHttp\Client();
-            $response = $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/messages", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN'),
-                    'Content-Type'  => 'application/json',
-                ],
-                'json' => [
-                    'messaging_product' => 'whatsapp',
-                    'to'                => $numero,
-                    'type'              => 'template',
-                    'template'          => [
-                        'name'     => $templateName,
-                        'language' => ['code' => $language],
-                    ],
+            $response = self::postGraph($business_phone_number_id, [
+                'messaging_product' => 'whatsapp',
+                'to'                => $numero,
+                'type'              => 'template',
+                'template'          => [
+                    'name'     => $templateName,
+                    'language' => ['code' => $language],
                 ],
             ]);
 
@@ -395,7 +371,7 @@ class WhatsappController extends Controller
         try {
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('POST', "https://graph.facebook.com/v25.0/{$business_phone_number_id}/media", [
-                'headers'    => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers'    => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
                 'multipart'  => [
                     ['name' => 'messaging_product', 'contents' => 'whatsapp'],
                     ['name' => 'type',              'contents' => $mimeType],
@@ -424,12 +400,12 @@ class WhatsappController extends Controller
 
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('GET', "https://graph.facebook.com/v25.0/{$imgId}", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             $mediaData = json_decode($response->getBody(), true);
             $imagem    = $client->get($mediaData['url'], [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             Storage::disk('public')->put('whatsapp/' . $filename, $imagem->getBody());
@@ -446,12 +422,12 @@ class WhatsappController extends Controller
 
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('GET', "https://graph.facebook.com/v25.0/{$imgId}", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             $mediaData = json_decode($response->getBody(), true);
             $imagem    = $client->get($mediaData['url'], [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             Storage::disk('public')->put('whatsapp/' . $filename, $imagem->getBody());
@@ -468,12 +444,12 @@ class WhatsappController extends Controller
 
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('GET', "https://graph.facebook.com/v25.0/{$audId}", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             $mediaData = json_decode($response->getBody(), true);
             $audio     = $client->get($mediaData['url'], [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             Storage::disk('public')->put('whatsapp/' . $filename, $audio->getBody());
@@ -490,12 +466,12 @@ class WhatsappController extends Controller
 
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('GET', "https://graph.facebook.com/v25.0/{$vidId}", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             $mediaData = json_decode($response->getBody(), true);
             $video     = $client->get($mediaData['url'], [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             Storage::disk('public')->put('whatsapp/' . $filename, $video->getBody());
@@ -512,12 +488,12 @@ class WhatsappController extends Controller
 
             $client   = new \GuzzleHttp\Client();
             $response = $client->request('GET', "https://graph.facebook.com/v25.0/{$docId}", [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             $mediaData = json_decode($response->getBody(), true);
             $document  = $client->get($mediaData['url'], [
-                'headers' => ['Authorization' => 'Bearer ' . env('GRAPH_API_TOKEN')],
+                'headers' => ['Authorization' => 'Bearer ' . config('services.whatsapp.graph_token')],
             ]);
 
             Storage::disk('public')->put('whatsapp/' . $filename, $document->getBody());

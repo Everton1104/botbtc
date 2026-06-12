@@ -43,8 +43,8 @@ class BinanceController extends Controller
         $headers  = ['X-MBX-APIKEY' => $this->apiKey];
 
         $response = match ($method) {
-            'DELETE' => Http::withHeaders($headers)->delete($url),
-            default  => Http::withHeaders($headers)->get($url),
+            'DELETE' => Http::withHeaders($headers)->timeout(10)->connectTimeout(5)->delete($url),
+            default  => Http::withHeaders($headers)->timeout(10)->connectTimeout(5)->get($url),
         };
 
         if (!$response->successful()) {
@@ -60,6 +60,8 @@ class BinanceController extends Controller
         $params['signature'] = $this->assinar(http_build_query($params));
 
         $response = Http::withHeaders(['X-MBX-APIKEY' => $this->apiKey])
+            ->timeout(10)
+            ->connectTimeout(5)
             ->asForm()
             ->post("{$this->baseUrl}{$endpoint}", $params);
 
@@ -158,14 +160,14 @@ class BinanceController extends Controller
 
     public function getPrecoBTC(): float
     {
-        $response = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=" . self::SYMBOL);
+        $response = Http::timeout(10)->connectTimeout(5)->get("{$this->baseUrl}/api/v3/ticker/price?symbol=" . self::SYMBOL);
         return (float) ($response->json()['price'] ?? 0.0);
     }
 
     public function getPrecos(): array
     {
-        $btc = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=BTCBRL")->json()['price'] ?? 0;
-        $bnb = Http::get("{$this->baseUrl}/api/v3/ticker/price?symbol=BNBBRL")->json()['price'] ?? 0;
+        $btc = Http::timeout(10)->connectTimeout(5)->get("{$this->baseUrl}/api/v3/ticker/price?symbol=BTCBRL")->json()['price'] ?? 0;
+        $bnb = Http::timeout(10)->connectTimeout(5)->get("{$this->baseUrl}/api/v3/ticker/price?symbol=BNBBRL")->json()['price'] ?? 0;
 
         return ['BTCBRL' => (float) $btc, 'BNBBRL' => (float) $bnb];
     }
@@ -206,7 +208,7 @@ class BinanceController extends Controller
 
     public function getKlines(string $symbol, string $interval, int $limit): array
     {
-        $response = Http::get("{$this->baseUrl}/api/v3/klines?symbol={$symbol}&interval={$interval}&limit={$limit}");
+        $response = Http::timeout(10)->connectTimeout(5)->get("{$this->baseUrl}/api/v3/klines?symbol={$symbol}&interval={$interval}&limit={$limit}");
         return $response->json() ?? [];
     }
 

@@ -123,6 +123,23 @@ class BotExecutor
             return "Ordem fora do range cancelada (não executada). Par recriado no preço atual.";
         }
 
+        // ── Par incompleto ──────────────────────────────────────────
+        // Se a perna OPOSTA a esta ordem nunca foi criada (saldo só de um lado),
+        // então "1 ordem aberta" NÃO significa execução — é um par que nasceu
+        // torto. Recriar sem registrar subida/queda evita contadores fantasmas.
+        $idOpostoEsperado = $side === 'SELL' ? $state->order_id_compra : $state->order_id_venda;
+        if (empty($idOpostoEsperado)) {
+            if (!$this->limparTodasOrdensEAguardar(self::SYMBOL)) {
+                Log::warning("BotExecutor [{$userId}]: timeout ao cancelar par incompleto. Abortando.");
+                return "Timeout ao cancelar par incompleto.";
+            }
+            if (!$this->criarOrdensNovas($state, $precoAtual)) {
+                return "Erro ao recriar par incompleto.";
+            }
+            Log::info("BotExecutor [{$userId}]: par incompleto (só perna {$side}) detectado. Par recriado em {$precoAtual} sem registrar direção.");
+            return "Par incompleto detectado. Recriado sem registrar direção.";
+        }
+
         // Calcular preço de execução da ordem que foi preenchida.
         // A ordem restante + o salto anterior revelam onde o par estava centrado,
         // garantindo que o novo par seja centrado no fill price e não no preço atual.
@@ -229,11 +246,9 @@ class BotExecutor
             return "Preço inválido. Inicialização abortada.";
         }
 
-        $config = BotConfig::atual();
-
-        // Resolve salto inicial: se config = 0, usa ATR dinâmico
+        // Salto inicial sempre baseado nas métricas (ATR).
         $tendenciaInit = $this->analisarTendencia($precoAtual);
-        $saltoInit     = $config->salto > 0 ? $config->salto : $tendenciaInit['salto_dinamico'];
+        $saltoInit     = $tendenciaInit['salto_dinamico'];
 
         $state = new BotState();
         $state->id_user           = $userId;
@@ -261,6 +276,11 @@ class BotExecutor
 
         $config      = BotConfig::atual();
         $valorCompra = $saldoBRL * $config->nivel1;
+
+        // Zera os ids antes de recriar: assim um id velho não fica fingindo que a
+        // perna ainda existe (essencial para o guard de "par incompleto").
+        $state->order_id_compra = null;
+        $state->order_id_venda  = null;
 
         if ($valorCompra > 10) {
             $orderCompra            = $this->binance->buyLimit($precoCompra, $valorCompra / $precoCompra);
@@ -320,12 +340,13 @@ class BotExecutor
     // ANÁLISE DE TENDÊNCIA — MA21, EMA9, RSI14, ATR14, MACD, Bollinger
     // ============================================================
 
-    private function analisarTendencia(float $precoAtual): array
+    public function analisarTendencia(float $precoAtual, bool $registrarLog = true): array
     {
         $fallback = ['fator_compra' => 0.5, 'fator_venda' => 0.5, 'rsi' => 50.0, 'atr' => 0.0, 'salto_dinamico' => 2500,
                      'macd' => 0.0, 'macd_signal' => 0.0, 'macd_hist' => 0.0,
                      'boll_upper' => 0.0, 'boll_lower' => 0.0, 'boll_pct_b' => 0.5, 'boll_width' => 0.0,
-                     'trend_4h' => 0, 'ma21_4h' => 0.0, 'rsi_4h' => 50.0];
+                     'trend_4h' => 0, 'ma21_4h' => 0.0, 'rsi_4h' => 50.0,
+                     'ma21' => 0.0, 'ema9' => 0.0, 'distancia_pct' => 0.0, 'preco' => $precoAtual, 'tendencia' => 'neutra'];
 
         $klines = $this->binance->getKlines(self::SYMBOL, '1h', 50);
 
@@ -346,60 +367,36 @@ class BotExecutor
         $ema9 = $this->calcularEMA($closes, 9);
         $rsi  = $this->calcularRSI($closes, 14);
 
-        // ATR calculado em candles diários — volatilidade na escala do grid
-        $klinesD  = $this->binance->getKlines(self::SYMBOL, '1d', 30);
+        // // ATR calculado em candles diários — volatilidade na escala do grid
+        // $klinesD  = $this->binance->getKlines(self::SYMBOL, '1d', 30);
+
+        // Klines de 4h buscados UMA vez e reusados para ATR e tendência de médio prazo.
+        $klines4h = $this->binance->getKlines(self::SYMBOL, '4h', 50);
+
+        // ATR calculado em candles de 4h — volatilidade na escala do grid
         $atr      = 0.0;
-        if (is_array($klinesD) && count($klinesD) >= 15) {
-            $highsD  = array_map(fn($k) => (float) $k[2], $klinesD);
-            $lowsD   = array_map(fn($k) => (float) $k[3], $klinesD);
-            $closesD = array_map(fn($k) => (float) $k[4], $klinesD);
+        if (is_array($klines4h) && count($klines4h) >= 15) {
+            $highsD  = array_map(fn($k) => (float) $k[2], $klines4h);
+            $lowsD   = array_map(fn($k) => (float) $k[3], $klines4h);
+            $closesD = array_map(fn($k) => (float) $k[4], $klines4h);
             $atr     = $this->calcularATR($highsD, $lowsD, $closesD, 14);
         }
+        // // salto antigo: atr * 0.5, teto 15000 (gerava ~6k no ATR de 4h)
+        // $saltoDin = $atr > 0
+        //     ? max(1500, min(15000, (int) (round($atr * 0.5 / 500) * 500)))
+        //     : 2500;
+
+        // salto dinâmico: faixa 2.000–5.000 (piso de 2.000 evita grid apertado demais)
         $saltoDin = $atr > 0
-            ? max(1500, min(15000, (int) (round($atr * 0.5 / 500) * 500)))
+            ? max(2000, min(5000, (int) (round($atr * 0.25 / 500) * 500)))
             : 2500;
         $macdData  = $this->calcularMACD($closes);
         $bollData  = $this->calcularBollinger($closes, 21);
 
-        $distancia   = ($precoAtual - $ma21) / $ma21;
-        $fatorCompra = max(0.45, min(1.0, 0.5 - ($distancia / 0.30)));
-        $fatorVenda  = max(0.45, min(1.0, 0.5 + ($distancia / 0.30)));
-
-        // EMA9 × MA21 boost ±0.10
-        $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-        $fatorCompra = max(0.45, min(1.0, $fatorCompra - $boost));
-        $fatorVenda  = max(0.45, min(1.0, $fatorVenda  + $boost));
-
-        // RSI boost ±0.20 nos extremos
-        if ($rsi <= 30) {
-            $fatorCompra = min(1.0,  $fatorCompra + 0.20);
-            $fatorVenda  = max(0.45, $fatorVenda  - 0.10);
-        } elseif ($rsi >= 70) {
-            $fatorVenda  = min(1.0,  $fatorVenda  + 0.20);
-            $fatorCompra = max(0.45, $fatorCompra - 0.10);
-        }
-
-        // MACD boost ±0.10 conforme cruzamento MACD × Signal
-        if ($macdData['macd'] > $macdData['signal']) {
-            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-            $fatorCompra = max(0.45, $fatorCompra - 0.05);
-        } else {
-            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-            $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
-        }
-
-        // Bollinger: posição %B boost ±0.10 nos extremos
-        if ($bollData['pct_b'] <= 0.20) {
-            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-        } elseif ($bollData['pct_b'] >= 0.80) {
-            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-        }
-
-        // 4h multi-timeframe: confirmação de tendência de médio prazo
+        // ── Tendência 4h: calcula os valores (os boosts entram no acúmulo abaixo) ──
         $trend4h = 0;
         $ma21_4h = 0.0;
         $rsi4h   = 50.0;
-        $klines4h = $this->binance->getKlines(self::SYMBOL, '4h', 30);
         if (is_array($klines4h) && count($klines4h) >= 22) {
             $closes4h = array_map(fn($k) => (float) $k[4], $klines4h);
             $ma21_4h  = array_sum(array_slice($closes4h, -21)) / 21;
@@ -408,25 +405,67 @@ class BotExecutor
 
             if ($precoAtual > $ma21_4h && $ema9_4h > $ma21_4h)     $trend4h =  1;
             elseif ($precoAtual < $ma21_4h && $ema9_4h < $ma21_4h) $trend4h = -1;
-
-            if ($trend4h === 1) {
-                $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-                $fatorCompra = max(0.45, $fatorCompra - 0.05);
-            } elseif ($trend4h === -1) {
-                $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-                $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
-            }
-
-            if ($rsi4h <= 35)     $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-            elseif ($rsi4h >= 65) $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
         }
 
-        Log::info(sprintf(
-            "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f",
-            $ma21, $ema9, $rsi, $atr, $saltoDin, $distancia * 100,
-            $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
-            $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda
-        ));
+        // ── Fatores: base responsiva + acúmulo de ajustes, CLAMP ÚNICO no final ──
+        // Antes cada indicador clampava na hora (washout + dependência de ordem).
+        // Agora soma-se tudo e clampa-se uma vez só, então todo indicador conta.
+
+        // Base: distância da MA21 (normalizador 0.03 → 3% de desvio = swing cheio).
+        // Antes era 0.30 (precisava 30%), o que deixava a base sempre em ~0.50.
+        $distancia  = ($precoAtual - $ma21) / $ma21;
+        $baseCompra = 0.5 - ($distancia / 0.03);  // preço acima da média → compra menos
+        $baseVenda  = 0.5 + ($distancia / 0.03);  // preço acima da média → vende mais
+
+        $ajCompra = 0.0;
+        $ajVenda  = 0.0;
+
+        // EMA9 × MA21 (±0.10)
+        $boost     = $ema9 > $ma21 ? 0.10 : -0.10;
+        $ajCompra -= $boost;
+        $ajVenda  += $boost;
+
+        // RSI 1h: ±0.20/∓0.10 nos extremos
+        if ($rsi <= 30)     { $ajCompra += 0.20; $ajVenda  -= 0.10; }
+        elseif ($rsi >= 70) { $ajVenda  += 0.20; $ajCompra -= 0.10; }
+
+        // MACD com DEADBAND: só conta se |histograma| > 0.1% do preço (ignora ruído)
+        $macdDeadband = $precoAtual * 0.001;
+        if (abs($macdData['histogram']) > $macdDeadband) {
+            if ($macdData['macd'] > $macdData['signal']) { $ajVenda  += 0.10; $ajCompra -= 0.05; }
+            else                                         { $ajCompra += 0.10; $ajVenda  -= 0.05; }
+        }
+
+        // Bollinger %B: ±0.10 nos extremos
+        if ($bollData['pct_b'] <= 0.20)     { $ajCompra += 0.10; }
+        elseif ($bollData['pct_b'] >= 0.80) { $ajVenda  += 0.10; }
+
+        // Tendência 4h: ±0.10/∓0.05
+        if ($trend4h === 1)      { $ajVenda  += 0.10; $ajCompra -= 0.05; }
+        elseif ($trend4h === -1) { $ajCompra += 0.10; $ajVenda  -= 0.05; }
+
+        // RSI 4h: +0.10 nos extremos
+        if ($rsi4h <= 35)     $ajCompra += 0.10;
+        elseif ($rsi4h >= 65) $ajVenda  += 0.10;
+
+        // Clamp único no final
+        $fatorCompra = max(0.45, min(1.0, $baseCompra + $ajCompra));
+        $fatorVenda  = max(0.45, min(1.0, $baseVenda  + $ajVenda));
+
+        // Rótulo de tendência (alta/baixa/neutra) para exibição
+        if ($distancia > 0.05 && $ema9 > $ma21)      $tendencia = 'alta';
+        elseif ($distancia < -0.05 && $ema9 < $ma21) $tendencia = 'baixa';
+        else                                          $tendencia = 'neutra';
+
+        // Log só quando o bot executa de verdade; o dashboard chama com $registrarLog=false
+        if ($registrarLog) {
+            Log::info(sprintf(
+                "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f",
+                $ma21, $ema9, $rsi, $atr, $saltoDin, $distancia * 100,
+                $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
+                $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda
+            ));
+        }
 
         return [
             'fator_compra'   => $fatorCompra,
@@ -444,6 +483,12 @@ class BotExecutor
             'trend_4h'       => $trend4h,
             'ma21_4h'        => $ma21_4h,
             'rsi_4h'         => $rsi4h,
+            // campos de exibição (dashboard)
+            'ma21'           => $ma21,
+            'ema9'           => $ema9,
+            'distancia_pct'  => round($distancia * 100, 2),
+            'preco'          => $precoAtual,
+            'tendencia'      => $tendencia,
         ];
     }
 
@@ -560,13 +605,9 @@ class BotExecutor
         $config    = BotConfig::atual();
         $tendencia = $this->analisarTendencia($precoAtual);
 
-        if ($config->salto > 0) {
-            $salto = $config->salto;
-            Log::info("BotExecutor: salto fixo (config) = {$salto}");
-        } else {
-            $salto = $tendencia['salto_dinamico'];
-            Log::info("BotExecutor: salto dinâmico (ATR) = {$salto} | ATR={$tendencia['atr']}");
-        }
+        // Salto sempre baseado nas métricas (ATR). Não há mais opção de salto fixo.
+        $salto = $tendencia['salto_dinamico'];
+        Log::info("BotExecutor: salto dinâmico (ATR) = {$salto} | ATR={$tendencia['atr']}");
         $state->salto = $salto;
 
         $precoCompra = max(1.0, $precoAtual - $salto);
@@ -590,6 +631,11 @@ class BotExecutor
 
         $fatorCompra = $tendencia['fator_compra'];
         $fatorVenda  = $tendencia['fator_venda'];
+
+        // Zera os ids antes de recriar: um id velho não pode fingir que a perna
+        // ainda existe (o guard de "par incompleto" depende disso).
+        $state->order_id_compra = null;
+        $state->order_id_venda  = null;
 
         // ── COMPRA ───────────────────────────────────────────────────
         $valorCompra = 0.0;

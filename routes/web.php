@@ -342,141 +342,31 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
     $preco = $binance->getPrecoBTC();
     if ($preco <= 0) return response()->json(['erro' => 'Preço indisponível'], 503);
 
-    $klines = $binance->getKlines('BTCBRL', '1h', 50);
-    if (!is_array($klines) || count($klines) < 26) {
-        return response()->json(['erro' => 'Dados insuficientes'], 503);
-    }
-
-    $closes = array_map(fn($k) => (float) $k[4], $klines);
-
-    // MA21 + EMA9
-    $ma21 = array_sum(array_slice($closes, -21)) / 21;
-    $k = 2 / (9 + 1); $ema = $closes[0];
-    foreach (array_slice($closes, 1) as $c) { $ema = $c * $k + $ema * (1 - $k); }
-    $ema9 = $ema;
-
-    // RSI(14) — Wilder's smoothing
-    $changes = []; for ($i = 1; $i < count($closes); $i++) $changes[] = $closes[$i] - $closes[$i-1];
-    $ag = $al = 0.0;
-    for ($i = 0; $i < 14; $i++) { if ($changes[$i] > 0) $ag += $changes[$i]; else $al += abs($changes[$i]); }
-    $ag /= 14; $al /= 14;
-    for ($i = 14; $i < count($changes); $i++) {
-        $ag = ($ag * 13 + ($changes[$i] > 0 ? $changes[$i] : 0)) / 14;
-        $al = ($al * 13 + ($changes[$i] < 0 ? abs($changes[$i]) : 0)) / 14;
-    }
-    $rsi = $al == 0 ? 100.0 : round(100 - (100 / (1 + $ag / $al)), 2);
-
-    // ATR(14) — candles diários para medir volatilidade na escala do grid
-    $klinesD = $binance->getKlines('BTCBRL', '1d', 30);
-    $atr = 0.0;
-    if (is_array($klinesD) && count($klinesD) >= 15) {
-        $highsD  = array_map(fn($k) => (float) $k[2], $klinesD);
-        $lowsD   = array_map(fn($k) => (float) $k[3], $klinesD);
-        $closesD = array_map(fn($k) => (float) $k[4], $klinesD);
-        $trs = [];
-        for ($i = 1; $i < count($closesD); $i++) {
-            $trs[] = max($highsD[$i] - $lowsD[$i], abs($highsD[$i] - $closesD[$i-1]), abs($lowsD[$i] - $closesD[$i-1]));
-        }
-        $atrV = array_sum(array_slice($trs, 0, 14)) / 14;
-        foreach (array_slice($trs, 14) as $tr) { $atrV = ($atrV * 13 + $tr) / 14; }
-        $atr = round($atrV, 2);
-    }
-    $saltoDin = $atr > 0 ? max(1500, min(15000, (int)(round($atr * 0.5 / 500) * 500))) : 2500;
-
-    // MACD (EMA12 - EMA26, Signal EMA9 do MACD)
-    $k12 = 2/13; $k26 = 2/27; $k9s = 2/10;
-    $e12 = $e26 = $closes[0]; $macdSeries = [];
-    foreach ($closes as $c) { $e12=$c*$k12+$e12*(1-$k12); $e26=$c*$k26+$e26*(1-$k26); $macdSeries[]=$e12-$e26; }
-    $sig = $macdSeries[0];
-    foreach ($macdSeries as $m) $sig = $m*$k9s + $sig*(1-$k9s);
-    $macd = round(end($macdSeries), 2); $macdSig = round($sig, 2); $macdHist = round($macd - $macdSig, 2);
-
-    // Bollinger Bands (MA21 ± 2σ)
-    $slice = array_slice($closes, -21); $bma = array_sum($slice)/21;
-    $std   = sqrt(array_sum(array_map(fn($c)=>($c-$bma)**2, $slice))/21);
-    $bUpper = round($bma + 2*$std, 2); $bLower = round($bma - 2*$std, 2);
-    $bRange = $bUpper - $bLower;
-    $pctB   = $bRange > 0 ? round(($preco - $bLower) / $bRange, 4) : 0.5;
-    $bWidth = $bma > 0 ? round($bRange / $bma, 4) : 0.0;
-
-    // Fatores MA21 + EMA9
-    $distancia   = ($preco - $ma21) / $ma21;
-    $fatorCompra = max(0.45, min(1.0, 0.5 - ($distancia / 0.30)));
-    $fatorVenda  = max(0.45, min(1.0, 0.5 + ($distancia / 0.30)));
-    $boost       = $ema9 > $ma21 ? 0.10 : -0.10;
-    $fatorCompra = max(0.45, min(1.0, $fatorCompra - $boost));
-    $fatorVenda  = max(0.45, min(1.0, $fatorVenda  + $boost));
-
-    // RSI boost
-    if ($rsi <= 30)     { $fatorCompra = min(1.0, $fatorCompra + 0.20); $fatorVenda  = max(0.45, $fatorVenda  - 0.10); }
-    elseif ($rsi >= 70) { $fatorVenda  = min(1.0, $fatorVenda  + 0.20); $fatorCompra = max(0.45, $fatorCompra - 0.10); }
-
-    // MACD boost
-    if ($macd > $macdSig) { $fatorVenda  = min(1.0,  $fatorVenda  + 0.10); $fatorCompra = max(0.45, $fatorCompra - 0.05); }
-    else                  { $fatorCompra = min(1.0,  $fatorCompra + 0.10); $fatorVenda  = max(0.45, $fatorVenda  - 0.05); }
-
-    // Bollinger boost
-    if ($pctB <= 0.20)      { $fatorCompra = min(1.0, $fatorCompra + 0.10); }
-    elseif ($pctB >= 0.80)  { $fatorVenda  = min(1.0, $fatorVenda  + 0.10); }
-
-    // 4h multi-timeframe: confirmação de tendência de médio prazo
-    $trend4h = 0; $ma21_4h = 0.0; $rsi4h = 50.0;
-    $klines4h = $binance->getKlines('BTCBRL', '4h', 30);
-    if (is_array($klines4h) && count($klines4h) >= 22) {
-        $c4h = array_map(fn($k) => (float) $k[4], $klines4h);
-        $ma21_4h = array_sum(array_slice($c4h, -21)) / 21;
-        $k4 = 2/10; $e4h = $c4h[0];
-        foreach (array_slice($c4h, 1) as $v) $e4h = $v * $k4 + $e4h * (1 - $k4);
-        // RSI(14) 4h — Wilder
-        $ch4 = []; for ($i=1; $i<count($c4h); $i++) $ch4[] = $c4h[$i] - $c4h[$i-1];
-        $ag4 = $al4 = 0.0;
-        for ($i=0; $i<14; $i++) { if ($ch4[$i]>0) $ag4+=$ch4[$i]; else $al4+=abs($ch4[$i]); }
-        $ag4/=14; $al4/=14;
-        for ($i=14; $i<count($ch4); $i++) {
-            $ag4 = ($ag4*13 + ($ch4[$i]>0 ? $ch4[$i] : 0)) / 14;
-            $al4 = ($al4*13 + ($ch4[$i]<0 ? abs($ch4[$i]) : 0)) / 14;
-        }
-        $rsi4h = $al4 == 0 ? 100.0 : round(100 - (100 / (1 + $ag4/$al4)), 2);
-
-        if ($preco > $ma21_4h && $e4h > $ma21_4h)       $trend4h =  1;
-        elseif ($preco < $ma21_4h && $e4h < $ma21_4h)   $trend4h = -1;
-
-        if ($trend4h === 1) {
-            $fatorVenda  = min(1.0,  $fatorVenda  + 0.10);
-            $fatorCompra = max(0.45, $fatorCompra - 0.05);
-        } elseif ($trend4h === -1) {
-            $fatorCompra = min(1.0,  $fatorCompra + 0.10);
-            $fatorVenda  = max(0.45, $fatorVenda  - 0.05);
-        }
-        if ($rsi4h <= 35)     $fatorCompra = min(1.0, $fatorCompra + 0.10);
-        elseif ($rsi4h >= 65) $fatorVenda  = min(1.0, $fatorVenda  + 0.10);
-    }
-
-    if ($distancia > 0.05 && $ema9 > $ma21)      $tendencia = 'alta';
-    elseif ($distancia < -0.05 && $ema9 < $ma21) $tendencia = 'baixa';
-    else                                          $tendencia = 'neutra';
+    // Fonte ÚNICA de verdade: a mesma análise que o bot usa para operar.
+    // ($registrarLog=false para o dashboard não poluir o log a cada poll.)
+    $t = app(\App\Services\BotExecutor::class)->analisarTendencia($preco, false);
 
     return response()->json([
-        'tendencia'     => $tendencia,
-        'ma21'          => round($ma21, 2),
-        'ema9'          => round($ema9, 2),
-        'distancia_pct' => round($distancia * 100, 2),
-        'fator_compra'  => round($fatorCompra, 2),
-        'fator_venda'   => round($fatorVenda,  2),
-        'rsi'           => $rsi,
-        'atr'           => $atr,
-        'salto_dinamico'=> $saltoDin,
-        'macd'          => $macd,
-        'macd_signal'   => $macdSig,
-        'macd_hist'     => $macdHist,
-        'boll_upper'    => $bUpper,
-        'boll_lower'    => $bLower,
-        'boll_pct_b'    => $pctB,
-        'boll_width'    => $bWidth,
-        'trend_4h'      => $trend4h,
-        'ma21_4h'       => round($ma21_4h, 2),
-        'rsi_4h'        => $rsi4h,
-        'preco'         => $preco,
+        'tendencia'      => $t['tendencia'],
+        'ma21'           => round($t['ma21'], 2),
+        'ema9'           => round($t['ema9'], 2),
+        'distancia_pct'  => $t['distancia_pct'],
+        'fator_compra'   => round($t['fator_compra'], 2),
+        'fator_venda'    => round($t['fator_venda'], 2),
+        'rsi'            => $t['rsi'],
+        'atr'            => $t['atr'],
+        'salto_dinamico' => $t['salto_dinamico'],
+        'macd'           => $t['macd'],
+        'macd_signal'    => $t['macd_signal'],
+        'macd_hist'      => $t['macd_hist'],
+        'boll_upper'     => $t['boll_upper'],
+        'boll_lower'     => $t['boll_lower'],
+        'boll_pct_b'     => $t['boll_pct_b'],
+        'boll_width'     => $t['boll_width'],
+        'trend_4h'       => $t['trend_4h'],
+        'ma21_4h'        => round($t['ma21_4h'], 2),
+        'rsi_4h'         => $t['rsi_4h'],
+        'preco'          => $preco,
     ]);
 })->middleware(['auth', 'whatsapp.verified']);
 
@@ -490,8 +380,8 @@ Route::post('/bot/config', function (Request $req) {
 
     $cfg = BotConfig::atual();
 
-    $saltoInput = (int) $req->input('salto', $cfg->salto);
-    $cfg->salto = $saltoInput === 0 ? 0 : max(100, $saltoInput);
+    // Salto não é mais configurável — sempre dinâmico (ATR). Mantém forçado em 0.
+    $cfg->salto = 0;
 
     foreach (['nivel1','nivel2','nivel3','nivel4','nivel5','nivel6','nivel7'] as $n) {
         if ($req->has($n)) {
@@ -837,7 +727,7 @@ Route::post('/admin/depositos-pix/{id}/registrar', function ($id, \App\Http\Cont
 // ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────────
 
 // Verificação do webhook (GET)
-Route::get('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::class, 'virifyToken']);
+Route::get('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::class, 'verificarToken']);
 
 // Recebimento de mensagens (POST) — sem CSRF pois vem da Meta
 Route::post('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::class, 'getMsgs'])

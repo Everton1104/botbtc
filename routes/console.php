@@ -8,5 +8,7 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-Schedule::command('bots:executar')->everyMinute();
-Schedule::command('bots:recarregar-bnb')->everyFiveMinutes();
+// withoutOverlapping: impede que duas execuções do bot rodem em paralelo
+// (uma rodada lenta não pode brigar com a próxima pela mesma conta Binance).
+Schedule::command('bots:executar')->everyMinute()->withoutOverlapping();
+Schedule::command('bots:recarregar-bnb')->everyFiveMinutes()->withoutOverlapping();

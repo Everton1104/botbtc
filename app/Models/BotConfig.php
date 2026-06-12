@@ -26,7 +26,7 @@ class BotConfig extends Model
     {
         if (static::$cache === null) {
             static::$cache = self::firstOrCreate([], [
-                'salto'           => 3000,
+                'salto'           => 0,
                 'nivel1'          => 0.85,
                 'nivel2'          => 0.60,
                 'nivel3'          => 0.35,
