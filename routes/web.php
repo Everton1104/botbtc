@@ -289,7 +289,13 @@ Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceCon
             'confirmado_at'  => now(),
         ]);
 
-        if ($cotasAQueimar >= $invest->cotas) {
+        // Cotas e valor que sobrariam após a retirada
+        $cotasRestantes = $invest->cotas - $cotasAQueimar;
+        $valorRestante  = $cotasRestantes * $precoPorCota;
+
+        // Zera o registro se queimou tudo OU se o resíduo virou poeira (< R$ 1),
+        // evitando cotas-fantasma que continuariam aparecendo no ranking.
+        if ($cotasAQueimar >= $invest->cotas || $valorRestante < 1) {
             $invest->delete();
         } else {
             $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valor);
