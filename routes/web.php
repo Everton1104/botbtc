@@ -243,70 +243,6 @@ Route::get('/bot/valor-atual', function (BinanceController $binance) {
 })->middleware(['auth', 'whatsapp.verified']);
 
 
-Route::post('/bot/retirar/{userId}', function ($userId, Request $req, BinanceController $binance) {
-
-    if (Auth::id() !== 1) {
-        return ['mensagem' => 'Acesso negado.'];
-    }
-
-    $valor = floatval($req->input('valor'));
-    if ($valor <= 0) {
-        return ['mensagem' => 'Valor inválido.'];
-    }
-
-    $invest = BotInvestment::where('user_id', $userId)->first();
-    if (!$invest || $invest->cotas <= 0) {
-        return ['mensagem' => 'Investimento não encontrado.'];
-    }
-
-    $saldos = $binance->getSaldos();
-    $preco  = $binance->getPrecoBTC();
-
-    $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
-
-    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
-                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
-
-    // O dinheiro já saiu da Binance — patrimônio lido da API, cotas lidas dentro da transaction com lock
-    $patrimonioAntes = $patrimonioAtual + $valor;
-
-    DB::transaction(function () use ($invest, $userId, $valor, $patrimonioAntes) {
-        // Lock evita race condition caso dois saques sejam processados simultaneamente
-        $totalCotas    = (float) BotInvestment::lockForUpdate()->sum('cotas');
-        $precoPorCota  = $totalCotas > 0 ? $patrimonioAntes / $totalCotas : 1.0;
-        $cotasAQueimar = $valor / $precoPorCota;
-
-        BotWithdrawalRequest::create([
-            'user_id'        => $invest->user_id,
-            'valor_bruto'    => $valor,
-            'valor_liquido'  => $valor,
-            'cotas'          => $cotasAQueimar,
-            'cotas_taxa'     => 0,
-            'preco_por_cota' => $precoPorCota,
-            'patrimonio_bot' => $patrimonioAntes,
-            'status'         => 'confirmado',
-            'confirmado_at'  => now(),
-        ]);
-
-        // Cotas e valor que sobrariam após a retirada
-        $cotasRestantes = $invest->cotas - $cotasAQueimar;
-        $valorRestante  = $cotasRestantes * $precoPorCota;
-
-        // Zera o registro se queimou tudo OU se o resíduo virou poeira (< R$ 1),
-        // evitando cotas-fantasma que continuariam aparecendo no ranking.
-        if ($cotasAQueimar >= $invest->cotas || $valorRestante < 1) {
-            $invest->delete();
-        } else {
-            $invest->investimento_inicial = max(0, $invest->investimento_inicial - $valor);
-            $invest->cotas               -= $cotasAQueimar;
-            $invest->save();
-        }
-    });
-
-    return ['mensagem' => 'Retirada registrada com sucesso!'];
-})->middleware(['auth', 'whatsapp.verified']);
-
 Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
 
     if (Auth::id() !== 1) {
@@ -505,9 +441,11 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
                 throw new \Exception('Valor inválido.', 422);
             }
 
-            $valorLiquido  = $valorBruto * 0.99;
+            // Admin (user_id = 1) saca sem a taxa de 1%
+            $isAdmin       = $userId === 1;
+            $valorLiquido  = $isAdmin ? $valorBruto : $valorBruto * 0.99;
             $cotasAQueimar = $precoPorCota > 0 ? $valorBruto / $precoPorCota : 0;
-            $cotasTaxa     = $precoPorCota > 0 ? ($valorBruto * 0.01) / $precoPorCota : 0;
+            $cotasTaxa     = $isAdmin ? 0 : ($precoPorCota > 0 ? ($valorBruto * 0.01) / $precoPorCota : 0);
 
             BotWithdrawalRequest::create([
                 'user_id'        => $userId,
@@ -521,7 +459,11 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
             ]);
 
             // Queimar cotas do investidor
-            if ($cotasAQueimar >= $invest->cotas) {
+            // Zera o registro se queimou tudo OU se o resíduo virou poeira (< R$ 1),
+            // evitando cotas-fantasma que continuariam aparecendo no ranking.
+            $cotasRestantes = $invest->cotas - $cotasAQueimar;
+            $valorRestante  = $cotasRestantes * $precoPorCota;
+            if ($cotasAQueimar >= $invest->cotas || $valorRestante < 1) {
                 $invest->delete();
             } else {
                 $invest->cotas                -= $cotasAQueimar;

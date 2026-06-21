@@ -399,7 +399,7 @@
                             <button class="btn btn-outline-muted btn-sm" type="button" onclick="preencherMaximo()">Tudo</button>
                         </div>
                         <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
-                            Você receberá: <strong id="saque-liquido-preview" class="text-green">—</strong> (após 1% de taxa)
+                            Você receberá: <strong id="saque-liquido-preview" class="text-green">—</strong> @if(auth()->user()->id == 1)(sem taxa)@else(após 1% de taxa)@endif
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
@@ -640,9 +640,6 @@ function carregarTabela() {
                             <button class="btn btn-primary btn-sm px-3" onclick="adicionar(${u.id})">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
-                            <button class="btn btn-warning btn-sm px-3" onclick="retirar(${u.id})" style="background:#f0b90b;border:none;color:#000;">
-                                <i class="fa-solid fa-minus"></i>
-                            </button>
                             <button class="btn btn-danger btn-sm px-3" onclick="remover(${u.id})">
                                 <i class="fa-solid fa-trash"></i>
                             </button>
@@ -736,14 +733,6 @@ function adicionar(userId) {
     axios.post('/bot/investir-manual', { valor: parseFloat(valor), userId })
         .then(res => { alert(res.data.mensagem); carregarTabela(); })
         .catch(() => alert("Erro ao adicionar investimento."));
-}
-
-function retirar(userId) {
-    const valor = prompt("Valor retirado da Binance (R$):");
-    if (!valor || isNaN(valor) || parseFloat(valor) <= 0) { alert("Valor inválido"); return; }
-    axios.post(`/bot/retirar/${userId}`, { valor: parseFloat(valor) })
-        .then(res => { alert(res.data.mensagem); carregarTabela(); })
-        .catch(() => alert("Erro ao registrar retirada."));
 }
 
 function remover(userId) {
@@ -1082,11 +1071,14 @@ function preencherMaximo() {
     }
 }
 
+const ehAdmin = {{ auth()->user()->id == 1 ? 'true' : 'false' }};
+
 function atualizarPreviewSaque() {
     const input  = document.getElementById('saque-valor');
     const prev   = document.getElementById('saque-liquido-preview');
     const val    = parseFloat(input?.value) || 0;
-    if (prev) prev.textContent = val > 0 ? 'R$ ' + fmt(val * 0.99) : '—';
+    const fator  = ehAdmin ? 1 : 0.99;
+    if (prev) prev.textContent = val > 0 ? 'R$ ' + fmt(val * fator) : '—';
 }
 
 document.getElementById('saque-valor')?.addEventListener('input', function() {
@@ -1101,8 +1093,9 @@ function solicitarSaque() {
     if (valor <= 0) { alert('Informe um valor para sacar.'); return; }
     if (valor > valorAtualCache + 0.01) { alert('Valor maior que o saldo disponível.'); return; }
 
-    const liquido = fmt(valor * 0.99);
-    if (!confirm(`Confirma o saque de R$ ${fmt(valor)}?\n\nVocê receberá R$ ${liquido} via Pix (1% de taxa).\nAs cotas serão descontadas imediatamente.`)) return;
+    const liquido = fmt(valor * (ehAdmin ? 1 : 0.99));
+    const msgTaxa = ehAdmin ? 'via Pix (sem taxa)' : 'via Pix (1% de taxa)';
+    if (!confirm(`Confirma o saque de R$ ${fmt(valor)}?\n\nVocê receberá R$ ${liquido} ${msgTaxa}.\nAs cotas serão descontadas imediatamente.`)) return;
 
     input.disabled = true;
     axios.post('/bot/solicitar-saque', { valor })
