@@ -143,7 +143,7 @@ Route::get('/bot/patrimonio', function (BinanceController $binance) {
     return [
         'patrimonio_atual' => $patrimonioAtual,
     ];
-});
+})->middleware(['auth', 'whatsapp.verified']);
 
 Route::post('/bot/investir-manual', function (Request $req, BinanceController $binance) {
 
@@ -309,6 +309,7 @@ Route::get('/bot/tendencia', function (BinanceController $binance) {
         'ma21_4h'        => round($t['ma21_4h'], 2),
         'rsi_4h'         => $t['rsi_4h'],
         'preco'          => $preco,
+        'fear_greed'     => $t['fear_greed'] ?? 50,
     ]);
 })->middleware(['auth', 'whatsapp.verified']);
 
@@ -333,6 +334,12 @@ Route::post('/bot/config', function (Request $req) {
 
     if ($req->has('allin_threshold')) {
         $cfg->allin_threshold = max(5, min(50, (int) $req->input('allin_threshold')));
+    }
+
+    if ($req->has('min_notional')) {
+        // Valor mínimo por ordem (BRL) — evita dust trades. Piso de 10 pra não
+        // ferir o mínimo operacional da Binance; teto de 500 pra não travar o bot.
+        $cfg->min_notional = max(10.0, min(500.0, (float) $req->input('min_notional')));
     }
 
     $cfg->save();
@@ -612,6 +619,16 @@ Route::get('/bot/saques-pendentes', function () {
 
 // Webhook público — o PagBank chama esta URL após o pagamento (sem CSRF, sem auth)
 Route::post('/pix/webhook', [\App\Http\Controllers\PixController::class, 'webhook'])
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+
+// InfinitePay — webhook com token EMBEDDED no path (URL enviada no criarLink)
+Route::post('/infinitepay/webhook/{token}', [\App\Http\Controllers\PixController::class, 'webhookInfinitePay'])
+    ->name('infinitepay.webhook')
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+
+// InfinitePay — landing após o redirect do checkout (valida ?ref=txid)
+Route::get('/pix/retorno/{pagamento}', [\App\Http\Controllers\PixController::class, 'retorno'])
+    ->name('pix.retorno')
     ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 
 Route::middleware(['auth', 'whatsapp.verified'])->group(function () {

@@ -12,12 +12,14 @@ class BotConfig extends Model
         'salto',
         'nivel1', 'nivel2', 'nivel3', 'nivel4', 'nivel5', 'nivel6', 'nivel7',
         'allin_threshold',
+        'min_notional',
     ];
 
     protected $casts = [
         'nivel1' => 'float', 'nivel2' => 'float', 'nivel3' => 'float',
         'nivel4' => 'float', 'nivel5' => 'float', 'nivel6' => 'float',
         'nivel7' => 'float', 'allin_threshold' => 'integer',
+        'min_notional' => 'float',
     ];
 
     private static ?self $cache = null;
@@ -35,6 +37,7 @@ class BotConfig extends Model
                 'nivel6'          => 0.06,
                 'nivel7'          => 0.03,
                 'allin_threshold' => 15,
+                'min_notional'    => 50.0,
             ]);
         }
 

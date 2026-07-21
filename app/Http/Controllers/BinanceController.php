@@ -203,6 +203,28 @@ class BinanceController extends Controller
     }
 
     // ============================================================
+    // MY TRADES (histórico de fills — endpoint autenticado)
+    // ============================================================
+
+    /**
+     * Lista os trades executados (fills) de um símbolo.
+     * Paginação incremental: passe fromId = último id conhecido + 1, ou
+     * startTime para backfill inicial. Retorna no máximo $limit (1000) por chamada.
+     */
+    public function getMyTrades(string $symbol, ?int $fromId = null, ?int $startTime = null, int $limit = 1000): ?array
+    {
+        $params = http_build_query(array_filter([
+            'symbol'    => $symbol,
+            'fromId'    => $fromId,
+            'startTime' => $startTime,
+            'limit'     => $limit,
+            'timestamp' => $this->timestamp(),
+        ], fn($v) => $v !== null));
+
+        return $this->enviar('/api/v3/myTrades', "{$params}&signature={$this->assinar($params)}");
+    }
+
+    // ============================================================
     // KLINES (velas — endpoint público, sem autenticação)
     // ============================================================
 

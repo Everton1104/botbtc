@@ -270,7 +270,7 @@
             <div class="stat-tile" style="border-color:rgba(0,214,143,.3);">
                 <div class="label">Disponível via Pix</div>
                 <div class="value text-green">R$ <span id="valor-pix">—</span></div>
-                <div class="sub">Taxa de 1% já descontada</div>
+                <div class="sub">@if(auth()->user()->id == 1)Valor integral (sem taxa)@else Taxa de 1% já descontada @endif</div>
             </div>
         </div>
 
@@ -306,6 +306,18 @@
     {{-- Tendência do mercado — visível apenas ao admin --}}
     <div class="row g-3 mb-5">
         <div class="col-12">
+            <div class="stat-tile" id="tile-fg" style="border-color:rgba(120,120,120,.2);">
+                <div class="label"><i class="fa-solid fa-gauge-high me-1"></i>Medo &amp; Ganância</div>
+                <div class="d-flex align-items-center gap-2 mt-1">
+                    <span id="fg-valor" style="font-size:1.6rem;font-weight:700;">—</span>
+                    <span id="fg-label" class="text-muted" style="font-size:.85rem;">—</span>
+                </div>
+                <div class="mt-2" style="height:8px;border-radius:6px;background:linear-gradient(90deg,#ff4757 0%,#f0b90b 50%,#0ecb81 100%);position:relative;">
+                    <div id="fg-marker" style="position:absolute;top:-4px;width:4px;height:16px;background:#fff;border:1px solid #333;border-radius:2px;left:50%;transition:left .4s;"></div>
+                </div>
+                <div class="sub" style="margin-top:.4rem;">Influencia: medo extremo → compra mais · ganância extrema → vende mais</div>
+            </div>
+
             <div class="stat-tile" id="tile-tendencia" style="border-color:rgba(120,120,120,.2);">
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
                     <div>
@@ -372,7 +384,7 @@
                         </div>
                         <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
                             O bot receberá: <strong id="deposito-liquido-preview" class="text-green">—</strong>
-                            <span style="color:var(--muted);"> (após 1% de taxa do Mercado Pago)</span>
+                            <span style="color:var(--muted);">@if(auth()->user()->id == 1) (sem taxa)@else (após 1% de taxa do Mercado Pago)@endif</span>
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
@@ -443,7 +455,11 @@
     <div class="d-flex flex-column gap-2 mb-5">
         <div style="background:rgba(240,185,11,.08);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.75rem 1rem;font-size:.82rem;color:#f0b90b;">
             <i class="fa-solid fa-circle-info me-2"></i>
-            Saques via Pix possuem uma taxa operacional de <strong>1%</strong> sobre o valor sacado.
+            @if(auth()->user()->id == 1)
+                Saques via Pix do administrador são <strong>isentos de taxa</strong>.
+            @else
+                Saques via Pix possuem uma taxa operacional de <strong>1%</strong> sobre o valor sacado.
+            @endif
         </div>
         <div style="background:rgba(255,71,87,.08);border:1px solid rgba(255,71,87,.25);border-radius:10px;padding:.75rem 1rem;font-size:.82rem;color:#ff4757;">
             <i class="fa-solid fa-triangle-exclamation me-2"></i>
@@ -486,10 +502,22 @@
                         <span id="pix-timer" style="font-size:.95rem;font-weight:600;color:#f0b90b;letter-spacing:.04em;">30:00</span>
                     </div>
 
-                    {{-- QR Code --}}
-                    <div class="text-center mb-3">
+                    {{-- QR Code (Mercado Pago) --}}
+                    <div id="pix-qr-block" class="text-center mb-3">
                         <img id="pix-qr-img" src="" alt="QR Code PIX"
                              style="width:220px;height:220px;border-radius:12px;border:3px solid #32bcad;background:#fff;padding:6px;">
+                    </div>
+
+                    {{-- Botão de pagamento InfinitePay (link/redirect) --}}
+                    <div id="pix-pay-block" class="text-center mb-3" style="display:none;">
+                        <a id="pix-pay-link" href="#" target="_blank" rel="noopener"
+                           class="btn btn-lg w-100"
+                           style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);color:#fff;font-weight:700;border:none;padding:.9rem;">
+                            <i class="fa-solid fa-lock me-2"></i>Pagar na InfinitePay
+                        </a>
+                        <div class="mt-2" style="font-size:.75rem;color:var(--muted);">
+                            Após pagar, esta janela confirma automaticamente.
+                        </div>
                     </div>
 
                     {{-- Valor --}}
@@ -501,7 +529,7 @@
                     </div>
 
                     {{-- Copia e cola --}}
-                    <div class="mb-3">
+                    <div id="pix-copia-block" class="mb-3">
                         <label style="font-size:.75rem;color:var(--muted);margin-bottom:4px;">PIX Copia e Cola</label>
                         <div class="input-group input-group-sm">
                             <input type="text" id="pix-copia-cola" class="form-control"
@@ -636,14 +664,9 @@ function carregarTabela() {
                     <td class="fw-600">R$ ${fmt(u.valor_atual)}</td>
                     <td class="${lucroClass} fw-600">${lucroIcon} R$ ${fmt(u.lucro)}</td>
                     <td>
-                        <div class="d-flex gap-1">
-                            <button class="btn btn-primary btn-sm px-3" onclick="adicionar(${u.id})">
-                                <i class="fa-solid fa-plus"></i>
-                            </button>
-                            <button class="btn btn-danger btn-sm px-3" onclick="remover(${u.id})">
-                                <i class="fa-solid fa-trash"></i>
-                            </button>
-                        </div>
+                        <button class="btn btn-danger btn-sm px-3" onclick="remover(${u.id})" title="Remover investimento">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
                     </td>
                 </tr>
             `;
@@ -727,14 +750,6 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         });
 });
 
-function adicionar(userId) {
-    const valor = prompt("Valor a adicionar (R$):");
-    if (!valor || isNaN(valor) || parseFloat(valor) <= 0) { alert("Valor inválido"); return; }
-    axios.post('/bot/investir-manual', { valor: parseFloat(valor), userId })
-        .then(res => { alert(res.data.mensagem); carregarTabela(); })
-        .catch(() => alert("Erro ao adicionar investimento."));
-}
-
 function remover(userId) {
     if (!confirm("⚠️ ATENÇÃO: Isso remove o registro do banco sem calcular cotas.\nUse apenas para corrigir cadastros errados.\n\nConfirma a remoção?")) return;
     axios.delete(`/bot/remover-investimento/${userId}`)
@@ -765,7 +780,7 @@ function carregarSaques() {
                     <td class="text-muted" style="font-size:.8rem;">${parseFloat(s.cotas).toFixed(4)}</td>
                     <td>
                         <button class="btn btn-success btn-sm px-3" onclick="confirmarSaque(${s.id}, ${JSON.stringify(s.name).replace(/"/g, '&quot;')}, ${s.valor_liquido})">
-                            <i class="fa-solid fa-check me-1"></i>PIX Enviado
+                            <i class="fa-solid fa-bolt me-1"></i>Iniciar Saque
                         </button>
                     </td>
                 </tr>`;
@@ -799,8 +814,18 @@ function carregarDepositosPix() {
 
         let html = '';
         deps.forEach(d => {
-            const liquido = (d.valor * 0.99).toFixed(2);
-            const tagPix  = '<span style="background:rgba(50,188,173,.15);color:#32bcad;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;border:1px solid rgba(50,188,173,.3);">PAGO VIA PIX</span>';
+            // Líquido a creditar: InfinitePay já computa por método (PIX grátis,
+            // cartão 1-6x desconta taxa). Legado MP (sem valor_liquido): 1% não-admin.
+            let liquido;
+            if (d.valor_liquido != null) {
+                liquido = parseFloat(d.valor_liquido);
+            } else {
+                liquido = d.user_id === 1 ? d.valor : d.valor * 0.99;
+            }
+            const metodo = d.capture_method === 'credit_card'
+                ? `Cartão${d.installments > 1 ? ' ' + d.installments + 'x' : ''}`
+                : 'PIX';
+            const tagPix  = `<span style="background:rgba(50,188,173,.15);color:#32bcad;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;border:1px solid rgba(50,188,173,.3);">${metodo}</span>`;
 
             if (d.estornado) {
                 html += `
@@ -982,6 +1007,17 @@ function atualizarTendencia() {
         document.getElementById('tend-rsi').textContent = lblRsi;
         document.getElementById('tend-rsi').style.color = corRsi;
 
+        // Fear & Greed (0-100): medo extremo → compra mais, ganância extrema → vende mais.
+        const fg = d.fear_greed ?? 50;
+        const fgLbl = fg <= 24 ? 'Medo Extremo' : fg <= 44 ? 'Medo' : fg <= 55 ? 'Neutro' : fg <= 74 ? 'Ganância' : 'Ganância Extrema';
+        const fgCor = fg <= 24 ? '#ff4757' : fg <= 44 ? '#f0b90b' : fg <= 55 ? '#aaa' : fg <= 74 ? '#9be15d' : '#0ecb81';
+        const fgV = document.getElementById('fg-valor');
+        const fgL = document.getElementById('fg-label');
+        if (fgV) { fgV.textContent = fg; fgV.style.color = fgCor; }
+        if (fgL) { fgL.textContent = fgLbl; fgL.style.color = fgCor; }
+        const fgM = document.getElementById('fg-marker');
+        if (fgM) { fgM.style.left = Math.max(0, Math.min(100, fg)) + '%'; }
+
         // ATR / salto dinâmico
         if (d.salto_dinamico) {
             document.getElementById('tend-salto').textContent = 'R$ ' + fmt(d.salto_dinamico, 0);
@@ -1019,6 +1055,7 @@ setInterval(atualizarTendencia, 60000);
 
 // ── Painel do investidor ───────────────────────────────
 let precoBTCAtual = 0;
+const ehAdmin = {{ auth()->user()->id == 1 ? 'true' : 'false' }};
 
 function atualizarPainel() {
     axios.get("/bot/valor-atual").then(res => {
@@ -1026,7 +1063,7 @@ function atualizarPainel() {
         const safe = v => Number(v ?? 0);
 
         const valorAtual = safe(d.valor_atual);
-        const pixLiquido = valorAtual * 0.99;
+        const pixLiquido = valorAtual * (ehAdmin ? 1 : 0.99);
         valorAtualCache  = valorAtual;
         precoBTCAtual    = safe(d.preco_btc);
 
@@ -1070,8 +1107,6 @@ function preencherMaximo() {
         atualizarPreviewSaque();
     }
 }
-
-const ehAdmin = {{ auth()->user()->id == 1 ? 'true' : 'false' }};
 
 function atualizarPreviewSaque() {
     const input  = document.getElementById('saque-valor');
@@ -1259,7 +1294,7 @@ setInterval(carregarMeusSaques, 60000);
 function atualizarPreviewDeposito() {
     const val  = parseFloat(document.getElementById('deposito-valor').value) || 0;
     const prev = document.getElementById('deposito-liquido-preview');
-    prev.textContent = val > 0 ? 'R$ ' + fmt(val * 0.99) : '—';
+    prev.textContent = val > 0 ? 'R$ ' + fmt(val * (ehAdmin ? 1 : 0.99)) : '—';
 }
 
 // ── PIX Depósito ──────────────────────────────────────
@@ -1294,10 +1329,24 @@ function abrirPix() {
         const d = res.data;
         pixTxid = d.txid;
 
-        // Preenche QR
-        document.getElementById('pix-qr-img').src     = 'data:image/png;base64,' + d.qr_code;
-        document.getElementById('pix-copia-cola').value = d.copia_e_cola;
         document.getElementById('pix-valor-display').textContent = fmt(d.valor);
+
+        // Alterna UX conforme o gateway: InfinitePay (link/redirect) ou MP (QR)
+        const qrBlock   = document.getElementById('pix-qr-block');
+        const copiaBlock= document.getElementById('pix-copia-block');
+        const payBlock  = document.getElementById('pix-pay-block');
+        if (d.payment_url) {
+            qrBlock.style.display = 'none';
+            copiaBlock.style.display = 'none';
+            payBlock.style.display = 'block';
+            document.getElementById('pix-pay-link').href = d.payment_url;
+        } else {
+            qrBlock.style.display = 'block';
+            copiaBlock.style.display = 'block';
+            payBlock.style.display = 'none';
+            document.getElementById('pix-qr-img').src      = 'data:image/png;base64,' + d.qr_code;
+            document.getElementById('pix-copia-cola').value = d.copia_e_cola;
+        }
         document.getElementById('pix-copy-icon').className = 'fa-solid fa-copy';
 
         // Timer

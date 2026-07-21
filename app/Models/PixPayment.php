@@ -20,6 +20,11 @@ class PixPayment extends Model
         'btc_price',
         'registrado',
         'payload_webhook',
+        'infinitepay_slug',
+        'infinitepay_transaction',
+        'capture_method',
+        'installments',
+        'valor_liquido',
     ];
 
     protected $casts = [
@@ -29,6 +34,8 @@ class PixPayment extends Model
         'payload_webhook' => 'array',
         'valor'           => 'decimal:2',
         'btc_price'       => 'decimal:2',
+        'installments'    => 'integer',
+        'valor_liquido'   => 'decimal:2',
     ];
 
     public function user(): BelongsTo

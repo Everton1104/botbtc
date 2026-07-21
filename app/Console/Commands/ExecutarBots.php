@@ -39,6 +39,15 @@ class ExecutarBots extends Command
 
             $executor = app(BotExecutor::class);
 
+            // Persiste os trades executados (myTrades) da conta Binance única.
+            // Idempotente (dedup) — seguro rodar todo ciclo. Conta compartilhada
+            // entre todos os bots, então sincroniza uma vez antes do loop.
+            try {
+                $executor->sincronizarTrades();
+            } catch (\Throwable $e) {
+                Log::warning("ExecutarBots: falha ao sincronizar trades (não bloqueia execução): " . $e->getMessage());
+            }
+
             foreach ($bots as $bot) {
                 try {
                     $executor->executar($bot->id_user);

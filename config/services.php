@@ -45,6 +45,14 @@ return [
         'secret' => env('BINANCE_SECRET_KEY'),
     ],
 
+    'infinitepay' => [
+        // Link de pagamento/redirect — lojista identificado pelo HANDLE (sem API key).
+        'handle'        => env('INFINITEPAY_HANDLE'),
+        'webhook_token' => env('INFINITEPAY_WEBHOOK_TOKEN'),
+        // Gateway padrão dos depósitos: 'infinitepay' ou 'mercadopago'.
+        'gateway_padrao'=> env('GATEWAY_PADRAO', 'mercadopago'),
+    ],
+
     'whatsapp' => [
         'graph_token'  => env('GRAPH_API_TOKEN'),
         'app_secret'   => env('WHATSAPP_APP_SECRET'),
