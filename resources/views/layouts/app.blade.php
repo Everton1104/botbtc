@@ -238,6 +238,9 @@
                         <li class="nav-item">
                             <a class="nav-link" href="/simulacao"><i class="fa-solid fa-flask-vial me-1"></i>Simulação</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/relatorio"><i class="fa-solid fa-chart-column me-1"></i>Relatório</a>
+                        </li>
                         @endif
                         <li class="nav-item dropdown">
                             <a id="navbarDropdown" class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">

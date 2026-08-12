@@ -280,6 +280,36 @@ Route::get('/simulacao', function () {
     return view('simulacao');
 })->middleware(['auth', 'whatsapp.verified']);
 
+// Backtest fiel ao BotExecutor (engine PHP no servidor, candles 1h+4h + F&G).
+// Consumido pelo blade /simulacao. Read-only (só endpoints públicos).
+Route::get('/simulacao/run', function (Request $req) {
+    if (Auth::id() !== 1) abort(403);
+    $dias       = max(15, min(120, (int) $req->input('dias', 30)));
+    $patrimonio = max(100, (float) $req->input('patrimonio', 1000));
+    return app(\App\Services\BacktestService::class)->rodar($dias, $patrimonio);
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Relatório mensal de P&L realizado (FIFO sobre bot_trades). Admin only.
+Route::get('/relatorio', function () {
+    if (Auth::id() !== 1) abort(403);
+    return view('relatorio_mensal');
+})->middleware(['auth', 'whatsapp.verified']);
+
+// JSON consumido por /relatorio. Read-only (lê só bot_trades, sem chamar a Binance).
+Route::get('/bot/relatorio/mensal', function (Request $req) {
+    if (Auth::id() !== 1) abort(403);
+    $ano = $req->filled('ano') ? (int) $req->input('ano') : null;
+    $mes = $req->filled('mes') ? (int) $req->input('mes') : null;
+    return response()->json(app(\App\Services\PnlService::class)->mensal($ano, $mes));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Rolling de últimos N dias (default 30). Mesmo formato do mensal.
+Route::get('/bot/relatorio/rolling', function (Request $req) {
+    if (Auth::id() !== 1) abort(403);
+    $dias = $req->filled('dias') ? (int) $req->input('dias') : null;
+    return response()->json(app(\App\Services\PnlService::class)->rolling($dias));
+})->middleware(['auth', 'whatsapp.verified']);
+
 Route::get('/bot/tendencia', function (BinanceController $binance) {
     $preco = $binance->getPrecoBTC();
     if ($preco <= 0) return response()->json(['erro' => 'Preço indisponível'], 503);
@@ -345,6 +375,20 @@ Route::post('/bot/config', function (Request $req) {
     $cfg->save();
 
     return ['mensagem' => 'Configuração salva com sucesso!'];
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Gatilho manual do admin: modo "preparar subida" (inibe vendas, só compra).
+// O cancelamento das vendas abertas e a recriação do par acontecem no próximo
+// ciclo do bot (executarModoSubida / fluxo normal). Aqui só persiste o flag.
+Route::post('/bot/modo-subida', function (Request $req) {
+    if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
+    $req->validate(['ativo' => 'required|boolean']);
+    $state = \App\Models\BotState::where('id_user', Auth::id())->first();
+    if (!$state) return response()->json(['erro' => 'Estado não encontrado'], 404);
+    $state->modo_subida = (bool) $req->input('ativo');
+    $state->save();
+    \Log::info('BotExecutor: modo "preparar subida" ' . ($state->modo_subida ? 'ATIVADO' : 'DESATIVADO') . ' pelo admin.');
+    return ['modo_subida' => $state->modo_subida];
 })->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/admin/usuarios', function () {

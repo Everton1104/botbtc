@@ -20,6 +20,7 @@ class BotState extends Model
         'order_id_venda',
         'ativo',
         'pausado_ate',
+        'modo_subida',
     ];
 
     protected $casts = [
@@ -30,5 +31,6 @@ class BotState extends Model
         'preco_referencia'  => 'float',
         'ativo'             => 'boolean',
         'pausado_ate'       => 'datetime',
+        'modo_subida'       => 'boolean',
     ];
 }

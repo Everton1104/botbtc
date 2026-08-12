@@ -233,6 +233,68 @@
         </div>
     </div>
 
+    {{-- Modo "Preparar Subida" (gatilho manual do admin) --}}
+    <div class="section-title mt-2"><i class="fa-solid fa-rocket me-2"></i>Modo Preparar Subida</div>
+    <div class="card mb-4" id="card-modo-subida">
+        <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                <div style="max-width:620px;">
+                    <div style="font-size:.9rem;font-weight:600;">
+                        Estado atual:
+                        <span id="modo-subida-badge" class="badge bg-secondary ms-1">—</span>
+                    </div>
+                    <div style="font-size:.78rem;color:#aaa;margin-top:.4rem;">
+                        Quando <strong>ativo</strong>, o bot <strong>cancela as ordens de venda</strong> e só cria/mantém <strong>compras</strong> — você segura uma subida forte sem realizar lucro cedo. Continha comprando nas pullbacks. Desligue quando o movimento acabar (o bot volta ao grid normal sozinho).
+                    </div>
+                </div>
+                <button id="btn-modo-subida" class="btn btn-sm px-4" type="button" disabled>
+                    <i class="fa-solid fa-rocket me-1"></i><span id="btn-modo-subida-txt">—</span>
+                </button>
+            </div>
+            <div id="modo-subida-msg" class="mt-2" style="font-size:.82rem;"></div>
+        </div>
+    </div>
+
+    <script>
+    (function(){
+        const badge = document.getElementById('modo-subida-badge');
+        const btn = document.getElementById('btn-modo-subida');
+        const btnTxt = document.getElementById('btn-modo-subida-txt');
+        const msg = document.getElementById('modo-subida-msg');
+        const card = document.getElementById('card-modo-subida');
+        let ativo = false;
+
+        function render(){
+            badge.className = 'badge ms-1 ' + (ativo ? 'bg-success' : 'bg-secondary');
+            badge.textContent = ativo ? 'ATIVO' : 'inativo';
+            btn.className = 'btn btn-sm px-4 ' + (ativo ? 'btn-danger' : 'btn-success');
+            btnTxt.textContent = ativo ? 'Desativar' : 'Ativar';
+            btn.disabled = false;
+            if (card) card.style.borderLeft = ativo ? '4px solid #28a745' : '1px solid var(--border)';
+        }
+        function carregar(){
+            axios.get('/binance/getConf').then(r => {
+                ativo = !!(r.data && r.data.modo_subida);
+                render();
+            }).catch(()=>{ msg.innerHTML = '<span style="color:#dc3545;">Não foi possível carregar o estado.</span>'; });
+        }
+        btn.addEventListener('click', () => {
+            btn.disabled = true;
+            axios.post('/bot/modo-subida', { ativo: !ativo }).then(r => {
+                ativo = !!(r.data && r.data.modo_subida);
+                render();
+                msg.innerHTML = ativo
+                    ? '<span style="color:#28a745;"><i class="fa-solid fa-check me-1"></i>Modo ativado — vendas inibidas a partir do próximo ciclo do bot (≤1 min).</span>'
+                    : '<span style="color:#aaa;"><i class="fa-solid fa-check me-1"></i>Modo desativado — o bot volta ao grid normal.</span>';
+            }).catch(()=>{
+                msg.innerHTML = '<span style="color:#dc3545;">Erro ao alternar o modo.</span>';
+                btn.disabled = false;
+            });
+        });
+        carregar();
+    })();
+    </script>
+
     @endif {{-- fim admin --}}
 
 

@@ -25,9 +25,77 @@ class BotExecutor
     private const SALTO_MAX = 10000;
     private const ATR_MULT  = 0.8;
 
+    // Janelas de volatilidade (escala DIÁRIA) para o salto — mistura estável + reativa.
+    // Antes: ATR 4h×14 (~2 dias) chicoteava com a calmaria recente e sub-dimensionava o
+    // grid (movimento de 4h ≠ movimento que o salto precisa espaçar). Agora âncora de
+    // regime (30d, estável) + reatividade (14d), com freio de ruptura: se a curta
+    // ultrapassa RUPTURA× a longa (regime esquentou), segue a curta.
+    private const ATR_DIAS_LONG  = 30;
+    private const ATR_DIAS_CURTA = 14;
+    private const ATR_PESO_LONG  = 0.7;
+    private const ATR_RUPTURA    = 1.5;
+
+    // Floor absoluto (BRL) para criação de ordem, independente do valor no config.
+    // Garante que nunca saia dust trade (< R$50) mesmo se min_notional estiver
+    // 0/NULL transitório no bot_config (em ago/2026 ainda saíam ordens de R$3-R$40
+    // apesar dos guards — este floor trava a saída; o log em criarOrdensNovas
+    // diagnostica a causa raiz se houver recaída).
+    private const MIN_NOTIONAL_FLOOR = 50.0;
+
     public function __construct(BinanceController $binance)
     {
         $this->binance = $binance;
+    }
+
+    /** min_notional efetivo: nunca abaixo do floor absoluto de R$50. */
+    private function minNotionalEfetivo(BotConfig $config): float
+    {
+        $cfg = (float) $config->min_notional;
+        return $cfg > 0 ? $cfg : self::MIN_NOTIONAL_FLOOR;
+    }
+
+    /**
+     * Modo "preparar subida" (gatilho manual do admin): inibe as ordens de VENDA,
+     * mantém/cria só COMPRA (captura pullbacks numa subida forte sem realizar cedo).
+     * Fluxo isolado do state machine — não toca em direção/contadores, então não
+     * dispara o guard de "par incompleto" nem contadores fantasmas.
+     */
+    private function executarModoSubida(BotState $state, array $open, float $precoAtual): string
+    {
+        // 1. Cancela qualquer ordem de VENDA aberta (no modo só compramos).
+        $cancelou = false;
+        foreach ($open as $ordem) {
+            if (($ordem['side'] ?? '') === 'SELL') {
+                $this->binance->cancelarOrdem(self::SYMBOL, $ordem['orderId']);
+                $cancelou = true;
+            }
+        }
+
+        // 2. Re-lista ordens após cancelamentos pra contar compras.
+        if ($cancelou) {
+            $open = $this->binance->getOpenOrders(self::SYMBOL);
+            if (!is_array($open)) $open = [];
+            Log::info("BotExecutor: modo subida — ordem(ns) de venda cancelada(s).");
+        }
+        $comprasAbertas = 0;
+        foreach ($open as $ordem) {
+            if (($ordem['side'] ?? '') === 'BUY') $comprasAbertas++;
+        }
+
+        // 3. Se não há compra aberta, cria uma (captura pullback). soCompra=true inibe a venda.
+        if ($comprasAbertas === 0) {
+            $state->order_id_compra = null;
+            $state->order_id_venda  = null;
+            $ok = $this->criarOrdensNovas($state, $precoAtual, true);
+            if ($ok) {
+                Log::info("BotExecutor: modo subida — compra criada em {$precoAtual} (venda inibida).");
+                return "Modo subida ativo: compra criada, venda inibida.";
+            }
+            Log::warning("BotExecutor: modo subida — não foi possível criar compra (saldo/API).");
+            return "Modo subida ativo: sem compra (saldo/API).";
+        }
+
+        return "Modo subida ativo: {$comprasAbertas} compra aberta, venda inibida.";
     }
 
     public function executar(string $userId): string
@@ -58,6 +126,15 @@ class BotExecutor
         if ($precoAtual <= 0) {
             Log::warning("BotExecutor [{$userId}]: preço inválido ({$precoAtual}). Abortando.");
             return "Preço inválido. Abortando execução.";
+        }
+
+        // ============================================================
+        // MODO "PREPARAR SUBIDA" (gatilho manual do admin) — fluxo próprio:
+        // cancela ordens de venda, mantém/cria só compra, sem tocar no state
+        // machine (contadores congelam). Volta ao normal quando desligado.
+        // ============================================================
+        if ($state->modo_subida) {
+            return $this->executarModoSubida($state, $open, $precoAtual);
         }
 
         // ============================================================
@@ -170,8 +247,8 @@ class BotExecutor
                 $saldoBTCChk = (float) ($balancesChk->firstWhere('asset', 'BTC')['free'] ?? 0);
                 $saldoBRLChk = (float) ($balancesChk->firstWhere('asset', 'BRL')['free'] ?? 0);
                 $saltoRef     = $state->salto > 0 ? (float) $state->salto : $precoAtual * 0.01;
-                $valorVendaOk = $saldoBTCChk * ($precoAtual + $saltoRef) >= $configChk->min_notional;
-                $valorCompraOk = $saldoBRLChk >= $configChk->min_notional;
+                $valorVendaOk = $saldoBTCChk * ($precoAtual + $saltoRef) >= $this->minNotionalEfetivo($configChk);
+                $valorCompraOk = $saldoBRLChk >= $this->minNotionalEfetivo($configChk);
 
                 if ($side === 'BUY' && !$valorVendaOk) {
                     Log::info("BotExecutor [{$userId}]: só perna BUY, mas BTC insuficiente (< min_notional) pra vender — posição unilateral mantida (sem churn). BTC={$saldoBTCChk}.");
@@ -425,14 +502,14 @@ class BotExecutor
         $state->order_id_compra = null;
         $state->order_id_venda  = null;
 
-        if ($valorCompra >= $config->min_notional) {
+        if ($valorCompra >= $this->minNotionalEfetivo($config)) {
             $orderCompra            = $this->binance->buyLimit($precoCompra, $valorCompra / $precoCompra);
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
         $quantidadeVenda = $saldoBTC * $config->nivel1;
 
-        if ($quantidadeVenda > 0 && ($quantidadeVenda * $precoVenda) >= $config->min_notional) {
+        if ($quantidadeVenda > 0 && ($quantidadeVenda * $precoVenda) >= $this->minNotionalEfetivo($config)) {
             $orderVenda            = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
             $state->order_id_venda = $orderVenda['orderId'] ?? null;
         }
@@ -527,6 +604,30 @@ class BotExecutor
             $closesD = array_map(fn($k) => (float) $k[4], $klines4h);
             $atr     = $this->calcularATR($highsD, $lowsD, $closesD, 14);
         }
+
+        // ── ATR em escala DIÁRIA (mistura 30d/14d) → base estável do salto ──────
+        // O ATR 4h acima reage a ~2 dias e chicoteia (uma calmaria recente ilude o
+        // bot, que sub-dimensiona o grid). O salto precisa espaçar um movimento
+        // inter-diário, então a base é diária: âncora 30d (regime) + 14d (reatividade),
+        // com freio de ruptura. Fallback = ATR 4h se faltar kline diária.
+        $atrSalto    = $atr;
+        $atrLongaDia = 0.0;
+        $atrCurtaDia = 0.0;
+        $klines1d    = $this->binance->getKlines(self::SYMBOL, '1d', self::ATR_DIAS_LONG + 10);
+        if (is_array($klines1d) && count($klines1d) >= self::ATR_DIAS_LONG + 1) {
+            $h1d = array_map(fn($k) => (float) $k[2], $klines1d);
+            $l1d = array_map(fn($k) => (float) $k[3], $klines1d);
+            $c1d = array_map(fn($k) => (float) $k[4], $klines1d);
+            $atrLongaDia = $this->calcularATR($h1d, $l1d, $c1d, self::ATR_DIAS_LONG);
+            $atrCurtaDia = $this->calcularATR($h1d, $l1d, $c1d, self::ATR_DIAS_CURTA);
+        }
+        if ($atrLongaDia > 0 && $atrCurtaDia > 0) {
+            // Freio de ruptura: se a curta disparou (>RUPTURA× a longa), regime
+            // esquentou — segue a curta pra não sub-dimensionar o grid numa violência nova.
+            $atrSalto = ($atrCurtaDia > self::ATR_RUPTURA * $atrLongaDia)
+                ? $atrCurtaDia
+                : self::ATR_PESO_LONG * $atrLongaDia + (1 - self::ATR_PESO_LONG) * $atrCurtaDia;
+        }
         // // salto antigo: atr * 0.5, teto 15000 (gerava ~6k no ATR de 4h)
         // $saltoDin = $atr > 0
         //     ? max(1500, min(15000, (int) (round($atr * 0.5 / 500) * 500)))
@@ -536,17 +637,15 @@ class BotExecutor
         $bollData  = $this->calcularBollinger($closes, 21);
 
         // ── Salto dinâmico (tamanho do grid) ─────────────────────────────────
-        // Base = volatilidade realizada (ATR 4h). Antes era atr*0.25 clamp
-        // [2000,5000]; como o ATR 4h do BTC costuma ficar em ~6k-10k, atr*0.25
-        // dava ~1.5k-2.5k e o salto quase sempre batia no piso de 2k.
-        // Agora ATR_MULT maior deixa o salto variar de verdade com a volatilidade,
-        // e o modulador de Bollinger width ajusta o grid ao regime atual:
+        // Base = volatilidade realizada diária (mistura 30d/14d em $atrSalto; antes
+        // era ATR 4h, que chicoteava com a calmaria recente e sub-dimensionava o grid).
+        // ATR_MULT escala a base; o modulador de Bollinger width ajusta ao regime atual:
         //   squeeze (bandas apertadas, ~0.02)  → reduz  → captura oscilações miúdas
         //   neutro   (~0.04)                   → ×1.0
         //   expansão (bandas largas, ~0.06+)   → aumenta → espera mais em mercado elétrico
-        $base     = $atr * self::ATR_MULT;
+        $base     = $atrSalto * self::ATR_MULT;
         $widthMod = max(0.65, min(1.5, 0.65 + ($bollData['width'] / 0.04) * 0.35));
-        $saltoDin = $atr > 0
+        $saltoDin = $atrSalto > 0
             ? (int) round(max(self::SALTO_MIN, min(self::SALTO_MAX, $base * $widthMod)) / 500) * 500
             : 2500;
 
@@ -628,8 +727,8 @@ class BotExecutor
         // Log só quando o bot executa de verdade; o dashboard chama com $registrarLog=false
         if ($registrarLog) {
             Log::info(sprintf(
-                "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR=%.0f salto=%d wMod=%.2f dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f F&G=%d",
-                $ma21, $ema9, $rsi, $atr, $saltoDin, $widthMod, $distancia * 100,
+                "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR4h=%.0f salto=%d ATRdL=%.0f ATRdC=%.0f wMod=%.2f dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f F&G=%d",
+                $ma21, $ema9, $rsi, $atr, $saltoDin, $atrLongaDia, $atrCurtaDia, $widthMod, $distancia * 100,
                 $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
                 $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda, $fngVal
             ));
@@ -640,6 +739,9 @@ class BotExecutor
             'fator_venda'    => $fatorVenda,
             'rsi'            => $rsi,
             'atr'            => $atr,
+            'atr_longa'      => round($atrLongaDia, 2),
+            'atr_curta'      => round($atrCurtaDia, 2),
+            'atr_salto'      => round($atrSalto, 2),
             'salto_dinamico' => $saltoDin,
             'macd'           => $macdData['macd'],
             'macd_signal'    => $macdData['signal'],
@@ -769,7 +871,7 @@ class BotExecutor
     // CRIAÇÃO DE NOVAS ORDENS
     // ============================================================
 
-    private function criarOrdensNovas(BotState $state, float $precoAtual): bool
+    private function criarOrdensNovas(BotState $state, float $precoAtual, bool $soCompra = false): bool
     {
         $config    = BotConfig::atual();
         $tendencia = $this->analisarTendencia($precoAtual);
@@ -813,9 +915,14 @@ class BotExecutor
         $state->order_id_venda  = null;
 
         // ── COMPRA ───────────────────────────────────────────────────
+        $minN        = $this->minNotionalEfetivo($config);
         $valorCompra = 0.0;
 
-        if ($allin && $direcao === 'down') {
+        if ($soCompra) {
+            // Modo "preparar subida": sempre compra nível1 (independente da direção)
+            // para capturar pullbacks sem realizar lucro cedo.
+            $valorCompra = $saldoBRL * $config->nivel1 * $fatorCompra;
+        } elseif ($allin && $direcao === 'down') {
             $valorCompra = $saldoBRL * self::ALLIN_CAP;
         } elseif ($direcao === 'down') {
             $valorCompra = $saldoBRL * $this->percentualPorSalto($contadorAtual, $config) * $fatorCompra;
@@ -826,22 +933,36 @@ class BotExecutor
         // Bump simétrico ao da SELL: se o tamanho parcial ficou abaixo do
         // min_notional mas o BRL total comporta, comprar o mínimo. Espelho do
         // bug do lado SELL — sem isso, BRL baixo geraria loop "par incompleto".
-        if ($valorCompra > 0 && $valorCompra < $config->min_notional
-            && $saldoBRL >= $config->min_notional) {
-            $valorCompra = (float) $config->min_notional;
+        if ($valorCompra > 0 && $valorCompra < $minN && $saldoBRL >= $minN) {
+            $valorCompra = (float) $minN;
         }
 
         $criouCompra = false;
-        if ($valorCompra >= $config->min_notional) {
+        if ($valorCompra >= $minN) {
             $orderCompra            = $this->binance->buyLimit($precoCompra, $valorCompra / $precoCompra);
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
             $criouCompra            = $state->order_id_compra !== null;
             if (!$criouCompra) {
                 Log::warning("BotExecutor: BUY rejeitada pela Binance — " . json_encode($orderCompra, JSON_UNESCAPED_UNICODE));
             }
+        } elseif ($valorCompra > 0) {
+            // Diagnóstico de dust: se isto aparecer com cfg_min=0, o config estava
+            // zerado em runtime (floor de R$50 evitou a ordem poeira).
+            Log::info("BotExecutor: BUY abaixo do min_notional, não criada. valorCompra=R$" . number_format($valorCompra, 2)
+                . " < R$" . number_format($minN, 2) . " · saldoBRL=R$" . number_format($saldoBRL, 2)
+                . " · dir={$direcao} contador={$contadorAtual} allin=" . ($allin ? 1 : 0)
+                . " cfg_min=" . var_export($config->min_notional, true));
         }
 
         // ── VENDA ────────────────────────────────────────────────────
+        if ($soCompra) {
+            // Modo "preparar subida": inibe as ordens de venda — só compra,
+            // pra não realizar lucro cedo numa subida forte.
+            $state->save();
+            Log::info("BotExecutor: modo subida ativo — venda inibida. Compra criada=" . ($criouCompra ? 'sim' : 'nao') . ".");
+            return $criouCompra;
+        }
+
         $percentualVenda = 0.0;
 
         // All-in de venda só faz sentido no topo (longa sequência de subidas =
@@ -864,19 +985,23 @@ class BotExecutor
         // o BTC total comporta, vender o mínimo em vez de bloquear. Sem isso, o
         // bot entrava em loop de "par incompleto" (recriava sem a perna SELL)
         // quando o BTC estava baixo — regressão observada em 2026-07-21.
-        if ($valorVenda < $config->min_notional && $percentualVenda > 0 && $saldoBTC > 0
-            && $saldoBTC * $precoVenda >= $config->min_notional) {
-            $qtyVenda   = min($saldoBTC, $config->min_notional / $precoVenda);
+        if ($valorVenda < $minN && $percentualVenda > 0 && $saldoBTC > 0
+            && $saldoBTC * $precoVenda >= $minN) {
+            $qtyVenda   = min($saldoBTC, $minN / $precoVenda);
             $valorVenda = $qtyVenda * $precoVenda;
         }
 
-        if ($percentualVenda > 0 && $saldoBTC > 0 && $valorVenda >= $config->min_notional) {
+        if ($percentualVenda > 0 && $saldoBTC > 0 && $valorVenda >= $minN) {
             $orderVenda            = $this->binance->sellLimit($precoVenda, $qtyVenda);
             $state->order_id_venda = $orderVenda['orderId'] ?? null;
             $criouVenda            = $state->order_id_venda !== null;
             if (!$criouVenda) {
                 Log::warning("BotExecutor: SELL rejeitada pela Binance — " . json_encode($orderVenda, JSON_UNESCAPED_UNICODE));
             }
+        } elseif ($percentualVenda > 0 && $saldoBTC > 0) {
+            Log::info("BotExecutor: SELL abaixo do min_notional, não criada. valorVenda=R$" . number_format($valorVenda, 2)
+                . " < R$" . number_format($minN, 2) . " · saldoBTC=" . number_format($saldoBTC, 8)
+                . " · dir={$direcao} contador={$contadorAtual} cfg_min=" . var_export($config->min_notional, true));
         }
 
         $state->save();
@@ -884,8 +1009,8 @@ class BotExecutor
         // Se ambas as pernas foram tentadas e nenhuma entrou, o par nasceu vazio.
         // Sinalizar falha evita o loop de "par incompleto" que recria e falha pra
         // sempre (ex: saldo abaixo do mínimo da Binance dos dois lados).
-        $tentouAlguma = $valorCompra >= $config->min_notional
-            || ($percentualVenda > 0 && $saldoBTC > 0 && $valorVenda >= $config->min_notional);
+        $tentouAlguma = $valorCompra >= $this->minNotionalEfetivo($config)
+            || ($percentualVenda > 0 && $saldoBTC > 0 && $valorVenda >= $this->minNotionalEfetivo($config));
         if ($tentouAlguma && !$criouCompra && !$criouVenda) {
             Log::error("BotExecutor: nenhuma ordem criada (compra nem venda). Par vazio — verifique saldo/mínimos da Binance.");
             return false;
