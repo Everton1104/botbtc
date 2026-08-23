@@ -432,7 +432,34 @@
         </div>
     </div>
 
-    {{-- Depósito PIX --}}
+    {{-- Depósito: admin credita direto nas cotas; usuário comum via PIX --}}
+    @if(auth()->user()->id == 1)
+    <div class="mb-3">
+        <div class="card" style="border-color:rgba(0,214,143,.25);">
+            <div class="card-body">
+                <div class="section-title mb-3"><i class="fa-solid fa-circle-plus me-2" style="color:#00d68f;"></i>Adicionar Fundos (Admin)</div>
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-5">
+                        <label class="form-label">Valor a adicionar (R$)</label>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">R$</span>
+                            <input type="number" id="deposito-valor" class="form-control" min="1" step="0.01" placeholder="0,00" oninput="atualizarPreviewDeposito()">
+                        </div>
+                        <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
+                            Valor creditado no bot: <strong id="deposito-liquido-preview" class="text-green">—</strong>
+                            <span style="color:var(--muted);"> (crédito direto nas cotas, sem gateway de pagamento)</span>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <button class="btn w-100" onclick="adicionarFundosDireto()" style="background:#00d68f;border:none;color:#000;font-weight:600;">
+                            <i class="fa-solid fa-bolt me-1"></i>Adicionar Diretamente
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    @else
     <div class="mb-3">
         <div class="card" style="border-color:rgba(0,214,143,.25);">
             <div class="card-body">
@@ -446,7 +473,7 @@
                         </div>
                         <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
                             O bot receberá: <strong id="deposito-liquido-preview" class="text-green">—</strong>
-                            <span style="color:var(--muted);">@if(auth()->user()->id == 1) (sem taxa)@else (após 1% de taxa do Mercado Pago)@endif</span>
+                            <span style="color:var(--muted);"> (após 1% de taxa do Mercado Pago)</span>
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
@@ -458,6 +485,7 @@
             </div>
         </div>
     </div>
+    @endif
 
     {{-- Saque --}}
     <div class="mb-3" id="area-saque-form">
@@ -963,6 +991,25 @@ function registrarDepositoNoBot(pixId, userId, valorLiquido, nome) {
             carregarTabela();
         })
         .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao registrar depósito.'));
+}
+
+// ── Adicionar fundos direto (admin, sem PIX) ───────────
+function adicionarFundosDireto() {
+    const valor = parseFloat(document.getElementById('deposito-valor').value);
+    if (!valor || valor < 1) { alert('Informe um valor de pelo menos R$ 1,00.'); return; }
+
+    const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valor);
+    if (!confirm(`Adicionar R$ ${fmtVal} diretamente às suas cotas?\n\nO valor é creditado no bot sem passar por gateway de pagamento.`)) return;
+
+    axios.post('/bot/investir-manual', { valor })
+        .then(res => {
+            alert(res.data.mensagem ?? 'Fundos adicionados com sucesso!');
+            document.getElementById('deposito-valor').value = '';
+            atualizarPreviewDeposito();
+            atualizarPainel();
+            carregarTabela();
+        })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao adicionar fundos.'));
 }
 
 function confirmarSaque(id, nome, valorLiquido) {

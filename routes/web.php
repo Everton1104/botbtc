@@ -147,15 +147,18 @@ Route::get('/bot/patrimonio', function (BinanceController $binance) {
 
 Route::post('/bot/investir-manual', function (Request $req, BinanceController $binance) {
 
+    // Crédito direto de cotas sem gateway — ação exclusiva do admin
+    if (Auth::id() !== 1) {
+        return response()->json(['mensagem' => 'Acesso negado.'], 403);
+    }
+
     $valor = floatval($req->input('valor'));
 
     if ($valor <= 0) {
         return ['mensagem' => 'Valor inválido'];
     }
 
-    $userId = (Auth::id() === 1 && $req->filled('userId'))
-        ? (int) $req->input('userId')
-        : Auth::id();
+    $userId = $req->filled('userId') ? (int) $req->input('userId') : Auth::id();
 
     // Patrimônio lido ANTES da transaction (chamada externa — Binance)
     $saldos = $binance->getSaldos();
