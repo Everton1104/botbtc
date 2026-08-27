@@ -68,6 +68,48 @@
 
     </div>
 
+    {{-- P&L: grid vs oscilação --}}
+    <div class="section-title mt-2"><i class="fa-solid fa-chart-line me-2"></i>Lucro do Bot — Grid × Oscilação</div>
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Período</th>
+                            <th>Grid (operações)</th>
+                            <th>Oscilação BTC</th>
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-pnl-decomp">
+                        <tr><td colspan="4" class="text-center text-muted py-3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {{-- Simulador: quanto um valor X teria rendido no período --}}
+        <div class="card-body pt-0 pb-0">
+            <div class="d-flex flex-wrap align-items-center gap-2" style="font-size:.85rem;">
+                <i class="fa-solid fa-calculator" style="color:#f0b90b;"></i>
+                <span>Se tivesse investido</span>
+                <div class="input-group input-group-sm" style="width:150px;">
+                    <span class="input-group-text">R$</span>
+                    <input type="number" id="pnl-exemplo-valor" class="form-control" value="1000" min="0" step="50">
+                </div>
+                <span>no bot:</span>
+            </div>
+            <div id="pnl-exemplo-resultado" class="mt-2" style="font-size:.85rem;"></div>
+        </div>
+        <div class="card-body pt-2" style="font-size:.76rem;color:#888;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            <strong>Grid</strong> = ciclos de compra→venda fechados no período (FIFO, líquido de fees).
+            <strong>Oscilação</strong> = efeito da variação do preço do BTC: posição ainda aberta + ganho/perda realizado ao vender estoque herdado do início do período (remarcado ao preço da data).
+            A soma das duas é a variação total do patrimônio na janela.
+            Simulação proporcional ao patrimônio do bot no início de cada período <span id="pnl-exemplo-base-info">(base: —)</span>.
+        </div>
+    </div>
+
     {{-- Ordens abertas --}}
     <div class="section-title mt-2"><i class="fa-solid fa-list-check me-2"></i>Ordens Abertas</div>
     <div class="card mb-4">
@@ -163,6 +205,35 @@
                     <i class="fa-solid fa-circle-check me-1"></i> Transferência concluída — Liberar bot
                 </button>
             </div>
+        </div>
+    </div>
+
+    {{-- Transferências diretas do admin na Binance --}}
+    <div class="section-title mt-2"><i class="fa-solid fa-right-left me-2"></i>Transferências Diretas (Binance)</div>
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Moeda</th>
+                            <th>Valor</th>
+                            <th>Taxa</th>
+                            <th>Data</th>
+                            <th>Destino</th>
+                            <th>Origem</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-transfers">
+                        <tr><td colspan="7" class="text-center text-muted py-3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-body pt-0" style="font-size:.76rem;color:#888;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            Depósitos e saques feitos <strong>direto na conta Binance</strong> (fora do fluxo de investidores — aqueles estão em Saques Pendentes/Depósitos PIX). Sincronizados automaticamente (API Binance expõe 90 dias; mais antigo entra como lançamento manual).
         </div>
     </div>
 
@@ -736,6 +807,83 @@ function atualizarAdmin() {
 atualizarAdmin();
 setInterval(atualizarAdmin, 30000);
 
+// ── P&L: grid vs oscilação ────────────────────────────
+let pnlDecompDados = []; // [{rotulo, d}] — alimenta tabela e simulador
+
+function renderPnlExemplo() {
+    const valor = parseFloat(document.getElementById('pnl-exemplo-valor').value) || 0;
+    const dest = document.getElementById('pnl-exemplo-resultado');
+    const baseInfo = document.getElementById('pnl-exemplo-base-info');
+    if (valor <= 0 || !pnlDecompDados.length) { dest.innerHTML = ''; return; }
+
+    const cls = v => v > 0 ? 'text-green' : v < 0 ? 'text-red' : '';
+    const sgn = v => v > 0 ? '+' : v < 0 ? '−' : '';
+    let html = '';
+    const bases = [];
+    pnlDecompDados.forEach(l => {
+        const d = l.d;
+        if (d.retorno_total === null || d.retorno_total === undefined) {
+            html += `<div>· ${l.rotulo}: <span class="text-muted">sem base de patrimônio no período.</span></div>`;
+            return;
+        }
+        const g = valor * d.retorno_grid / 100;
+        const o = valor * d.retorno_oscilacao / 100;
+        const t = valor * d.retorno_total / 100;
+        html += `
+            <div>· ${l.rotulo}:
+                <span class="${cls(g)}">${sgn(g)}R$ ${fmt(Math.abs(g))}</span> no grid ·
+                <span class="${cls(o)}">${sgn(o)}R$ ${fmt(Math.abs(o))}</span> em oscilação →
+                <strong class="${cls(t)}">${sgn(t)}R$ ${fmt(Math.abs(t))}</strong>
+                <span class="text-muted">(${fmt(d.retorno_total, 2)}%)</span>
+            </div>`;
+        bases.push(`R$ ${fmt(d.patrimonio_ini)} em ${d.patrimonio_ini_em} (${d.patrimonio_fonte === 'diaria' ? 'série diária' : 'por saques'}${d.patrimonio_aproximado ? ', aprox.' : ''})`);
+    });
+    dest.innerHTML = html;
+    if (bases.length) baseInfo.textContent = '(base: ' + bases.join(' · ') + ')';
+}
+
+function carregarPnlDecomp() {
+    Promise.all([
+        axios.get('/bot/relatorio/decomposicao?dias=7'),
+        axios.get('/bot/relatorio/decomposicao?dias=30'),
+    ]).then(([r7, r30]) => {
+        const linhas = [
+            { rotulo: 'Últimos 7 dias',  d: r7.data  },
+            { rotulo: 'Últimos 30 dias', d: r30.data },
+        ];
+        let html = '';
+        linhas.forEach(l => {
+            const d = l.d;
+            if (d.vazio) {
+                html += `<tr><td class="fw-500">${l.rotulo}</td><td colspan="3" class="text-muted">Sem dados no período.</td></tr>`;
+                return;
+            }
+            const cel = v => `<td class="${v > 0 ? 'text-green' : v < 0 ? 'text-red' : ''} fw-600">${v > 0 ? '▲' : v < 0 ? '▼' : ''} R$ ${fmt(Math.abs(v))}</td>`;
+            const sub = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}R$ ${fmt(Math.abs(v))}`;
+            html += `
+                <tr>
+                    <td class="fw-500">${l.rotulo}
+                        <div class="sub">${d.periodo.inicio} → ${d.periodo.fim}</div>
+                    </td>
+                    ${cel(d.grid)}
+                    <td class="${d.oscilacao > 0 ? 'text-green' : d.oscilacao < 0 ? 'text-red' : ''} fw-600">${d.oscilacao > 0 ? '▲' : d.oscilacao < 0 ? '▼' : ''} R$ ${fmt(Math.abs(d.oscilacao))}
+                        <div class="sub">posição ${sub(d.oscilacao_nao_realizada)} · realizado ${sub(d.oscilacao_realizada)}</div>
+                    </td>
+                    ${cel(d.total)}
+                </tr>`;
+        });
+        document.getElementById('tabela-pnl-decomp').innerHTML = html || '<tr><td colspan="4" class="text-center text-muted py-3">Sem dados.</td></tr>';
+        pnlDecompDados = linhas.filter(l => !l.d.vazio);
+        renderPnlExemplo();
+    }).catch(() => {
+        document.getElementById('tabela-pnl-decomp').innerHTML =
+            '<tr><td colspan="4" class="text-center text-muted py-3">Erro ao carregar P&L.</td></tr>';
+    });
+}
+document.getElementById('pnl-exemplo-valor').addEventListener('input', renderPnlExemplo);
+carregarPnlDecomp();
+setInterval(carregarPnlDecomp, 300000);
+
 // Tabela de investidores
 function carregarTabela() {
     axios.get('/admin/usuarios-investimentos').then(res => {
@@ -767,8 +915,50 @@ function carregarTabela() {
 carregarTabela();
 setInterval(carregarTabela, 60000);
 
-function carregarOrdens() {
-    axios.get('/binance/getOrdens').then(res => {
+// ── Transferências diretas (Binance) ───────────────────
+function carregarTransfers() {
+    axios.get('/bot/transferencias').then(res => {
+        const rows = Array.isArray(res.data) ? res.data : [];
+        if (!rows.length) {
+            document.getElementById('tabela-transfers').innerHTML =
+                '<tr><td colspan="7" class="text-center text-muted py-3">Nenhuma transferência direta registrada.</td></tr>';
+            return;
+        }
+        let html = '';
+        rows.forEach(t => {
+            const ehSaque = t.transfer_type === 'withdraw';
+            const badge = ehSaque
+                ? '<span class="badge-red"><i class="fa-solid fa-arrow-up me-1"></i>Saque</span>'
+                : '<span class="badge-green"><i class="fa-solid fa-arrow-down me-1"></i>Depósito</span>';
+            const dec = t.coin === 'BRL' ? 2 : 8;
+            const valor = `${t.coin === 'BRL' ? 'R$ ' : ''}${fmt(t.amount, dec)}${t.coin === 'BRL' ? '' : ' ' + t.coin}`;
+            const classe = ehSaque ? 'text-red' : 'text-green';
+            const data = t.applied_at ? new Date(t.applied_at + (t.applied_at.includes('T') ? '' : 'T00:00:00')) : null;
+            const dataTxt = data ? data.toLocaleDateString('pt-BR') : '—';
+            const destino = t.address
+                ? `<span title="${t.address}">${t.address.slice(0, 10)}…${t.address.slice(-6)}</span>`
+                : (t.txid ? `<span class="text-muted" title="${t.txid}">${String(t.txid).slice(0, 8)}…</span>` : '—');
+            html += `
+                <tr>
+                    <td>${badge}</td>
+                    <td class="fw-500">${t.coin}</td>
+                    <td class="${classe} fw-600">${ehSaque ? '−' : '+'} ${valor}</td>
+                    <td class="text-muted">${t.fee ? fmt(t.fee, dec) : '—'}</td>
+                    <td class="text-muted">${dataTxt}</td>
+                    <td class="text-muted" style="font-size:.78rem;">${destino}</td>
+                    <td><span class="text-muted" style="font-size:.78rem;">${t.source === 'manual' ? 'manual' : 'Binance'}</span></td>
+                </tr>`;
+        });
+        document.getElementById('tabela-transfers').innerHTML = html;
+    }).catch(() => {
+        document.getElementById('tabela-transfers').innerHTML =
+            '<tr><td colspan="7" class="text-center text-muted py-3">Erro ao carregar transferências.</td></tr>';
+    });
+}
+carregarTransfers();
+setInterval(carregarTransfers, 300000);
+
+function carregarOrdens() {    axios.get('/binance/getOrdens').then(res => {
         const ordens = Array.isArray(res.data) ? res.data : [];
         if (!ordens.length) {
             document.getElementById('tabela-ordens').innerHTML =

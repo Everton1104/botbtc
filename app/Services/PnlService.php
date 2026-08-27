@@ -3,8 +3,10 @@
 namespace App\Services;
 
 use App\Models\BotTrade;
+use App\Models\BotTransfer;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -35,6 +37,8 @@ class PnlService
     private const TZ        = 'America/Sao_Paulo';
     private const BNB_CACHE = 'pnl:bnb:dia'; // série BNB diária cacheada
     private const BNB_TTL   = 21600;         // 6h
+    private const BTC_CACHE = 'pnl:btc:dia'; // série BTC diária cacheada
+    private const BTC_TTL   = 3600;          // 1h (close do dia corrente precisa andar)
 
     /**
      * P&L realizado do dashboard: totais rolling + série diária (últimos 30 dias BRT).
@@ -61,23 +65,61 @@ class PnlService
     // ── FIFO central ─────────────────────────────────────────────────────
 
     /**
-     * Roda o FIFO sobre TODOS os trades BTCBRL e devolve estrutura bruta para os
-     * agregadores consumirem. Sem cache (a chamadora cacheia o resultado final).
+     * Eventos FIFO de BTC mesclados: trades BTCBRL + transfers diretos da
+     * conta (bot_transfers), ordenados por data. Tipos: BUY/SELL (trade),
+     * DEPOSIT (vira lote ao preço do dia — custo null se série indisponível)
+     * e WITHDRAW (consome lote sem realização). Reconcilia o FIFO com o saldo
+     * real: sem isso, saque direto vira estoque fantasma no btc_aberto.
+     */
+    private function eventosFifo(): array
+    {
+        $eventos = [];
+
+        $trades = BotTrade::where('symbol', self::SYMBOL)->orderBy('traded_at')->get();
+        foreach ($trades as $t) {
+            $eventos[] = ['ts' => Carbon::parse($t->traded_at), 'tipo' => $t->side, 'qty' => (float) $t->qty, 'px' => (float) $t->price, 'trade' => $t];
+        }
+
+        $transfers = BotTransfer::where('coin', 'BTC')->orderBy('applied_at')->get();
+        foreach ($transfers as $tr) {
+            $eventos[] = [
+                'ts'    => Carbon::parse($tr->applied_at),
+                'tipo'  => $tr->transfer_type === BotTransfer::TIPO_WITHDRAW ? 'WITHDRAW' : 'DEPOSIT',
+                'qty'   => (float) $tr->amount,
+                'px'    => null,
+                'trade' => null,
+            ];
+        }
+
+        usort($eventos, fn($a, $b) => $a['ts']->timestamp <=> $b['ts']->timestamp);
+
+        return $eventos;
+    }
+
+    /**
+     * Roda o FIFO sobre TODOS os eventos BTC (trades + transfers) e devolve
+     * estrutura bruta para os agregadores consumirem. Sem cache (a chamadora
+     * cacheia o resultado final).
      */
     private function fifo(): array
     {
-        $trades = BotTrade::where('symbol', self::SYMBOL)->orderBy('traded_at')->get();
+        $eventos = $this->eventosFifo();
 
-        if ($trades->isEmpty()) {
+        if (empty($eventos)) {
             return ['vazio' => true];
         }
 
+        $haDepositos = (bool) array_filter($eventos, fn($e) => $e['tipo'] === 'DEPOSIT');
+        $btcDia = $haDepositos
+            ? $this->precoBtcPorDia($eventos[0]['ts']->copy()->startOfDay(), Carbon::now())
+            : [];
+
         $bnbDia = $this->precoBnbPorDia(
-            Carbon::parse($trades->first()->traded_at)->startOfDay(),
+            $eventos[0]['ts']->copy()->startOfDay(),
             Carbon::now()
         );
 
-        $lotes        = []; // [['qty' => float, 'preco' => float (cost basis c/ fee compra)]]
+        $lotes        = []; // [['qty' => float, 'preco' => float|null (cost basis c/ fee compra; null = custo neutro)]]
         $pnlPorDia    = [];
         $tradesDia    = [];
         $volumeDia    = [];
@@ -85,10 +127,38 @@ class PnlService
         $feesBrlTotal = 0.0;
         $semLote      = false;
 
-        foreach ($trades as $t) {
-            $dia = Carbon::parse($t->traded_at)->timezone(self::TZ)->format('Y-m-d');
-            $qty = (float) $t->qty;
-            $px  = (float) $t->price;
+        foreach ($eventos as $ev) {
+            $dia = $ev['ts']->timezone(self::TZ)->format('Y-m-d');
+
+            if ($ev['tipo'] === 'WITHDRAW') {
+                // Saque direto: reduz lotes FIFO sem realização de P&L.
+                $restante = $ev['qty'];
+                while ($restante > 1e-10 && !empty($lotes)) {
+                    $lote    = &$lotes[0];
+                    $consome = min($restante, $lote['qty']);
+                    $lote['qty'] -= $consome;
+                    $restante    -= $consome;
+                    if ($lote['qty'] <= 1e-10) {
+                        array_shift($lotes);
+                        unset($lote);
+                    }
+                }
+                unset($lote);
+                continue;
+            }
+
+            if ($ev['tipo'] === 'DEPOSIT') {
+                // Depósito direto: vira lote ao preço do dia (custo de aquisição
+                // desconhecido — aproximação do close diário; sem série, custo
+                // neutro na venda futura, mesmo tratamento do pré-histórico).
+                $preco = $this->precoBtcEm($ev['ts'], $btcDia);
+                $lotes[] = ['qty' => $ev['qty'], 'preco' => $preco > 0 ? $preco : null];
+                continue;
+            }
+
+            $t   = $ev['trade'];
+            $qty = $ev['qty'];
+            $px  = $ev['px'];
 
             $pnlPorDia[$dia]     ??= 0.0;
             $tradesDia[$dia]     ??= 0;
@@ -123,7 +193,7 @@ class PnlService
                     $lote    = &$lotes[0];
                     $consome = min($restante, $lote['qty']);
                     $receita += $consome * $px;
-                    $custo   += $consome * $lote['preco'];
+                    $custo   += $consome * ($lote['preco'] ?? $px); // lote null (depósito sem preço) → neutro
                     $lote['qty'] -= $consome;
                     $restante    -= $consome;
                     if ($lote['qty'] <= 1e-10) {
@@ -141,17 +211,19 @@ class PnlService
             Log::info('PnlService: houve SELL sem lote anterior (BTC pré-histórico/depositado) — parcela contada com custo neutro (pnl 0).');
         }
 
-        // Posição comprada residual (lotes não consumidos).
-        $btcAberto   = 0.0;
-        $costAberto  = 0.0;
+        // Posição comprada residual (lotes não consumidos). Lotes de depósito
+        // sem preço (null) entram no btc mas não no custo — pm só sobre lotes
+        // com cost basis conhecido.
+        $btcAberto  = 0.0;
+        $costAberto = 0.0;
         foreach ($lotes as $l) {
             $btcAberto  += $l['qty'];
-            $costAberto += $l['qty'] * $l['preco'];
+            $costAberto += $l['preco'] !== null ? $l['qty'] * $l['preco'] : 0.0;
         }
 
         return [
             'vazio'             => false,
-            'desde'             => Carbon::parse($trades->first()->traded_at)->timezone(self::TZ)->format('d/m/Y'),
+            'desde'             => $eventos[0]['ts']->timezone(self::TZ)->format('d/m/Y'),
             'pnlPorDia'         => $pnlPorDia,
             'tradesDia'         => $tradesDia,
             'volumeDia'         => $volumeDia,
@@ -253,6 +325,260 @@ class PnlService
         return $this->relatorioJanela($inicio, $fim, true, 'Últimos ' . $dias . ' dias');
     }
 
+    // ── Decomposição: grid vs oscilação ──────────────────────────────────
+
+    /**
+     * P&L de uma janela rolling decomposto em duas parcelas que somam a variação
+     * total do patrimônio (BRL + BTC marcado a mercado) no período:
+     *
+     *  · GRID — ciclos de compra→venda INICIADOS e fechados dentro da janela:
+     *    cada venda casada (FIFO) com lotes comprados na própria janela. É o
+     *    "trabalho" do bot, independentemente do preço subir ou cair.
+     *
+     *  · OSCILAÇÃO — todo efeito de PREÇO sobre o BTC segurado, em duas partes:
+     *    realizada (estoque herdado do início da janela, remarcado ao preço da
+     *    data, que foi vendido durante a janela — a valorização anterior à
+     *    janela nunca vira grid) e não realizada (lotes ainda abertos, do
+     *    custo de referência até o preço de fim — inclui compras da janela
+     *    que ainda não foram vendidas).
+     *
+     * Fees: rateados pela receita de cada parcela na venda (descarregar estoque
+     * herdado não penaliza o grid); os de compra sobem o custo do lote (afetam
+     * grid se vendido, oscilação se ficou aberto).
+     */
+    public function decomposicao(int $dias): array
+    {
+        $dias = $dias > 0 ? min($dias, 365) : 7;
+        return Cache::remember('pnl:decomp:' . $dias, 300, fn () => $this->calcularDecomposicao($dias));
+    }
+
+    private function calcularDecomposicao(int $dias): array
+    {
+        $hoje   = Carbon::now(self::TZ);
+        $inicio = $hoje->copy()->subDays($dias - 1)->startOfDay();
+        $fim    = $hoje->copy()->endOfDay();
+
+        $eventos = $this->eventosFifo();
+        if (empty($eventos)) {
+            return ['vazio' => true, 'periodo' => ['inicio' => $inicio->format('Y-m-d'), 'fim' => $fim->format('Y-m-d')]];
+        }
+
+        // Preços de referência: close diário do BTCBRL (mesmo mecanismo robusto
+        // da série BNB). Fallback: preço real do último trade antes do marco.
+        $btcDia = $this->precoBtcPorDia($inicio->copy()->subDay(), $hoje);
+        $pIni   = $this->precoBtcEm($inicio->copy()->startOfDay(), $btcDia);
+        $pFim   = $this->precoBtcEm($hoje->copy()->startOfDay(), $btcDia);
+
+        if ($pIni <= 0) {
+            foreach ($eventos as $ev) { // último trade antes do início da janela
+                if ($ev['ts']->lt($inicio) && $ev['px'] !== null) $pIni = $ev['px'];
+            }
+        }
+        if ($pFim <= 0) {
+            for ($i = count($eventos) - 1; $i >= 0; $i--) { // trade mais recente
+                if ($eventos[$i]['px'] !== null) { $pFim = $eventos[$i]['px']; break; }
+            }
+        }
+        if ($pIni <= 0 || $pFim <= 0) {
+            // Sem preço de referência confiável: não devolve número enganoso.
+            Log::warning('PnlService: sem preço BTC de referência — decomposição indisponível agora.');
+            return ['vazio' => true, 'periodo' => ['inicio' => $inicio->format('d/m/Y'), 'fim' => $fim->format('d/m/Y')]];
+        }
+
+        // Estoque no início da janela: FIFO real dos eventos anteriores ao marco
+        // (trades + transfers — withdraw direto consome lote, depósito cria).
+        // O remanescente é remarcado a pIni — é isso que separa a valorização
+        // anterior à janela do lucro do grid.
+        $lotes = [];
+        foreach ($eventos as $ev) {
+            if ($ev['ts']->lt($inicio)) {
+                if ($ev['tipo'] === 'BUY' || $ev['tipo'] === 'DEPOSIT') {
+                    $lotes[] = ['qty' => $ev['qty'], 'preco' => (float) ($ev['px'] ?? 0)];
+                    continue;
+                }
+                // SELL ou WITHDRAW: consome FIFO; excesso sem lote (BTC de fora
+                // dos registros) não reduz o estoque — custo desconhecido.
+                $restante = $ev['qty'];
+                while ($restante > 1e-10 && !empty($lotes)) {
+                    $lote    = &$lotes[0];
+                    $consome = min($restante, $lote['qty']);
+                    $lote['qty'] -= $consome;
+                    $restante    -= $consome;
+                    if ($lote['qty'] <= 1e-10) {
+                        array_shift($lotes);
+                        unset($lote);
+                    }
+                }
+                unset($lote);
+            }
+        }
+        $estoqueIni = 0.0;
+        foreach ($lotes as $l) {
+            $estoqueIni += $l['qty'];
+        }
+        $lotes = [];
+        if ($estoqueIni > 1e-10) {
+            $lotes[] = ['qty' => $estoqueIni, 'preco' => $pIni, 'herdado' => true];
+        }
+
+        $bnbDia   = $this->precoBnbPorDia($inicio, $hoje);
+        $grid     = 0.0;   // ciclos: vendas casadas com compras da própria janela
+        $oscReal  = 0.0;   // oscilação realizada: venda do estoque herdado
+        $fees     = 0.0;
+        $vendas   = 0;
+        $compras  = 0;
+        $volume   = 0.0;
+
+        foreach ($eventos as $ev) {
+            if ($ev['ts']->lt($inicio)) continue;
+
+            // Transferência direta DENTRO da janela: withdraw some do estoque
+            // (sem grid nem oscilação — o BTC saiu da conta); deposit vira lote
+            // próprio ao preço do dia (vira oscilação enquanto segurado).
+            if ($ev['tipo'] === 'WITHDRAW' || $ev['tipo'] === 'DEPOSIT') {
+                if ($ev['tipo'] === 'WITHDRAW') {
+                    $restante = $ev['qty'];
+                    while ($restante > 1e-10 && !empty($lotes)) {
+                        $lote    = &$lotes[0];
+                        $consome = min($restante, $lote['qty']);
+                        $lote['qty'] -= $consome;
+                        $restante    -= $consome;
+                        if ($lote['qty'] <= 1e-10) {
+                            array_shift($lotes);
+                            unset($lote);
+                        }
+                    }
+                    unset($lote);
+                } else {
+                    $precoD = $this->precoBtcEm($ev['ts'], $btcDia);
+                    $lotes[] = ['qty' => $ev['qty'], 'preco' => $precoD > 0 ? $precoD : $pFim, 'herdado' => false];
+                }
+                continue;
+            }
+
+            $t   = $ev['trade'];
+            $qty = $ev['qty'];
+            $px  = $ev['px'];
+            $fee = $this->feeBrl($t, $bnbDia);
+            $fees += $fee;
+            $volume += (float) $t->quote_qty;
+
+            if ($t->side === 'BUY') {
+                $compras++;
+                $lotes[] = ['qty' => $qty, 'preco' => $qty > 0 ? $px + ($fee / $qty) : $px, 'herdado' => false];
+                continue;
+            }
+
+            $vendas++;
+            $restante    = $qty;
+            $recCiclo    = 0.0; // receita vinda de lotes comprados na janela
+            $custoCiclo  = 0.0;
+            $recHerd     = 0.0; // receita vinda do estoque herdado
+            $custoHerd   = 0.0;
+            while ($restante > 1e-10) {
+                if (empty($lotes)) {
+                    // BTC sem origem registrada (fora dos registros): custo neutro,
+                    // mesmo tratamento conservador do fifo().
+                    $recCiclo   += $restante * $px;
+                    $custoCiclo += $restante * $px;
+                    $restante    = 0.0;
+                    break;
+                }
+                $lote    = &$lotes[0];
+                $consome = min($restante, $lote['qty']);
+                if (!empty($lote['herdado'])) {
+                    $recHerd   += $consome * $px;
+                    $custoHerd += $consome * $lote['preco'];
+                } else {
+                    $recCiclo   += $consome * $px;
+                    $custoCiclo += $consome * $lote['preco'];
+                }
+                $lote['qty'] -= $consome;
+                $restante    -= $consome;
+                if ($lote['qty'] <= 1e-10) {
+                    array_shift($lotes);
+                    unset($lote);
+                }
+            }
+            unset($lote);
+
+            // Fee da venda rateado pela receita de cada parcela — o custo de
+            // descarregar estoque herdado não penaliza o grid.
+            $recTot  = $recCiclo + $recHerd;
+            $fracCic = $recTot > 0 ? $recCiclo / $recTot : 1.0;
+            $grid    += ($recCiclo - $custoCiclo) - $fee * $fracCic;
+            $oscReal += ($recHerd - $custoHerd) - $fee * (1 - $fracCic);
+        }
+
+        // Oscilação não realizada: lotes ainda abertos, de pIni/pCompra até pFim.
+        $oscNao   = 0.0;
+        $btcAber  = 0.0;
+        $custoAb  = 0.0;
+        foreach ($lotes as $l) {
+            $var     = $l['qty'] * ($pFim - $l['preco']);
+            if (!empty($l['herdado'])) $oscReal += $var; else $oscNao += $var;
+            $btcAber += $l['qty'];
+            $custoAb += $l['qty'] * $l['preco'];
+        }
+        $osc = $oscReal + $oscNao;
+
+        // Base de retorno pro simulador ("R$ X teriam rendido Y"): patrimônio do
+        // bot no início da janela. Fonte preferida: série diária bot_patrimonio
+        // (snapshot por dia, gravada pelo cron). Fallback enquanto a série diária
+        // não cobre o marco (começou em 27/08/2026): último registro da série
+        // esparsa de bot_withdrawal_requests (um por saque). Se o registro mais
+        // próximo do marco for antigo, o percentual vira aproximação — sinalizado.
+        $reg = DB::table('bot_patrimonio')
+            ->where('dia', '<=', $inicio->format('Y-m-d'))
+            ->orderByDesc('dia')
+            ->first();
+        if ($reg) {
+            $patrimonioIni = (float) $reg->total;
+            $patrimonioEm  = Carbon::parse($reg->dia)->format('d/m/Y');
+            $defasagemDias = (int) round(Carbon::parse($reg->dia)->diffInDays($inicio));
+            $fontePatrimonio = 'diaria';
+        } else {
+            $reg = DB::table('bot_withdrawal_requests')
+                ->where('created_at', '<=', $inicio)
+                ->orderByDesc('created_at')
+                ->first();
+            $patrimonioIni = $reg ? (float) $reg->patrimonio_bot : null;
+            $patrimonioEm  = $reg ? Carbon::parse($reg->created_at)->timezone(self::TZ)->format('d/m/Y') : null;
+            $defasagemDias = $reg ? (int) round(Carbon::parse($reg->created_at)->diffInDays($inicio)) : null;
+            $fontePatrimonio = 'saques';
+        }
+
+        $pct = $patrimonioIni && $patrimonioIni > 0;
+
+        return [
+            'vazio'      => false,
+            'periodo'    => ['inicio' => $inicio->format('d/m/Y'), 'fim' => $fim->format('d/m/Y')],
+            'dias'       => $dias,
+            'grid'       => round($grid, 2),
+            'oscilacao'  => round($osc, 2),
+            'oscilacao_realizada'      => round($oscReal, 2),
+            'oscilacao_nao_realizada'  => round($oscNao, 2),
+            'total'      => round($grid + $osc, 2),
+            'fees_brl'   => round($fees, 2),
+            'vendas'     => $vendas,
+            'compras'    => $compras,
+            'volume'     => round($volume, 2),
+            'estoque_ini' => round($estoqueIni, 8),
+            'p_ini'      => (int) round($pIni),
+            'p_fim'      => (int) round($pFim),
+            'btc_aberto' => round($btcAber, 8),
+            'pm_aberto'  => $btcAber > 0 ? (int) round($custoAb / $btcAber) : 0,
+            // Retornos % da janela (base: patrimônio no início) p/ o simulador.
+            'retorno_grid'      => $pct ? round(100 * $grid / $patrimonioIni, 4) : null,
+            'retorno_oscilacao' => $pct ? round(100 * $osc / $patrimonioIni, 4) : null,
+            'retorno_total'     => $pct ? round(100 * ($grid + $osc) / $patrimonioIni, 4) : null,
+            'patrimonio_ini'    => $pct ? round($patrimonioIni, 2) : null,
+            'patrimonio_ini_em' => $patrimonioEm,
+            'patrimonio_fonte'  => $fontePatrimonio,
+            'patrimonio_aproximado' => $defasagemDias !== null && $defasagemDias > 7,
+        ];
+    }
+
     private function relatorioJanela(Carbon $inicio, Carbon $fim, bool $ehAtual, string $rotulo): array
     {
         $f = $this->fifo();
@@ -342,20 +668,46 @@ class PnlService
         if ($f['vazio'] ?? false) return 0.0;
 
         // Reprocessa apenas para isolar vendas na janela 24h (precisa do estado
-        // dos lotes até cada venda). Mantém a implementação fiel ao FIFO global.
-        $trades = BotTrade::where('symbol', self::SYMBOL)->orderBy('traded_at')->get();
-        $bnbDia = $this->precoBnbPorDia(
-            Carbon::parse($trades->first()->traded_at)->startOfDay(),
-            Carbon::now()
-        );
+        // dos lotes até cada venda). Mescla transfers diretos como o fifo() para
+        // manter os dois caminhos consistentes.
+        $eventos = $this->eventosFifo();
+        if (empty($eventos)) return 0.0;
+
+        $haDepositos = (bool) array_filter($eventos, fn($e) => $e['tipo'] === 'DEPOSIT');
+        $btcDia = $haDepositos
+            ? $this->precoBtcPorDia($eventos[0]['ts']->copy()->startOfDay(), Carbon::now())
+            : [];
+        $bnbDia = $this->precoBnbPorDia($eventos[0]['ts']->copy()->startOfDay(), Carbon::now());
 
         $corte = Carbon::now()->subDay();
         $lotes = [];
         $acc   = 0.0;
 
-        foreach ($trades as $t) {
-            $qty = (float) $t->qty;
-            $px  = (float) $t->price;
+        foreach ($eventos as $ev) {
+            if ($ev['tipo'] === 'WITHDRAW') {
+                $restante = $ev['qty'];
+                while ($restante > 1e-10 && !empty($lotes)) {
+                    $lote    = &$lotes[0];
+                    $consome = min($restante, $lote['qty']);
+                    $lote['qty'] -= $consome;
+                    $restante    -= $consome;
+                    if ($lote['qty'] <= 1e-10) {
+                        array_shift($lotes);
+                        unset($lote);
+                    }
+                }
+                unset($lote);
+                continue;
+            }
+            if ($ev['tipo'] === 'DEPOSIT') {
+                $preco  = $this->precoBtcEm($ev['ts'], $btcDia);
+                $lotes[] = ['qty' => $ev['qty'], 'preco' => $preco > 0 ? $preco : null];
+                continue;
+            }
+
+            $t   = $ev['trade'];
+            $qty = $ev['qty'];
+            $px  = $ev['px'];
             $fee = $this->feeBrl($t, $bnbDia);
 
             if ($t->side === 'BUY') {
@@ -363,7 +715,7 @@ class PnlService
                 continue;
             }
 
-            $dentro   = Carbon::parse($t->traded_at) >= $corte;
+            $dentro   = $ev['ts']->gte($corte);
             $restante = $qty;
             $receita  = 0.0;
             $custo    = 0.0;
@@ -377,7 +729,7 @@ class PnlService
                 $lote    = &$lotes[0];
                 $consome = min($restante, $lote['qty']);
                 $receita += $consome * $px;
-                $custo   += $consome * $lote['preco'];
+                $custo   += $consome * ($lote['preco'] ?? $px); // lote null (depósito sem preço) → neutro
                 $lote['qty'] -= $consome;
                 $restante    -= $consome;
                 if ($lote['qty'] <= 1e-10) {
@@ -430,7 +782,7 @@ class PnlService
                 $this->atualizarBnbCache($dias);
             }
             $map = $cachada;
-            unset($map['__at']);
+            unset($map['__at'], $map['__desde']);
             return $map;
         }
 
@@ -438,7 +790,7 @@ class PnlService
         $this->atualizarBnbCache($dias);
         $cachada = Cache::get(self::BNB_CACHE);
         if (is_array($cachada) && !empty($cachada)) {
-            unset($cachada['__at']);
+            unset($cachada['__at'], $cachada['__desde']);
             return $cachada;
         }
 
@@ -451,32 +803,7 @@ class PnlService
      */
     private function atualizarBnbCache(int $dias): void
     {
-        $map = [];
-        try {
-            $resp = Http::timeout(10)->connectTimeout(5)->get(
-                'https://api.binance.com/api/v3/klines?symbol=BNBBRL&interval=1d&limit=' . min(1000, $dias)
-            );
-            $j = $resp->json();
-            // Só consome se a resposta for uma lista de velas (rate limit/erro vem como objeto).
-            if ($resp->ok() && is_array($j) && array_is_list($j)) {
-                foreach ($j as $k) {
-                    if (is_array($k) && isset($k[0], $k[4])) {
-                        $map[gmdate('Y-m-d', (int) ($k[0] / 1000))] = (float) $k[4]; // close
-                    }
-                }
-            } else {
-                Log::warning('PnlService: resposta inesperada da série BNB (HTTP ' . $resp->status() . ') — mantendo cache anterior se houver.');
-            }
-        } catch (\Throwable $e) {
-            Log::warning('PnlService: falha ao buscar série BNB. ' . $e->getMessage());
-        }
-
-        if (empty($map)) {
-            return; // mantém o cache anterior (se houver); não estraga com vazio.
-        }
-
-        $map['__at'] = now()->timestamp;
-        Cache::put(self::BNB_CACHE, $map, self::BNB_TTL);
+        $this->atualizarSerieCache(self::BNB_CACHE, 'BNBBRL', $dias, self::BNB_TTL);
     }
 
     private function precoBnbEm(Carbon $ts, array $bnbDia): float
@@ -489,6 +816,90 @@ class PnlService
         if (isset($bnbDia[$ante])) return $bnbDia[$ante];
         // Fallback: média da série (BNB varia pouco entre dias). Nunca zero se houver série.
         return !empty($bnbDia) ? (array_sum($bnbDia) / count($bnbDia)) : 0.0;
+    }
+
+    // ── Série BTC robusta (mesmo padrão da série BNB) ────────────────────
+
+    /**
+     * Série diária do preço BTC (close) desde $desde. Mapa ['Y-m-d' => float].
+     * Cacheada por 1h (TTL curto: o close do dia corrente precisa acompanhar
+     * o mercado pra manter a parcela de oscilação viva). Mesma resiliência da
+     * série BNB: mantém a última série válida em caso de rate limit/erro.
+     */
+    private function precoBtcPorDia(Carbon $desde, Carbon $ate): array
+    {
+        $cachada = Cache::get(self::BTC_CACHE);
+        $dias    = (int) round(max(1, $desde->diffInDays($ate) + 2));
+
+        $cobre = static function (array $c) use ($desde): bool {
+            // '__desde' guarda o primeiro dia da série: sem ele, uma série curta
+            // (ex.: gerada p/ janela de 7d) seria usada p/ atender 30d — e o
+            // fallback de média viraria p_ini de janelas maiores.
+            return isset($c['__desde']) && $c['__desde'] <= $desde->format('Y-m-d');
+        };
+
+        if (is_array($cachada) && !empty($cachada) && $cobre($cachada)) {
+            if (!isset($cachada['__at']) || now()->timestamp - (int) $cachada['__at'] > self::BTC_TTL) {
+                $this->atualizarSerieCache(self::BTC_CACHE, 'BTCBRL', $dias, self::BTC_TTL);
+            }
+            unset($cachada['__at'], $cachada['__desde']);
+            return $cachada;
+        }
+
+        // Cache frio ou sem cobertura da janela pedida: busca síncrona.
+        $this->atualizarSerieCache(self::BTC_CACHE, 'BTCBRL', $dias, self::BTC_TTL);
+        $cachada = Cache::get(self::BTC_CACHE);
+        if (is_array($cachada) && !empty($cachada) && $cobre($cachada)) {
+            unset($cachada['__at'], $cachada['__desde']);
+            return $cachada;
+        }
+
+        return [];
+    }
+
+    /**
+     * Busca klines 1d de $symbol na Binance e grava no cache $chave. Trata rate
+     * limit/erro de estrutura mantendo o cache anterior (se houver).
+     */
+    private function atualizarSerieCache(string $chave, string $symbol, int $dias, int $ttl): void
+    {
+        $map = [];
+        try {
+            $resp = Http::timeout(10)->connectTimeout(5)->get(
+                'https://api.binance.com/api/v3/klines?symbol=' . $symbol . '&interval=1d&limit=' . min(1000, $dias)
+            );
+            $j = $resp->json();
+            // Só consome se a resposta for uma lista de velas (rate limit/erro vem como objeto).
+            if ($resp->ok() && is_array($j) && array_is_list($j)) {
+                foreach ($j as $k) {
+                    if (is_array($k) && isset($k[0], $k[4])) {
+                        $map[gmdate('Y-m-d', (int) ($k[0] / 1000))] = (float) $k[4]; // close
+                    }
+                }
+            } else {
+                Log::warning("PnlService: resposta inesperada da série {$symbol} (HTTP " . $resp->status() . ') — mantendo cache anterior se houver.');
+            }
+        } catch (\Throwable $e) {
+            Log::warning("PnlService: falha ao buscar série {$symbol}. " . $e->getMessage());
+        }
+
+        if (empty($map)) {
+            return; // mantém o cache anterior (se houver); não estraga com vazio.
+        }
+
+        $map['__at']    = now()->timestamp;
+        $map['__desde'] = min(array_keys($map)); // 1º dia coberto (chave Y-m-d)
+        Cache::put($chave, $map, $ttl);
+    }
+
+    private function precoBtcEm(Carbon $ts, array $btcDia): float
+    {
+        // Casa por dia UTC (klines 1d da Binance são UTC); mesmo fallback do BNB.
+        $dia = $ts->copy()->utc()->format('Y-m-d');
+        if (isset($btcDia[$dia])) return $btcDia[$dia];
+        $ante = $ts->copy()->utc()->subDay()->format('Y-m-d');
+        if (isset($btcDia[$ante])) return $btcDia[$ante];
+        return !empty($btcDia) ? (array_sum($btcDia) / count($btcDia)) : 0.0;
     }
 
     private function vazio(): array

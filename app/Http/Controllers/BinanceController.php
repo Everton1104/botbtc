@@ -15,6 +15,9 @@ class BinanceController extends Controller
     private string $secretKey;
     private string $baseUrl;
 
+    public const TIPO_WITHDRAW = 'withdraw';
+    public const TIPO_DEPOSIT  = 'deposit';
+
     public function __construct()
     {
         $this->apiKey    = config('services.binance.key');
@@ -222,6 +225,31 @@ class BinanceController extends Controller
         ], fn($v) => $v !== null));
 
         return $this->enviar('/api/v3/myTrades', "{$params}&signature={$this->assinar($params)}");
+    }
+
+    // ============================================================
+    // TRANSFERÊNCIAS (depósitos/saques diretos — SAPI autenticado)
+    // ============================================================
+
+    /**
+     * Histórico de depósitos ('deposit') ou saques ('withdraw') diretos na
+     * conta Binance. A API restringe a janela startTime→endTime a NO MÁXIMO 90
+     * dias por chamada (erro -4047); sem os dois, retorna os últimos 90 dias.
+     */
+    public function getTransferencias(string $tipo, string $coin, ?int $startTime = null, ?int $endTime = null): ?array
+    {
+        $endpoint = $tipo === self::TIPO_WITHDRAW
+            ? '/sapi/v1/capital/withdraw/history'
+            : '/sapi/v1/capital/deposit/hisrec';
+
+        $params = http_build_query(array_filter([
+            'coin'      => $coin,
+            'startTime' => $startTime,
+            'endTime'   => $endTime,
+            'timestamp' => $this->timestamp(),
+        ], fn($v) => $v !== null));
+
+        return $this->enviar($endpoint, "{$params}&signature={$this->assinar($params)}");
     }
 
     // ============================================================

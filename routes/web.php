@@ -313,6 +313,24 @@ Route::get('/bot/relatorio/rolling', function (Request $req) {
     return response()->json(app(\App\Services\PnlService::class)->rolling($dias));
 })->middleware(['auth', 'whatsapp.verified']);
 
+// Decomposição do P&L: lucro do grid (ciclos compra→venda) vs oscilação do BTC
+// (variação de preço do estoque). Consumido pelo painel principal. Admin only.
+Route::get('/bot/relatorio/decomposicao', function (Request $req) {
+    if (Auth::id() !== 1) abort(403);
+    $dias = (int) $req->input('dias', 7);
+    if (!in_array($dias, [7, 30], true)) $dias = 7; // painel só usa 7/30
+    return response()->json(app(\App\Services\PnlService::class)->decomposicao($dias));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Depósitos/saques DIRETOS na Binance (fora do fluxo de investidor), sincroni-
+// zados de /sapi/v1/capital pelo cron. Consumido pelo painel principal. Admin only.
+Route::get('/bot/transferencias', function () {
+    if (Auth::id() !== 1) abort(403);
+    return response()->json(
+        \App\Models\BotTransfer::orderByDesc('applied_at')->limit(100)->get()
+    );
+})->middleware(['auth', 'whatsapp.verified']);
+
 Route::get('/bot/tendencia', function (BinanceController $binance) {
     $preco = $binance->getPrecoBTC();
     if ($preco <= 0) return response()->json(['erro' => 'Preço indisponível'], 503);
