@@ -68,48 +68,6 @@
 
     </div>
 
-    {{-- P&L: grid vs oscilação --}}
-    <div class="section-title mt-2"><i class="fa-solid fa-chart-line me-2"></i>Lucro do Bot — Grid × Oscilação</div>
-    <div class="card mb-4">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table mb-0">
-                    <thead>
-                        <tr>
-                            <th>Período</th>
-                            <th>Grid (operações)</th>
-                            <th>Oscilação BTC</th>
-                            <th>Total</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tabela-pnl-decomp">
-                        <tr><td colspan="4" class="text-center text-muted py-3">Carregando...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {{-- Simulador: quanto um valor X teria rendido no período --}}
-        <div class="card-body pt-0 pb-0">
-            <div class="d-flex flex-wrap align-items-center gap-2" style="font-size:.85rem;">
-                <i class="fa-solid fa-calculator" style="color:#f0b90b;"></i>
-                <span>Se tivesse investido</span>
-                <div class="input-group input-group-sm" style="width:150px;">
-                    <span class="input-group-text">R$</span>
-                    <input type="number" id="pnl-exemplo-valor" class="form-control" value="1000" min="0" step="50">
-                </div>
-                <span>no bot:</span>
-            </div>
-            <div id="pnl-exemplo-resultado" class="mt-2" style="font-size:.85rem;"></div>
-        </div>
-        <div class="card-body pt-2" style="font-size:.76rem;color:#888;">
-            <i class="fa-solid fa-circle-info me-1"></i>
-            <strong>Grid</strong> = ciclos de compra→venda fechados no período (FIFO, líquido de fees).
-            <strong>Oscilação</strong> = efeito da variação do preço do BTC: posição ainda aberta + ganho/perda realizado ao vender estoque herdado do início do período (remarcado ao preço da data).
-            A soma das duas é a variação total do patrimônio na janela.
-            Simulação proporcional ao patrimônio do bot no início de cada período <span id="pnl-exemplo-base-info">(base: —)</span>.
-        </div>
-    </div>
-
     {{-- Ordens abertas --}}
     <div class="section-title mt-2"><i class="fa-solid fa-list-check me-2"></i>Ordens Abertas</div>
     <div class="card mb-4">
@@ -303,6 +261,138 @@
             </form>
         </div>
     </div>
+
+    {{-- Lucro do bot: cards de resumo + decomposição grid×oscilação --}}
+    <div class="section-title mt-2"><i class="fa-solid fa-chart-line me-2"></i>Lucro do Bot</div>
+
+    {{-- Cards: hoje / 7d / 30d (mesmo endpoint da tabela abaixo — cache compartilhado) --}}
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-md-4">
+            <div class="stat-tile" id="tile-pnl-1">
+                <div class="label">Hoje</div>
+                <div class="value" id="pnl-total-1">—</div>
+                <div class="sub" id="pnl-sub-1">carregando...</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4">
+            <div class="stat-tile" id="tile-pnl-7">
+                <div class="label">Últimos 7 dias</div>
+                <div class="value" id="pnl-total-7">—</div>
+                <div class="sub" id="pnl-sub-7">carregando...</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-4">
+            <div class="stat-tile" id="tile-pnl-30">
+                <div class="label">Últimos 30 dias</div>
+                <div class="value" id="pnl-total-30">—</div>
+                <div class="sub" id="pnl-sub-30">carregando...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Período</th>
+                            <th>Grid (operações)</th>
+                            <th>Oscilação BTC</th>
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-pnl-decomp">
+                        <tr><td colspan="4" class="text-center text-muted py-3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {{-- Simulador: quanto um valor X teria rendido no período --}}
+        <div class="card-body pt-0 pb-0">
+            <div class="d-flex flex-wrap align-items-center gap-2" style="font-size:.85rem;">
+                <i class="fa-solid fa-calculator" style="color:#f0b90b;"></i>
+                <span>Se tivesse investido</span>
+                <div class="input-group input-group-sm" style="width:150px;">
+                    <span class="input-group-text">R$</span>
+                    <input type="number" id="pnl-exemplo-valor" class="form-control" value="1000" min="0" step="50">
+                </div>
+                <span>no bot:</span>
+            </div>
+            <div id="pnl-exemplo-resultado" class="mt-2" style="font-size:.85rem;"></div>
+        </div>
+        <div class="card-body pt-2" style="font-size:.76rem;color:#888;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            <strong>Grid</strong> = ciclos de compra→venda fechados no período (FIFO, líquido de fees).
+            <strong>Oscilação</strong> = efeito da variação do preço do BTC: posição ainda aberta + ganho/perda realizado ao vender estoque herdado do início do período (remarcado ao preço da data).
+            A soma das duas é a variação total do patrimônio na janela.
+            Simulação proporcional ao patrimônio do bot no início de cada período <span id="pnl-exemplo-base-info">(base: —)</span>.
+        </div>
+    </div>
+
+    {{-- Pausa manual do admin: cancela ordens e congela o bot até despausar --}}
+    <div class="section-title mt-2"><i class="fa-solid fa-circle-pause me-2"></i>Pausa Manual</div>
+    <div class="card mb-4" id="card-pausa-manual">
+        <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                <div style="max-width:620px;">
+                    <div style="font-size:.9rem;font-weight:600;">
+                        Estado atual:
+                        <span id="pausa-badge" class="badge bg-secondary ms-1">—</span>
+                    </div>
+                    <div style="font-size:.78rem;color:#aaa;margin-top:.4rem;">
+                        Quando <strong>pausado</strong>, todas as ordens são <strong>canceladas na hora</strong> e o bot <strong>para de operar</strong> — você fica livre pra trader manualmente sem o bot recriando o grid. Ao <strong>retomar</strong>, o próximo ciclo (≤1 min) recria o par no preço atual.
+                    </div>
+                </div>
+                <button id="btn-pausa" class="btn btn-sm px-4" type="button" disabled>
+                    <i class="fa-solid fa-circle-pause me-1"></i><span id="btn-pausa-txt">—</span>
+                </button>
+            </div>
+            <div id="pausa-msg" class="mt-2" style="font-size:.82rem;"></div>
+        </div>
+    </div>
+
+    <script>
+    (function(){
+        const badge = document.getElementById('pausa-badge');
+        const btn = document.getElementById('btn-pausa');
+        const btnTxt = document.getElementById('btn-pausa-txt');
+        const btnIco = btn.querySelector('i');
+        const msg = document.getElementById('pausa-msg');
+        const card = document.getElementById('card-pausa-manual');
+        let pausado = false;
+
+        function render(){
+            badge.className = 'badge ms-1 ' + (pausado ? 'bg-danger' : 'bg-success');
+            badge.textContent = pausado ? 'PAUSADO' : 'operando';
+            btn.className = 'btn btn-sm px-4 ' + (pausado ? 'btn-success' : 'btn-warning');
+            btnIco.className = pausado ? 'fa-solid fa-circle-play me-1' : 'fa-solid fa-circle-pause me-1';
+            btnTxt.textContent = pausado ? 'Retomar bot' : 'Pausar bot';
+            btn.disabled = false;
+            if (card) card.style.borderLeft = pausado ? '4px solid #dc3545' : '1px solid var(--border)';
+        }
+        function carregar(){
+            axios.get('/binance/getConf').then(r => {
+                pausado = !!(r.data && r.data.pausado_manual);
+                render();
+            }).catch(()=>{ msg.innerHTML = '<span style="color:#dc3545;">Não foi possível carregar o estado.</span>'; });
+        }
+        btn.addEventListener('click', () => {
+            btn.disabled = true;
+            axios.post('/bot/pausar', { ativo: !pausado }).then(r => {
+                pausado = !!(r.data && r.data.pausado_manual);
+                render();
+                msg.innerHTML = pausado
+                    ? '<span style="color:#dc3545;"><i class="fa-solid fa-check me-1"></i>Bot pausado — ' + ((r.data && r.data.canceladas) || 0) + ' ordem(ns) cancelada(s). Ele só volta a operar quando você retomar.</span>'
+                    : '<span style="color:#28a745;"><i class="fa-solid fa-check me-1"></i>Bot retomado — o próximo ciclo (≤1 min) recria o par no preço atual.</span>';
+            }).catch(()=>{
+                msg.innerHTML = '<span style="color:#dc3545;">Erro ao alternar a pausa.</span>';
+                btn.disabled = false;
+            });
+        });
+        carregar();
+    })();
+    </script>
 
     {{-- Modo "Preparar Subida" (gatilho manual do admin) --}}
     <div class="section-title mt-2"><i class="fa-solid fa-rocket me-2"></i>Modo Preparar Subida</div>
@@ -842,11 +932,35 @@ function renderPnlExemplo() {
     if (bases.length) baseInfo.textContent = '(base: ' + bases.join(' · ') + ')';
 }
 
+// Preenche um card de P&L (id = 1, 7 ou 30). Total grande colorido, sub com a
+// decomposição grid×oscilação e o retorno % sobre o patrimônio do período.
+function renderPnlCard(id, d) {
+    const total = document.getElementById('pnl-total-' + id);
+    const sub   = document.getElementById('pnl-sub-' + id);
+    if (!total) return;
+    const cls = v => v > 0 ? 'text-green' : v < 0 ? 'text-red' : '';
+    const sgn = v => v > 0 ? '+' : v < 0 ? '−' : '';
+    if (!d || d.vazio) {
+        total.className = 'value';
+        total.textContent = '—';
+        sub.textContent = 'sem dados no período';
+        return;
+    }
+    total.className = 'value ' + cls(d.total);
+    total.innerHTML = (d.total > 0 ? '▲ ' : d.total < 0 ? '▼ ' : '') + 'R$ ' + fmt(Math.abs(d.total));
+    sub.innerHTML = `Grid ${sgn(d.grid)}R$ ${fmt(Math.abs(d.grid))} · Oscilação ${sgn(d.oscilacao)}R$ ${fmt(Math.abs(d.oscilacao))}`
+        + (d.retorno_total !== null && d.retorno_total !== undefined ? ` <span class="text-muted">(${fmt(d.retorno_total, 2)}%)</span>` : '');
+}
+
 function carregarPnlDecomp() {
     Promise.all([
+        axios.get('/bot/relatorio/decomposicao?dias=1'),
         axios.get('/bot/relatorio/decomposicao?dias=7'),
         axios.get('/bot/relatorio/decomposicao?dias=30'),
-    ]).then(([r7, r30]) => {
+    ]).then(([r1, r7, r30]) => {
+        renderPnlCard(1, r1.data);
+        renderPnlCard(7, r7.data);
+        renderPnlCard(30, r30.data);
         const linhas = [
             { rotulo: 'Últimos 7 dias',  d: r7.data  },
             { rotulo: 'Últimos 30 dias', d: r30.data },
@@ -878,6 +992,12 @@ function carregarPnlDecomp() {
     }).catch(() => {
         document.getElementById('tabela-pnl-decomp').innerHTML =
             '<tr><td colspan="4" class="text-center text-muted py-3">Erro ao carregar P&L.</td></tr>';
+        [1, 7, 30].forEach(id => {
+            const t = document.getElementById('pnl-total-' + id);
+            if (t) { t.className = 'value'; t.textContent = '—'; }
+            const s = document.getElementById('pnl-sub-' + id);
+            if (s) s.textContent = 'erro ao carregar';
+        });
     });
 }
 document.getElementById('pnl-exemplo-valor').addEventListener('input', renderPnlExemplo);

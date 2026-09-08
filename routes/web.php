@@ -318,7 +318,7 @@ Route::get('/bot/relatorio/rolling', function (Request $req) {
 Route::get('/bot/relatorio/decomposicao', function (Request $req) {
     if (Auth::id() !== 1) abort(403);
     $dias = (int) $req->input('dias', 7);
-    if (!in_array($dias, [7, 30], true)) $dias = 7; // painel só usa 7/30
+    if (!in_array($dias, [1, 7, 30], true)) $dias = 7; // painel usa 1 (card Hoje) / 7 / 30
     return response()->json(app(\App\Services\PnlService::class)->decomposicao($dias));
 })->middleware(['auth', 'whatsapp.verified']);
 
@@ -410,6 +410,38 @@ Route::post('/bot/modo-subida', function (Request $req) {
     $state->save();
     \Log::info('BotExecutor: modo "preparar subida" ' . ($state->modo_subida ? 'ATIVADO' : 'DESATIVADO') . ' pelo admin.');
     return ['modo_subida' => $state->modo_subida];
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Pausa manual do admin: cancela TODAS as ordens abertas na hora e congela o
+// bot — não recria o par até o admin despausar. Sem isso, cancelar ordens na
+// mão pra operar seria desfeito pelo próximo ciclo (que vê 0 ordens e recria).
+// O guard no BotExecutor::executar repete o cancelamento como defesa (rate
+// limit aqui não pode deixar ordem órfã rodando durante a pausa).
+Route::post('/bot/pausar', function (Request $req, \App\Http\Controllers\BinanceController $binance) {
+    if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
+    $req->validate(['ativo' => 'required|boolean']);
+    $state = \App\Models\BotState::where('id_user', Auth::id())->first();
+    if (!$state) return response()->json(['erro' => 'Estado não encontrado'], 404);
+
+    $pausando = (bool) $req->input('ativo');
+    $state->pausado_manual = $pausando;
+    $state->save();
+
+    // Cancela na hora (feedback imediato pro painel); ao despausar NÃO cria
+    // nada aqui — o próximo ciclo do bot recria o par no preço atual.
+    $canceladas = 0;
+    if ($pausando) {
+        $open = $binance->getOpenOrders('BTCBRL');
+        if (is_array($open)) {
+            foreach ($open as $ordem) {
+                $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
+                $canceladas++;
+            }
+        }
+    }
+
+    \Log::info('BotExecutor: pausa manual ' . ($pausando ? 'ATIVADA' : 'DESATIVADA') . " pelo admin. {$canceladas} ordem(ns) cancelada(s) na hora.");
+    return ['pausado_manual' => $pausando, 'canceladas' => $canceladas];
 })->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/admin/usuarios', function () {

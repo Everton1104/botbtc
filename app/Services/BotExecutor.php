@@ -106,6 +106,24 @@ class BotExecutor
             return $this->inicializarBotSemDivisao($userId);
         }
 
+        // ============================================================
+        // PAUSA MANUAL DO ADMIN — cancela ordens que houver e congela:
+        // não cria nada até o admin despausar (pra operar manualmente
+        // sem o bot recriando o grid em cima). O cancelamento também
+        // acontece na rota /bot/pausar; repetir aqui é defesa caso a
+        // rota falhe por rate limit no momento do gatilho.
+        // ============================================================
+        if ($state->pausado_manual) {
+            $open = $this->binance->getOpenOrders(self::SYMBOL);
+            if (is_array($open) && !empty($open)) {
+                foreach ($open as $ordem) {
+                    $this->binance->cancelarOrdem(self::SYMBOL, $ordem['orderId']);
+                }
+                Log::info("BotExecutor [{$userId}]: pausa manual — " . count($open) . " ordem(ns) cancelada(s) pelo ciclo.");
+            }
+            return "Bot pausado manualmente. Aguardando despausar.";
+        }
+
         // Verificar pausa (saque em andamento)
         if ($state->pausado_ate && now()->lessThan($state->pausado_ate)) {
             $restam = now()->diffInSeconds($state->pausado_ate);

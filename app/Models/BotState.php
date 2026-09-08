@@ -21,6 +21,7 @@ class BotState extends Model
         'ativo',
         'pausado_ate',
         'modo_subida',
+        'pausado_manual',
     ];
 
     protected $casts = [
@@ -32,5 +33,6 @@ class BotState extends Model
         'ativo'             => 'boolean',
         'pausado_ate'       => 'datetime',
         'modo_subida'       => 'boolean',
+        'pausado_manual'    => 'boolean',
     ];
 }
