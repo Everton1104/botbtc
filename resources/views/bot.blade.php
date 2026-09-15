@@ -1,13 +1,72 @@
 @extends('layouts.app')
 
 @section('content')
-<div class="container" style="max-width: 1100px;">
+<div class="container" style="max-width: 1100px;" id="conteudo-bot" @if(auth()->user()->id == 1)class="mostrar-inicio"@endif>
+
+    {{-- Abas do admin: .sec-inicio aparece só na aba Início, .sec-maisinfo só na Mais Informações.
+         Investidor comum não recebe essas classes — vê tudo, sem abas. --}}
+    <style>
+        #conteudo-bot.mostrar-inicio .sec-maisinfo { display: none !important; }
+        #conteudo-bot.mostrar-maisinfo .sec-inicio { display: none !important; }
+
+        #abas-bot { gap: .35rem; border-bottom: 1px solid var(--border); }
+        #abas-bot .nav-link {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 10px 10px 0 0;
+            border-bottom: none;
+            color: var(--muted);
+            font-size: .85rem;
+            font-weight: 600;
+            padding: .5rem 1.1rem;
+        }
+        #abas-bot .nav-link:hover { color: var(--text); }
+        #abas-bot .nav-link.active {
+            background: var(--surface2);
+            border-color: rgba(240,185,11,.45);
+            color: var(--gold);
+        }
+    </style>
 
     {{-- ══════════════════════════════════════════
          PAINEL ADMIN
     ══════════════════════════════════════════ --}}
     @if(auth()->user()->id == 1)
 
+    {{-- Navegação entre abas (admin): Início × Mais Informações --}}
+    <ul class="nav mb-4" id="abas-bot" role="tablist">
+        <li class="nav-item">
+            <button type="button" class="nav-link active" data-aba="inicio">
+                <i class="fa-solid fa-house me-1"></i>Início
+            </button>
+        </li>
+        <li class="nav-item">
+            <button type="button" class="nav-link" data-aba="maisinfo">
+                <i class="fa-solid fa-circle-info me-1"></i>Mais Informações
+            </button>
+        </li>
+    </ul>
+
+    <script>
+    (function(){
+        // Alterna as abas trocando a classe do container; lembra a última aba visitada.
+        const container = document.getElementById('conteudo-bot');
+        const abas = document.querySelectorAll('#abas-bot .nav-link');
+        function ativarAba(nome){
+            abas.forEach(b => b.classList.toggle('active', b.dataset.aba === nome));
+            container.classList.toggle('mostrar-inicio',  nome === 'inicio');
+            container.classList.toggle('mostrar-maisinfo', nome === 'maisinfo');
+            try { localStorage.setItem('botbtc-aba', nome); } catch(e){}
+        }
+        abas.forEach(b => b.addEventListener('click', () => ativarAba(b.dataset.aba)));
+        let salva = null;
+        try { salva = localStorage.getItem('botbtc-aba'); } catch(e){}
+        if (salva === 'maisinfo' || salva === 'inicio') ativarAba(salva);
+    })();
+    </script>
+
+    {{-- ══ ABA INÍCIO ══ Painel do Bot (stat tiles) --}}
+    <div class="sec-inicio">
     <div class="section-title"><i class="fa-solid fa-gauge-high me-2"></i>Painel do Bot</div>
 
     {{-- Stat tiles admin --}}
@@ -69,6 +128,8 @@
     </div>
 
     {{-- Ordens abertas --}}
+    </div>{{-- /sec-inicio Painel do Bot --}}
+    <div class="sec-inicio">
     <div class="section-title mt-2"><i class="fa-solid fa-list-check me-2"></i>Ordens Abertas</div>
     <div class="card mb-4">
         <div class="card-body p-0">
@@ -92,12 +153,16 @@
     </div>
 
     {{-- Oscilação --}}
+    </div>{{-- /sec-inicio Ordens Abertas --}}
+    <div class="sec-maisinfo">
     <div class="d-flex align-items-center gap-2 flex-wrap mb-4">
         <span class="text-muted" style="font-size:.82rem;">Oscilação (salto · ATR dinâmico):</span>
         <span class="badge-gold"><i class="fa-solid fa-arrows-up-down me-1"></i>R$ <span id="salto">—</span></span>
     </div>
 
     {{-- Tabela de investidores --}}
+    </div>{{-- /sec-maisinfo Oscilação --}}
+    <div class="sec-inicio">
     <div class="section-title mt-2"><i class="fa-solid fa-users me-2"></i>Investidores</div>
     <div class="card mb-5">
         <div class="card-body p-0">
@@ -125,6 +190,8 @@
     </div>
 
     {{-- Saques pendentes --}}
+    </div>{{-- /sec-inicio Investidores --}}
+    <div class="sec-inicio">
     <div class="section-title mt-2"><i class="fa-solid fa-money-bill-transfer me-2"></i>Saques Pendentes</div>
     <div class="card mb-4">
         <div class="card-body p-0">
@@ -148,7 +215,9 @@
         </div>
     </div>
 
-    {{-- Banner: bot pausado aguardando transferência --}}
+    {{-- Banner: bot pausado aguardando transferência (sem classe de aba: precisa
+         aparecer nas duas, é o feedback imediato do "Iniciar Saque") --}}
+    </div>{{-- /sec-inicio Saques Pendentes --}}
     <div id="banner-pausa" class="mb-4" style="display:none;">
         <div style="background:#1a1a2e;border:1px solid #f0b90b;border-radius:10px;padding:16px 20px;">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
@@ -167,6 +236,7 @@
     </div>
 
     {{-- Transferências diretas do admin na Binance --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-right-left me-2"></i>Transferências Diretas (Binance)</div>
     <div class="card mb-4">
         <div class="card-body p-0">
@@ -196,6 +266,8 @@
     </div>
 
     {{-- Depósitos PIX confirmados --}}
+    </div>{{-- /sec-maisinfo Transferências --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2">
         <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
         <span id="badge-depositos-pix" class="ms-2" style="display:none;background:#32bcad;color:#000;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;"></span>
@@ -223,6 +295,8 @@
     </div>
 
     {{-- Configuração do bot --}}
+    </div>{{-- /sec-maisinfo Depósitos PIX --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-sliders me-2"></i>Configuração do Bot</div>
     <div class="card mb-5">
         <div class="card-body">
@@ -263,6 +337,8 @@
     </div>
 
     {{-- Lucro do bot: cards de resumo + decomposição grid×oscilação --}}
+    </div>{{-- /sec-maisinfo Configuração --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-chart-line me-2"></i>Lucro do Bot</div>
 
     {{-- Cards: hoje / 7d / 30d (mesmo endpoint da tabela abaixo — cache compartilhado) --}}
@@ -331,6 +407,8 @@
     </div>
 
     {{-- Pausa manual do admin: cancela ordens e congela o bot até despausar --}}
+    </div>{{-- /sec-maisinfo Lucro do Bot --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-circle-pause me-2"></i>Pausa Manual</div>
     <div class="card mb-4" id="card-pausa-manual">
         <div class="card-body">
@@ -395,6 +473,8 @@
     </script>
 
     {{-- Modo "Preparar Subida" (gatilho manual do admin) --}}
+    </div>{{-- /sec-maisinfo Pausa Manual --}}
+    <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-rocket me-2"></i>Modo Preparar Subida</div>
     <div class="card mb-4" id="card-modo-subida">
         <div class="card-body">
@@ -455,6 +535,7 @@
         carregar();
     })();
     </script>
+    </div>{{-- /sec-maisinfo Modo Preparar Subida --}}
 
     @endif {{-- fim admin --}}
 
@@ -462,6 +543,9 @@
     {{-- ══════════════════════════════════════════
          PAINEL DO INVESTIDOR
     ══════════════════════════════════════════ --}}
+    {{-- Admin vê o resumo do próprio investimento só na aba Mais Informações;
+         investidor comum sempre vê (sem abas). --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div class="section-title"><i class="fa-solid fa-wallet me-2"></i>Meu Investimento</div>
 
     <div class="row g-3 mb-4">
@@ -500,6 +584,8 @@
     </div>
 
     {{-- Preço BTC atual --}}
+    </div>{{-- /Meu Investimento --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div class="row g-3 mb-5">
 
         <div class="col-12 col-md-6">
@@ -524,9 +610,11 @@
         </div>
 
     </div>
+    </div>{{-- /Preço BTC --}}
 
     @if(auth()->user()->id == 1)
     {{-- Tendência do mercado — visível apenas ao admin --}}
+    <div class="sec-maisinfo">
     <div class="row g-3 mb-5">
         <div class="col-12">
             <div class="stat-tile" id="tile-fg" style="border-color:rgba(120,120,120,.2);">
@@ -564,9 +652,11 @@
             </div>
         </div>
     </div>
+    </div>{{-- /sec-maisinfo Tendência --}}
     @endif
 
     {{-- Detalhes BTC por aporte --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div id="area-btc-aportes" style="display:none;" class="mb-5">
         <div class="section-title"><i class="fa-brands fa-bitcoin me-2" style="color:#f0b90b;"></i>BTC na Época de Cada Aporte</div>
         <div class="card">
@@ -594,6 +684,8 @@
     </div>
 
     {{-- Depósito: admin credita direto nas cotas; usuário comum via PIX --}}
+    </div>{{-- /BTC por aporte --}}
+    <div class="@if(auth()->user()->id == 1)sec-inicio @endif">
     @if(auth()->user()->id == 1)
     <div class="mb-3">
         <div class="card" style="border-color:rgba(0,214,143,.25);">
@@ -649,6 +741,8 @@
     @endif
 
     {{-- Saque --}}
+    </div>{{-- /Adicionar Fundos --}}
+    <div class="@if(auth()->user()->id == 1)sec-inicio @endif">
     <div class="mb-3" id="area-saque-form">
         <div class="card">
             <div class="card-body">
@@ -676,12 +770,16 @@
     </div>
 
     {{-- Saques pendentes do investidor --}}
+    </div>{{-- /Solicitar Saque --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div id="area-saques-pendentes" class="mb-3" style="display:none;">
         <div class="section-title"><i class="fa-solid fa-clock me-2"></i>Saques Aguardando PIX</div>
         <div id="lista-saques-pendentes"></div>
     </div>
 
     {{-- Histórico de movimentações --}}
+    </div>{{-- /Saques Aguardando PIX --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div id="area-historico-saques" class="mb-5" style="display:none;">
         <div class="section-title"><i class="fa-solid fa-clock-rotate-left me-2"></i>Histórico de Movimentações</div>
         <div class="card">
@@ -703,6 +801,8 @@
     </div>
 
     {{-- Avisos para o investidor --}}
+    </div>{{-- /Histórico --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div class="d-flex flex-column gap-2 mb-5">
         <div style="background:rgba(240,185,11,.08);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.75rem 1rem;font-size:.82rem;color:#f0b90b;">
             <i class="fa-solid fa-circle-info me-2"></i>
@@ -717,6 +817,7 @@
             A oscilação do Bitcoin pode afetar o valor do seu investimento para <strong>mais ou para menos</strong>, dependendo da tendência atual do mercado.
         </div>
     </div>
+    </div>{{-- /Avisos --}}
 
 </div>{{-- /container --}}
 
