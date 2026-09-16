@@ -18,6 +18,8 @@ import 'dart:convert'; // jsonEncode / jsonDecode: converte objetos Dart ↔ JSO
 import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
 import 'package:shared_preferences/shared_preferences.dart'; // "caderninho" que salva dados no aparelho
 
+import '../modelos/painel.dart';
+
 /// URL base do servidor — DIRETO DA PRODUÇÃO.
 ///
 /// O app é de uso pessoal (não vai pra Play Store), então ele sempre fala
@@ -174,6 +176,23 @@ class ApiService {
     if (resposta.statusCode == 200) {
       final dados = jsonDecode(resposta.body) as Map<String, dynamic>;
       return Usuario.fromJson(dados['user'] as Map<String, dynamic>);
+    }
+
+    _lancaErro(resposta);
+  }
+
+  /// Busca o painel completo (aba "Início" do site) em UMA chamada:
+  /// tiles de saldo, ordens abertas, investidores e saques pendentes.
+  static Future<Painel> painel() async {
+    await carregarTokenSalvo(); // garante o header com o token certo
+
+    final resposta = await http.get(
+      Uri.parse('$kBaseUrl/api/painel'),
+      headers: _headersComToken(),
+    );
+
+    if (resposta.statusCode == 200) {
+      return Painel.fromJson(jsonDecode(resposta.body) as Map<String, dynamic>);
     }
 
     _lancaErro(resposta);
