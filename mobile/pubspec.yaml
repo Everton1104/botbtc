@@ -37,6 +37,9 @@ dependencies:
   http: ^1.6.0
   shared_preferences: ^2.5.5
   intl: ^0.20.3
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+  flutter_local_notifications: ^22.3.1
 
 dev_dependencies:
   flutter_test:
@@ -48,6 +51,29 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ÍCONE DO APP — lido pela ferramenta flutter_launcher_icons (não pelo Flutter
+# em si). Ela recorta/redimensiona as imagens pros vários tamanhos que o
+# Android exige (mdpi até xxxhdpi) e escreve em android/app/src/main/res/.
+# Rodar manualmente após mudar: dart run flutter_launcher_icons
+#
+# android: true / ios: false → só geramos pro Android (app é pessoal).
+#
+# Duas versões da arte porque o Android 8+ usa "adaptive icon":
+#   • background: a cor de fundo (a mesma escura do site, #0d1117);
+#   • foreground: o ₿ dourado MENOR (45% da área) — o sistema corta as bordas
+#     pra fazer o formato redondo/quadrado do launcher, então o símbolo precisa
+#     ficar numa "zona segura" central pra não perder pedaço.
+# image_path: a versão legada (Android 7-): fundo + ₿ maiores, num quadrado só.
+# ─────────────────────────────────────────────────────────────────────────────
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icone_app.png"
+  adaptive_icon_background: "#0d1117"
+  adaptive_icon_foreground: "assets/icone_foreground.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
