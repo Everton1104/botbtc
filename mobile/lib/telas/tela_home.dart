@@ -27,6 +27,7 @@ import '../servicos/api.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_login.dart';
+import 'tela_saque.dart';
 
 class TelaHome extends StatefulWidget {
   const TelaHome({super.key});
@@ -170,6 +171,16 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     );
   }
 
+  /// Abre a tela de saques. O `await` espera ela fechar para então
+  /// atualizar a Home em silêncio — solicitar/cancelar/aprovar muda a
+  /// lista "Saques Pendentes" (e o painel) que está aqui embaixo.
+  Future<void> _abrirSaques() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TelaSaque()),
+    );
+    if (mounted) _carregar(silencioso: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     // O corpo muda conforme o estado — em vez de FutureBuilder (que pisca
@@ -202,6 +213,13 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('BotBTC'),
         actions: [
+          // Saques: o fluxo completo (solicitar/cancelar/histórico e, pro
+          // admin, aprovar com pausa do bot) mora na TelaSaque.
+          IconButton(
+            icon: const Icon(Icons.currency_exchange),
+            tooltip: 'Saques',
+            onPressed: _abrirSaques,
+          ),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Sair', onPressed: _sair),
         ],
       ),

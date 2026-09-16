@@ -20,6 +20,7 @@ import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
 import 'package:shared_preferences/shared_preferences.dart'; // "caderninho" que salva dados no aparelho
 
 import '../modelos/painel.dart';
+import '../modelos/saque.dart';
 
 /// URL base do servidor — DIRETO DA PRODUÇÃO.
 ///
@@ -217,6 +218,108 @@ class ApiService {
         'Puxe de novo em instantes.',
       );
     }
+  }
+
+  /// Busca a tela de saques inteira (GET /api/saque/tela): disponível,
+  /// pendentes e histórico do usuário; aprovações e pausa do bot vêm
+  /// embutidas quando o usuário é o admin — o servidor decide sozinho.
+  static Future<DadosSaque> telaSaque() async {
+    try {
+      await carregarTokenSalvo();
+
+      final resposta = await http
+          .get(
+            Uri.parse('$kBaseUrl/api/saque/tela'),
+            headers: _headersComToken(),
+          )
+          .timeout(kTimeoutApi);
+
+      if (resposta.statusCode == 200) {
+        return DadosSaque.fromJson(jsonDecode(resposta.body) as Map<String, dynamic>);
+      }
+
+      _lancaErro(resposta);
+    } on TimeoutException {
+      throw ApiException('Tempo esgotado ao carregar os saques.');
+    }
+  }
+
+  /// Solicita um saque. `valor` null ou vazio = sacar TUDO (o servidor
+  /// calcula o máximo). Devolve a mensagem pronta pra exibir num SnackBar.
+  static Future<String> solicitarSaque({double? valor}) async {
+    // Corpo só inclui "valor" quando há número — campo ausente = "tudo"
+    // no servidor (mesma convenção do formulário do site).
+    final corpo = valor == null || valor <= 0 ? <String, dynamic>{} : {'valor': valor};
+
+    final resposta = await _requisicaoSaque(
+      'POST',
+      '/api/saque/solicitar',
+      corpo: corpo,
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// Cancela um saque pendente SEU (o servidor devolve as cotas).
+  static Future<String> cancelarSaque(int id) async {
+    final resposta = await _requisicaoSaque('DELETE', '/api/saque/cancelar/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// CONFIRMA um saque como admin (vende BTC se faltar BRL, cancela as
+  /// ordens abertas e pausa o bot 3 min — a mesma rotina do site).
+  static Future<String> confirmarSaque(int id) async {
+    final resposta = await _requisicaoSaque('POST', '/api/saque/confirmar/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// Libera o bot da pausa pós-confirmação (admin).
+  static Future<String> retomarBot() async {
+    final resposta = await _requisicaoSaque('POST', '/api/saque/retomar');
+    return _mensagemDe(resposta);
+  }
+
+  /// Executor comum das ações de saque: montar a chamada, anexar o token,
+  /// aplicar timeout e traduzir qualquer erro em ApiException.
+  static Future<http.Response> _requisicaoSaque(
+    String metodo,
+    String caminho, {
+    Map<String, dynamic>? corpo,
+  }) async {
+    try {
+      await carregarTokenSalvo();
+
+      final uri = Uri.parse('$kBaseUrl$caminho');
+      final req = http.Request(metodo, uri)..headers.addAll(_headersComToken());
+
+      if (corpo != null) {
+        // Ações com corpo precisam dos DOIS headers (ver comentário do login).
+        req.headers['Content-Type'] = applicationJson;
+        req.body = jsonEncode(corpo);
+      }
+
+      final resposta = await http
+          .Response.fromStream(await http.Client().send(req))
+          .timeout(kTimeoutApi);
+
+      if (resposta.statusCode != 200) {
+        _lancaErro(resposta);
+      }
+
+      return resposta;
+    } on TimeoutException {
+      throw ApiException('Tempo esgotado — tente de novo em instantes.');
+    }
+  }
+
+  /// Extrai a {"mensagem": "..."} que o SaqueApiController sempre devolve.
+  static String _mensagemDe(http.Response resposta) {
+    try {
+      final corpo = jsonDecode(resposta.body);
+      if (corpo is Map && corpo['mensagem'] is String) {
+        return corpo['mensagem'] as String;
+      }
+    } catch (_) {}
+    return 'Ação realizada.';
   }
 
   /// Encerra a sessão: pede ao servidor para revogar o token atual.

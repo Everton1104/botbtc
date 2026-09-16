@@ -1,7 +1,6 @@
 <?php
 
 use App\Models\BotState;
-use App\Models\BotWithdrawalRequest;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
@@ -504,176 +503,25 @@ Route::get('/admin/usuarios-investimentos', function (BinanceController $binance
 })->middleware(['auth', 'whatsapp.verified']);
 
 // ── SAQUES ──────────────────────────────────────────────────────────────────
+// Toda a regra (queima de cotas, taxa, venda de BTC, pausa do bot) vive no
+// SaqueService — as rotas abaixo são só a "casca" HTTP que o site chama.
+// O app mobile chama os MESMOS métodos pela Api/SaqueApiController.
 
 // Usuário solicita saque de valor escolhido
-Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $binance) {
-
-    $userId = Auth::id();
-
-    // Patrimônio lido ANTES da transaction (chamada externa — Binance)
-    $saldos = $binance->getSaldos();
-    $preco  = $binance->getPrecoBTC();
-
-    $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
-
-    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
-                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
-
-    $valorSolicitado = (float) $req->input('valor', 0);
-    $valorBruto = 0.0;
-
-    try {
-        DB::transaction(function () use ($userId, $patrimonioAtual, $valorSolicitado, $req, &$valorBruto) {
-
-            // Lock: impede dois saques simultâneos do mesmo usuário
-            $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
-
-            if (!$invest || $invest->cotas <= 0) {
-                throw new \Exception('Nenhum investimento encontrado.', 422);
-            }
-
-            $totalCotas   = (float) BotInvestment::lockForUpdate()->sum('cotas');
-            $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
-            $valorMaximo  = $invest->cotas * $precoPorCota;
-
-            $valorBruto = $valorSolicitado > 0
-                ? min($valorSolicitado, $valorMaximo)
-                : $valorMaximo;
-
-            if ($valorBruto <= 0) {
-                throw new \Exception('Valor inválido.', 422);
-            }
-
-            // Admin (user_id = 1) saca sem a taxa de 1%
-            $isAdmin       = $userId === 1;
-            $valorLiquido  = $isAdmin ? $valorBruto : $valorBruto * 0.99;
-            $cotasAQueimar = $precoPorCota > 0 ? $valorBruto / $precoPorCota : 0;
-            $cotasTaxa     = $isAdmin ? 0 : ($precoPorCota > 0 ? ($valorBruto * 0.01) / $precoPorCota : 0);
-
-            BotWithdrawalRequest::create([
-                'user_id'        => $userId,
-                'valor_bruto'    => $valorBruto,
-                'valor_liquido'  => $valorLiquido,
-                'cotas'          => $cotasAQueimar,
-                'cotas_taxa'     => $cotasTaxa,   // salva para reverter exatamente no cancelamento
-                'preco_por_cota' => $precoPorCota,
-                'patrimonio_bot' => $patrimonioAtual,
-                'status'         => 'pendente',
-            ]);
-
-            // Queimar cotas do investidor
-            // Zera o registro se queimou tudo OU se o resíduo virou poeira (< R$ 1),
-            // evitando cotas-fantasma que continuariam aparecendo no ranking.
-            $cotasRestantes = $invest->cotas - $cotasAQueimar;
-            $valorRestante  = $cotasRestantes * $precoPorCota;
-            if ($cotasAQueimar >= $invest->cotas || $valorRestante < 1) {
-                $invest->delete();
-            } else {
-                $invest->cotas                -= $cotasAQueimar;
-                $invest->investimento_inicial  = max(0, $invest->investimento_inicial - $valorBruto);
-                $invest->save();
-            }
-
-            // Taxa de 1% vai para o admin
-            if ($cotasTaxa > 0) {
-                $adminInvest = BotInvestment::where('user_id', 1)->lockForUpdate()->first();
-                if ($adminInvest) {
-                    $adminInvest->cotas += $cotasTaxa;
-                    $adminInvest->save();
-                } else {
-                    BotInvestment::create([
-                        'user_id'              => 1,
-                        'investimento_inicial' => 0,
-                        'cotas'                => $cotasTaxa,
-                    ]);
-                }
-            }
-        });
-    } catch (\Exception $e) {
-        $code = $e->getCode() >= 400 ? $e->getCode() : 422;
-        return response()->json(['mensagem' => $e->getMessage()], $code);
-    }
-
-    // Push pro app (o WhatsApp de btc_saque foi aposentado — ver FcmService).
-    \App\Services\FcmService::notificarSaque($valorBruto, auth()->user()->name);
-
-    return response()->json(['mensagem' => 'Saque solicitado! Aguarde a confirmação do administrador.']);
-
+Route::post('/bot/solicitar-saque', function (Request $req) {
+    $r = app(\App\Services\SaqueService::class)->solicitar(Auth::id(), (float) $req->input('valor', 0));
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Usuário: cancelar saque pendente (devolve cotas)
 Route::delete('/bot/cancelar-saque/{id}', function ($id) {
-
-    $saque = BotWithdrawalRequest::where('id', $id)
-        ->where('user_id', Auth::id())
-        ->where('status', 'pendente')
-        ->first();
-
-    if (!$saque) {
-        return response()->json(['mensagem' => 'Saque não encontrado ou já processado.'], 404);
-    }
-
-    DB::transaction(function () use ($saque) {
-        // Devolver as cotas ao investidor
-        $invest = BotInvestment::where('user_id', $saque->user_id)->lockForUpdate()->first();
-        if ($invest) {
-            $invest->cotas                += $saque->cotas;
-            $invest->investimento_inicial += $saque->valor_bruto;
-            $invest->save();
-        } else {
-            BotInvestment::create([
-                'user_id'              => $saque->user_id,
-                'investimento_inicial' => $saque->valor_bruto,
-                'cotas'                => $saque->cotas,
-            ]);
-        }
-
-        // Reverter taxa do admin usando o valor exato registrado no saque
-        $cotasTaxa = (float) ($saque->cotas_taxa ?? 0);
-        if ($cotasTaxa > 0) {
-            $adminInvest = BotInvestment::where('user_id', 1)->lockForUpdate()->first();
-            if ($adminInvest) {
-                $adminInvest->cotas = max(0, $adminInvest->cotas - $cotasTaxa);
-                $adminInvest->cotas > 0 ? $adminInvest->save() : $adminInvest->delete();
-            }
-        }
-
-        $saque->status = 'cancelado';
-        $saque->save();
-    });
-
-    return response()->json(['mensagem' => 'Saque cancelado e valor devolvido ao seu saldo.']);
-
+    $r = app(\App\Services\SaqueService::class)->cancelar(Auth::id(), (int) $id);
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
 })->middleware(['auth', 'whatsapp.verified']);
 
-// Usuário: saques pendentes e histórico
+// Usuário: saques pendentes, histórico e valor disponível
 Route::get('/bot/meus-saques', function () {
-
-    $pendentes = BotWithdrawalRequest::where('user_id', Auth::id())
-        ->where('status', 'pendente')
-        ->orderBy('created_at')
-        ->get()
-        ->map(fn($s) => [
-            'id'            => $s->id,
-            'valor_bruto'   => $s->valor_bruto,
-            'valor_liquido' => $s->valor_liquido,
-            'criado_em'     => $s->created_at->format('d/m/Y H:i'),
-        ]);
-
-    $historico = BotWithdrawalRequest::where('user_id', Auth::id())
-        ->where('status', 'confirmado')
-        ->orderByDesc('confirmado_at')
-        ->get()
-        ->map(fn($s) => [
-            'valor_liquido' => $s->valor_liquido,
-            'confirmado_em' => $s->confirmado_at
-                ? \Carbon\Carbon::parse($s->confirmado_at)->format('d/m/Y H:i')
-                : '—',
-        ]);
-
-    return response()->json(['pendentes' => $pendentes, 'historico' => $historico]);
-
+    return response()->json(app(\App\Services\SaqueService::class)->meus(Auth::id()));
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Usuário: histórico de depósitos PIX
@@ -696,20 +544,7 @@ Route::get('/bot/saques-pendentes', function () {
 
     if (Auth::id() !== 1) return response()->json([]);
 
-    return BotWithdrawalRequest::where('status', 'pendente')
-        ->with('user:id,name,email')
-        ->orderBy('created_at')
-        ->get()
-        ->map(fn($s) => [
-            'id'            => $s->id,
-            'user_id'       => $s->user_id,
-            'name'          => $s->user?->name ?? 'Desconhecido',
-            'email'         => $s->user?->email ?? '—',
-            'valor_bruto'   => $s->valor_bruto,
-            'valor_liquido' => $s->valor_liquido,
-            'cotas'         => $s->cotas,
-            'criado_em'     => $s->created_at->format('d/m/Y H:i'),
-        ]);
+    return response()->json(app(\App\Services\SaqueService::class)->pendentes());
 
 })->middleware(['auth', 'whatsapp.verified']);
 
@@ -798,81 +633,28 @@ Route::post('/whatsapp/webhook', [\App\Http\Controllers\WhatsappController::clas
 
 // ── PIX (PagBank) ─────────────────────────────────────────────────────────────
 
-// Admin: confirmar PIX enviado
-Route::post('/bot/confirmar-saque/{id}', function ($id, \App\Http\Controllers\BinanceController $binance) {
-
+// Admin: confirmar PIX enviado (vende BTC se faltar, cancela ordens e pausa
+// o bot 3 min — tudo dentro do SaqueService::confirmar)
+Route::post('/bot/confirmar-saque/{id}', function ($id) {
     if (Auth::id() !== 1) {
         return response()->json(['mensagem' => 'Acesso negado.'], 403);
     }
 
-    $saque = BotWithdrawalRequest::where('id', $id)->where('status', 'pendente')->first();
-
-    if (!$saque) {
-        return response()->json(['mensagem' => 'Saque não encontrado ou já confirmado.'], 404);
-    }
-
-    $valorLiquido = (float) $saque->valor_liquido;
-
-    // Verificar saldo BRL livre
-    $saldos      = $binance->getSaldos();
-    $brl         = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $saldoBRLLivre = (float) ($brl['free'] ?? 0);
-
-    if ($saldoBRLLivre < $valorLiquido) {
-        $falta      = $valorLiquido - $saldoBRLLivre;
-        $precoAtual = $binance->getPrecoBTC();
-
-        // Cancelar todas as ordens abertas do bot
-        $ordensAbertas = $binance->getOpenOrders('BTCBRL');
-        foreach ($ordensAbertas as $ordem) {
-            $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
-        }
-
-        // Vender BTC suficiente (margem de 0.5% para cobrir taxa da Binance)
-        $btcNecessario = ($falta / $precoAtual) * 1.005;
-        $resultado     = $binance->sellMarketBTC($btcNecessario);
-
-        if (isset($resultado['code'])) {
-            \Illuminate\Support\Facades\Log::error("Saque atípico [{$id}]: falha ao vender BTC — " . json_encode($resultado));
-            return response()->json(['mensagem' => 'Erro ao converter BTC para BRL. Verifique o saldo e tente novamente.'], 500);
-        }
-
-        \Illuminate\Support\Facades\Log::info("Saque atípico [{$id}]: vendidos {$btcNecessario} BTC a mercado para cobrir R$ {$falta}. BRL disponível era R$ {$saldoBRLLivre}.");
-    }
-
-    // Pausar todos os estados do bot por 3 minutos para o admin fazer a transferência
-    BotState::query()->update(['pausado_ate' => now()->addMinutes(3)]);
-
-    $saque->status        = 'confirmado';
-    $saque->confirmado_at = now();
-    $saque->save();
-
-    return response()->json(['mensagem' => 'PIX confirmado com sucesso!']);
-
+    $r = app(\App\Services\SaqueService::class)->confirmar((int) $id);
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 500));
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: status da pausa do bot
 Route::get('/bot/status-pausa', function () {
     if (Auth::id() !== 1) return response()->json(['pausado' => false, 'segundos' => 0]);
 
-    $state = BotState::whereNotNull('pausado_ate')->where('pausado_ate', '>', now())->first();
-
-    if (!$state) {
-        return response()->json(['pausado' => false, 'segundos' => 0]);
-    }
-
-    return response()->json([
-        'pausado'  => true,
-        'segundos' => (int) now()->diffInSeconds($state->pausado_ate),
-    ]);
+    return response()->json(app(\App\Services\SaqueService::class)->statusPausa());
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Admin: cancelar pausa manualmente
 Route::post('/bot/cancelar-pausa', function () {
     if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
 
-    BotState::query()->update(['pausado_ate' => null]);
-
-    return response()->json(['mensagem' => 'Bot liberado com sucesso.']);
+    return response()->json(['mensagem' => app(\App\Services\SaqueService::class)->retomarBot()['mensagem']]);
 })->middleware(['auth', 'whatsapp.verified']);
 
