@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\BinanceController;
-use App\Http\Controllers\WhatsappController;
 use App\Models\PixPayment;
 use App\Services\InfinitePayService;
 use App\Services\MercadoPagoService;
@@ -35,7 +34,9 @@ class PixController extends Controller
         ], $extra));
 
         $pagamento->loadMissing('user');
-        WhatsappController::notificarDeposito(
+
+        // Push pro app (o WhatsApp de btc_deposito foi aposentado — ver FcmService).
+        \App\Services\FcmService::notificarDeposito(
             (float) $pagamento->valor,
             $pagamento->user?->name ?? 'Desconhecido'
         );
@@ -342,7 +343,9 @@ class PixController extends Controller
                 Log::info('PIX aprovado via webhook', ['txid' => $paymentId, 'valor' => $pagamento->valor]);
 
                 $pagamento->loadMissing('user');
-                WhatsappController::notificarDeposito(
+
+                // Push pro app (o WhatsApp de btc_deposito foi aposentado — ver FcmService).
+                \App\Services\FcmService::notificarDeposito(
                     (float) $pagamento->valor,
                     $pagamento->user?->name ?? 'Desconhecido'
                 );

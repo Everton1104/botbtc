@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\FcmToken;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -65,6 +66,32 @@ class AuthController extends Controller
         $request->user()->currentAccessToken()->delete();
 
         return response()->json(['message' => 'Sessão encerrada.']);
+    }
+
+    /**
+     * POST /api/dispositivo-token — o app entrega o token FCM do celular.
+     *
+     * O token é o "endereço" do aparelho no Firebase: sem ele gravado aqui,
+     * o Laravel não tem pra quem mandar push quando o bot operar. Ele muda
+     * quando o app é reinstalado ou o Firebase rotaciona — por isso o upsert
+     * (updateOrCreate), que insere na primeira vez e atualiza nas demais.
+     */
+    public function registrarDispositivo(Request $request): JsonResponse
+    {
+        $dados = $request->validate([
+            'token'      => ['required', 'string', 'max:500'],
+            'dispositivo' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        FcmToken::updateOrCreate(
+            ['token' => $dados['token']],
+            [
+                'user_id'    => $request->user()->id,
+                'dispositivo' => $dados['dispositivo'] ?? 'mobile',
+            ],
+        );
+
+        return response()->json(['message' => 'Dispositivo registrado.']);
     }
 
     /**

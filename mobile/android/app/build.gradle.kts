@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    // Lê o google-services.json e injeta as credenciais do Firebase na build.
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -12,6 +14,11 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // "Desugaring": o flutter_local_notifications usa APIs de data/hora
+        // que só existem em Android novo; isto as reescreve pra funcionar
+        // também nos antigos. Sem esta linha, a build falha em
+        // checkDebugAarMetadata.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -42,6 +49,11 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // A biblioteca que o desugaring (acima) usa por baixo dos panos.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {

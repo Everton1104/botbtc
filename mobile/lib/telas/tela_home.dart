@@ -8,9 +8,17 @@
 //   3. Investidores (só admin): aportado, cotas, participação, valor atual, lucro
 //   4. Saques Pendentes (só admin)
 //
-// O site recarrega sozinho a cada 30s; no app o gesto natural é
-// PUXAR PRA BAIXO (RefreshIndicator) — economiza bateria e dados.
+// ATUALIZAÇÃO: o site recarrega a cada 30s. No app, duas formas:
+//   • AUTOMÁTICA — a cada 1 minuto, em SILÊNCIO (a tela não pisca: os dados
+//     antigos ficam de pé até os novos chegarem de verdade);
+//   • MANUAL — puxar pra baixo (RefreshIndicator), quando você quiser já.
+//
+// Bateria: o relógio de 1 minuto DESLIGA quando o app vai pro fundo (nada de
+// acordar o celular sem ninguém olhando) e religa — com uma atualização
+// imediata — quando você volta pro app.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import 'dart:async'; // Timer: o "relógio" que dispara a atualização de 1 em 1 min
 
 import 'package:flutter/material.dart';
 
@@ -27,20 +35,127 @@ class TelaHome extends StatefulWidget {
   State<TelaHome> createState() => _TelaHomeState();
 }
 
-class _TelaHomeState extends State<TelaHome> {
-  // O Future observado pelo FutureBuilder. Como campo (e não variável no
-  // build), a requisição roda UMA vez por carregamento — cada redesenho
-  // da tela não dispara rede de novo. Sem `final` porque o _recarregar
-  // troca o future por um novo (é o refresh).
-  late Future<Painel> _futurePainel = ApiService.painel();
+class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
+  // ── Estado dos dados ─────────────────────────────────────────────────────
+  // Painel em tela (null = ainda não carregou nada nesta sessão).
+  Painel? _painel;
+  // true apenas na PRIMEIRA carga (tela ainda vazia → loader central no lugar).
+  bool _carregando = true;
+  // Último erro (só vira tela de erro se NÃO houver dados antigos para mostrar).
+  String? _erro;
 
-  /// Dispara um novo carregamento e devolve o MESMO Future criado, para o
-  /// RefreshIndicator saber quando parar de girar (ele espera o future
-  /// que o onRefresh retornar).
-  Future<void> _recarregar() {
-    final futuro = ApiService.painel();
-    setState(() => _futurePainel = futuro);
-    return futuro;
+  // ── Relógio da atualização automática ────────────────────────────────────
+  Timer? _timerAuto;
+
+  /// Intervalo entre atualizações automáticas (o site usa 30s; 1 min basta
+  /// pra um painel e pesa menos no servidor e na bateria).
+  static const Duration kIntervaloAuto = Duration(minutes: 1);
+
+  @override
+  void initState() {
+    super.initState();
+    // WidgetsBindingObserver: nos avisa quando o app vai pro fundo/volta.
+    // É com isso que o relógio pausa (bateria) e retoma (dados frescos).
+    WidgetsBinding.instance.addObserver(this);
+    _carregar(); // primeira carga (com loader)
+    _iniciarTimer(); // liga o relógio de 1 minuto
+  }
+
+  @override
+  void dispose() {
+    // Boa criação de hábito: quem registra observer/timer no initState
+    // DEVOLVE no dispose — a tela nunca é destruída sem limpar a bagunça.
+    WidgetsBinding.instance.removeObserver(this);
+    _pararTimer();
+    super.dispose();
+  }
+
+  /// O Android avisou que o ciclo de vida do app mudou.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState estado) {
+    if (estado == AppLifecycleState.resumed) {
+      // Voltou a olhar pro app: atualiza JÁ (não espera o próximo minuto)
+      // e garante o relógio ligado.
+      _carregar(silencioso: true);
+      _iniciarTimer();
+    } else if (estado == AppLifecycleState.paused ||
+        estado == AppLifecycleState.inactive ||
+        estado == AppLifecycleState.hidden) {
+      // App saiu de vista: desliga o relógio — nada de rede/bateria
+      // gastando sem plateia. O push do Firebase é quem avisa das novidades.
+      _pararTimer();
+    }
+  }
+
+  void _iniciarTimer() {
+    // ??= liga só se ainda não estiver ligado (evita dois relógios).
+    _timerAuto ??= Timer.periodic(
+      kIntervaloAuto,
+      (_) => _carregar(silencioso: true),
+    );
+  }
+
+  void _pararTimer() {
+    _timerAuto?.cancel();
+    _timerAuto = null;
+  }
+
+  /// Busca o painel no servidor.
+  ///
+  /// `silencioso: true` (o relógio de 1 min) NÃO mexe na tela enquanto
+  /// espera: os dados atuais continuam de pé e são trocados de uma vez
+  /// quando a resposta chega. Erro em modo silencioso com dados na tela
+  /// também é engolido — daqui a 1 minuto ele tenta de novo sozinho.
+  /// `silencioso: false` (abertura da tela e puxão manual) mostra loader
+  /// na primeira vez e SnackBar se falhar com dados na tela.
+  Future<void> _carregar({bool silencioso = false}) async {
+    if (!silencioso && _painel == null) {
+      setState(() => _carregando = true);
+    }
+
+    try {
+      final painel = await ApiService.painel();
+      if (!mounted) return;
+      setState(() {
+        _painel = painel;
+        _erro = null;
+        _carregando = false;
+      });
+    } on ApiException catch (e) {
+      // 401 = token revogado: volta pro login nas duas modalidades.
+      if (e.status == 401) {
+        _tokenInvalido();
+        return;
+      }
+      _falhou(e.mensagem, silencioso: silencioso);
+    } catch (_) {
+      _falhou('Não foi possível conectar ao servidor.', silencioso: silencioso);
+    }
+  }
+
+  /// Tratamento comum das falhas de _carregar.
+  void _falhou(String mensagem, {required bool silencioso}) {
+    if (!mounted) return;
+
+    // Com dados na tela + falha silenciosa: nada muda na tela (os dados de
+    // 1 minuto atrás continuam valendo; o próximo tic tenta de novo).
+    if (silencioso && _painel != null) return;
+
+    if (_painel != null) {
+      // Puxão manual com dados na tela: a lista fica, avisamos num SnackBar
+      // (aquela tarja que sobe de baixo e some sozinha).
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagem), backgroundColor: Cores.vermelho),
+      );
+      return;
+    }
+
+    // Primeira carga falhou: aqui sim, tela de erro inteira (com o gesto
+    // de puxar pra baixo disponível pra tentar de novo).
+    setState(() {
+      _erro = mensagem;
+      _carregando = false;
+    });
   }
 
   /// Faz logout e volta para a tela de login.
@@ -57,6 +172,32 @@ class _TelaHomeState extends State<TelaHome> {
 
   @override
   Widget build(BuildContext context) {
+    // O corpo muda conforme o estado — em vez de FutureBuilder (que pisca
+    // loader a cada future novo), decidimos nós mesmos o que mostrar:
+    //   1ª carga        → loader central
+    //   erro sem dados  → tela de erro (com puxão pra tentar de novo)
+    //   com dados       → a lista (que só é trocada quando dados NOVOS chegam)
+    final Widget corpo;
+
+    if (_carregando && _painel == null) {
+      corpo = const Center(child: CircularProgressIndicator());
+    } else if (_erro != null && _painel == null) {
+      corpo = ListView(
+        // ListView (e não Column) para o RefreshIndicator ter onde
+        // rolar mesmo numa tela de erro — assim dá pra tentar de novo
+        // puxando pra baixo.
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          const SizedBox(height: 80),
+          const Icon(Icons.wifi_off, size: 48, color: Cores.textoSuave),
+          const SizedBox(height: 8),
+          Text(_erro!, textAlign: TextAlign.center),
+        ],
+      );
+    } else {
+      corpo = _listaPainel(_painel!);
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('BotBTC'),
@@ -65,116 +206,92 @@ class _TelaHomeState extends State<TelaHome> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: _recarregar,
-        child: FutureBuilder<Painel>(
-          future: _futurePainel,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            if (snapshot.hasError) {
-              final erro = snapshot.error;
-              // 401 = token revogado no servidor: limpa e volta pro login.
-              if (erro is ApiException && erro.status == 401) {
-                WidgetsBinding.instance.addPostFrameCallback((_) => _tokenInvalido());
-                return const Center(child: Text('Sessão expirada.'));
-              }
-              return ListView(
-                // ListView (e não Column) para o RefreshIndicator ter onde
-                // rolar mesmo numa tela de erro — assim dá pra tentar de novo
-                // puxando pra baixo.
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  const SizedBox(height: 80),
-                  const Icon(Icons.wifi_off, size: 48, color: Cores.textoSuave),
-                  const SizedBox(height: 8),
-                  Text('$erro', textAlign: TextAlign.center),
-                ],
-              );
-            }
-
-            final painel = snapshot.data!;
-            return ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              // padding lateral/de-cima 12; embaixo maior pra última seção
-              // não encostar na borda/gesture bar do aparelho.
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-              children: [
-                // Aviso quando a Binance não respondeu (tiles zerados).
-                if (!painel.tiles.binanceOk)
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Row(
-                        children: [
-                          Icon(Icons.warning_amber_rounded, color: Cores.dourado),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Sem resposta da Binance agora — valores podem estar zerados.',
-                              style: TextStyle(color: Cores.textoSuave),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                _tituloSecao('Painel do Bot', Icons.speed),
-                _gridTiles(painel.tiles),
-
-                // Oscilação do grid — o mesmo "salto · ATR dinâmico" do site,
-                // em badge dourado logo abaixo dos tiles.
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Cores.dourado.withValues(alpha: 0.14),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.swap_vert, size: 15, color: Cores.dourado),
-                          const SizedBox(width: 5),
-                          Text(
-                            'Salto (ATR): ${moeda(painel.tiles.saltoAtr)}',
-                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Cores.dourado),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                _tituloSecao('Ordens Abertas', Icons.checklist),
-                if (painel.ordens.isEmpty)
-                  const _CardVazio(texto: 'Nenhuma ordem aberta.')
-                else
-                  ...painel.ordens.map(_cardOrdem),
-
-                _tituloSecao('Investidores', Icons.group),
-                if (painel.investidores.isEmpty)
-                  const _CardVazio(texto: 'Nenhum investidor cadastrado.')
-                else
-                  ...painel.investidores.map(_cardInvestidor),
-
-                _tituloSecao('Saques Pendentes', Icons.currency_exchange),
-                if (painel.saques.isEmpty)
-                  const _CardVazio(texto: 'Nenhum saque pendente.')
-                else
-                  ...painel.saques.map(_cardSaque),
-
-                const SizedBox(height: 48),
-              ],
-            );
-          },
-        ),
+        // Puxão manual: mesmo _carregar, mas SEM silêncio (o RefreshIndicator
+        // mostra o giro dele no topo; a lista continua visível embaixo).
+        onRefresh: () => _carregar(),
+        child: corpo,
       ),
+    );
+  }
+
+  /// A lista completa do painel (tiles, ordens, investidores, saques).
+  Widget _listaPainel(Painel painel) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      // padding lateral/de-cima 12; embaixo maior pra última seção
+      // não encostar na borda/gesture bar do aparelho.
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+      children: [
+        // Aviso quando a Binance não respondeu (tiles zerados).
+        if (!painel.tiles.binanceOk)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Cores.dourado),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Sem resposta da Binance agora — valores podem estar zerados.',
+                      style: TextStyle(color: Cores.textoSuave),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        _tituloSecao('Painel do Bot', Icons.speed),
+        _gridTiles(painel.tiles),
+
+        // Oscilação do grid — o mesmo "salto · ATR dinâmico" do site,
+        // em badge dourado logo abaixo dos tiles.
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Cores.dourado.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.swap_vert, size: 15, color: Cores.dourado),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Salto (ATR): ${moeda(painel.tiles.saltoAtr)}',
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Cores.dourado),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+
+        _tituloSecao('Ordens Abertas', Icons.checklist),
+        if (painel.ordens.isEmpty)
+          const _CardVazio(texto: 'Nenhuma ordem aberta.')
+        else
+          ...painel.ordens.map(_cardOrdem),
+
+        _tituloSecao('Investidores', Icons.group),
+        if (painel.investidores.isEmpty)
+          const _CardVazio(texto: 'Nenhum investidor cadastrado.')
+        else
+          ...painel.investidores.map(_cardInvestidor),
+
+        _tituloSecao('Saques Pendentes', Icons.currency_exchange),
+        if (painel.saques.isEmpty)
+          const _CardVazio(texto: 'Nenhum saque pendente.')
+        else
+          ...painel.saques.map(_cardSaque),
+
+        const SizedBox(height: 48),
+      ],
     );
   }
 

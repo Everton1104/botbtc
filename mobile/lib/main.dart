@@ -15,6 +15,7 @@
 import 'package:flutter/material.dart';
 
 import 'servicos/api.dart';
+import 'servicos/notificacoes.dart';
 import 'tema.dart';
 import 'telas/tela_home.dart';
 import 'telas/tela_login.dart';
@@ -22,6 +23,11 @@ import 'telas/tela_login.dart';
 Future<void> main() async {
   // Liga a infraestrutura de plugins antes de qualquer uso.
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Push: conecta ao Firebase, pede permissão e entrega o token ao Laravel.
+  // Vem ANTES do runApp pra já nascer ouvindo; e se o Firebase falhar, o
+  // app segue em frente sem notificações (dentro dela tem try/catch).
+  await inicializarNotificacoes();
 
   // Já logou outra vez? O token fica salvo no aparelho mesmo com o app
   // fechado — é por isso que você não digita a senha toda vez.

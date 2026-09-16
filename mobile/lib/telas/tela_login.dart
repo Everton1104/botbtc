@@ -12,9 +12,12 @@
 //     obrigatório para não vazar memória.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async'; // unawaited: dispara sem esperar
+
 import 'package:flutter/material.dart';
 
 import '../servicos/api.dart';
+import '../servicos/notificacoes.dart';
 import '../tema.dart';
 import 'tela_home.dart';
 
@@ -70,6 +73,12 @@ class _TelaLoginState extends State<TelaLogin> {
 
       // Se chegou aqui, logou! Troca a tela de login pela Home.
       //
+      // Antes disso, reentrega o token de push ao servidor: o registro do
+      // início do app roda ANTES do login, então é aqui que a primeira
+      // sessão fica apta a receber notificações (sem reiniciar o app).
+      // Sem await de propósito — não segura a navegação por causa de push.
+      unawaited(sincronizarToken());
+
       // O `if (!mounted) return;` é uma proteção: enquanto a requisição
       // corria, o usuário pode ter fechado esta tela — usar um contexto
       // de tela morta causaria erro. "mounted" pergunta: ainda estou viva?

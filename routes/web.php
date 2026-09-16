@@ -595,7 +595,8 @@ Route::post('/bot/solicitar-saque', function (Request $req, BinanceController $b
         return response()->json(['mensagem' => $e->getMessage()], $code);
     }
 
-    \App\Http\Controllers\WhatsappController::notificarSaque($valorBruto, auth()->user()->name);
+    // Push pro app (o WhatsApp de btc_saque foi aposentado — ver FcmService).
+    \App\Services\FcmService::notificarSaque($valorBruto, auth()->user()->name);
 
     return response()->json(['mensagem' => 'Saque solicitado! Aguarde a confirmação do administrador.']);
 

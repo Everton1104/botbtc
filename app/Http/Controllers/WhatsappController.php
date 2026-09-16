@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Storage;
 
 class WhatsappController extends Controller
 {
-    private const ADMIN = '5511997646569';
 
     // ── Webhook ──────────────────────────────────────────────────────────────
 
@@ -297,43 +296,10 @@ class WhatsappController extends Controller
         }
     }
 
-    public static function notificarSaque(float $valor, string $nomeUsuario)
-    {
-        self::enviarTemplateAdmin('btc_saque', [
-            ['type' => 'text', 'text' => number_format($valor, 2, ',', '.')],
-            ['type' => 'text', 'text' => $nomeUsuario],
-        ]);
-    }
-
-    public static function notificarDeposito(float $valor, string $nomeUsuario)
-    {
-        self::enviarTemplateAdmin('btc_deposito', [
-            ['type' => 'text', 'text' => number_format($valor, 2, ',', '.')],
-            ['type' => 'text', 'text' => $nomeUsuario],
-        ]);
-    }
-
-    private static function enviarTemplateAdmin(string $template, array $parametros)
-    {
-        try {
-            self::postGraph(config('services.whatsapp.phone_id'), [
-                'messaging_product' => 'whatsapp',
-                'to'                => self::ADMIN,
-                'type'              => 'template',
-                'template'          => [
-                    'name'       => $template,
-                    'language'   => ['code' => 'pt_BR'],
-                    'components' => [
-                        ['type' => 'body', 'parameters' => $parametros],
-                    ],
-                ],
-            ]);
-
-            self::log(self::ADMIN, null, "Template {$template}", null, config('services.whatsapp.phone_id'));
-        } catch (\Throwable $th) {
-            \Illuminate\Support\Facades\Log::error("WhatsApp {$template}: " . $th->getMessage());
-        }
-    }
+    // AVISOS DE BTC POR WHATSAPP (btc_saque / btc_deposito): removidos em
+    // 2026-09-16 — substituídos pelo push FCM do app mobile
+    // (App\Services\FcmService), após verificação ponta a ponta. O WhatsApp
+    // continua responsável pela verificação de número e códigos de usuário.
 
     public static function enviarModelo($business_phone_number_id, $numero, $templateName, $language = 'pt_BR')
     {

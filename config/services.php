@@ -60,4 +60,11 @@ return [
         'verify_token' => env('WEBHOOK_VERIFY_TOKEN'),
     ],
 
+    // Firebase Cloud Messaging (push pro app mobile).
+    // O JSON da conta de serviço vive NO SERVIDOR, fora do git — gerado em
+    // Console Firebase → Configurações do projeto → Contas de serviço.
+    'fcm' => [
+        'credentials' => env('FIREBASE_CREDENTIALS', storage_path('app/firebase-service-account.json')),
+    ],
+
 ];

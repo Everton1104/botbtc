@@ -236,6 +236,34 @@ class ApiService {
     }
   }
 
+  /// Entrega o token FCM (endereço de push deste celular) ao Laravel.
+  ///
+  /// Erro aqui é engolido de propósito: se o servidor não registrar agora,
+  /// o próximo token (troca/reinstalação) tenta de novo — e o resto do app
+  /// não pode quebrar por causa de notificação.
+  static Future<void> registrarDispositivo(String tokenFcm) async {
+    try {
+      await carregarTokenSalvo();
+
+      // Só envia se o usuário JÁ estiver logado. Sem token de login o
+      // endpoint devolveria 401 — push sem login não tem destinatário.
+      if (tokenEmMemoria == null) return;
+
+      await http
+          .post(
+            Uri.parse('$kBaseUrl/api/dispositivo-token'),
+            headers: {
+              ..._headersComToken(),
+              'Content-Type': applicationJson,
+            },
+            body: jsonEncode({'token': tokenFcm, 'dispositivo': 'android'}),
+          )
+          .timeout(kTimeoutApi);
+    } catch (_) {
+      // silêncio consciente (ver comentário do método)
+    }
+  }
+
   /// Cabeçalhos comuns a toda chamada autenticada.
   ///
   /// "Bearer" é o esquema que o Laravel Sanctum espera no header

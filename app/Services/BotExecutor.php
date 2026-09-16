@@ -407,6 +407,15 @@ class BotExecutor
             // insertOrIgnore respeita o unique (symbol, binance_trade_id) → dedup seguro.
             $total += BotTrade::insertOrIgnore($rows);
 
+            // Push dos fills que ACABARAM de acontecer (janela de 1h).
+            // Sem a janela, o backfill da primeira execução — que puxa 1 ano
+            // de histórico — encheria o celular de notificações de trades velhos.
+            // FcmService engole qualquer erro: push nunca trava o bot.
+            $frescos = array_filter($rows, fn($r) => $r['traded_at']->gt(now()->subHour()));
+            if ($frescos) {
+                FcmService::notificarTrades($frescos);
+            }
+
             // Próxima página a partir do último id visto.
             $cursor = ['fromId' => $ultimoId];
 

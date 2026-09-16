@@ -15,4 +15,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Aba "Início" do site em uma chamada só (tiles, ordens, investidores, saques).
     Route::get('/painel', [PainelApiController::class, 'inicio']);
+
+    // O app entrega aqui o token FCM do celular (endereço de push no Firebase).
+    // Upsert por token: reinstalou o app, trocou o token, a row é atualizada.
+    Route::post('/dispositivo-token', [AuthController::class, 'registrarDispositivo']);
 });

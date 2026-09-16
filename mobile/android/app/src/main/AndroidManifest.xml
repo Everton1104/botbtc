@@ -3,6 +3,10 @@
          (A build de debug já acrescenta isso sozinha, mas a release não.) -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- Notificações: desde o Android 13 o usuário aprova em tempo de execução
+         (o app pede com um diálogo na primeira vez — ver servicos/notificacoes.dart). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <application
         android:name="${applicationName}"
         android:label="BotBTC"
