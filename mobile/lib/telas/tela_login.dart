@@ -15,6 +15,7 @@
 import 'package:flutter/material.dart';
 
 import '../servicos/api.dart';
+import '../tema.dart';
 import 'tela_home.dart';
 
 class TelaLogin extends StatefulWidget {
@@ -108,13 +109,16 @@ class _TelaLoginState extends State<TelaLogin> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // ── Logo/título ────────────────────────────────────────
-                  const Icon(Icons.currency_bitcoin, size: 72, color: Color(0xFFF7931A)),
+                  // O símbolo ₿ é o próprio caractere da moeda, já dourado
+                  // na cor principal do site (--gold).
+                  const Icon(Icons.currency_bitcoin, size: 72, color: Cores.dourado),
                   const SizedBox(height: 8),
                   Text(
                     'BotBTC',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                           fontWeight: FontWeight.bold,
+                          color: Cores.texto,
                         ),
                   ),
                   const SizedBox(height: 4),
@@ -122,7 +126,7 @@ class _TelaLoginState extends State<TelaLogin> {
                     'Acesse sua conta',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey,
+                          color: Cores.textoSuave,
                         ),
                   ),
                   const SizedBox(height: 32),
@@ -135,7 +139,6 @@ class _TelaLoginState extends State<TelaLogin> {
                     decoration: const InputDecoration(
                       labelText: 'E-mail',
                       prefixIcon: Icon(Icons.email_outlined),
-                      border: OutlineInputBorder(),
                     ),
                     // validator devolve uma String (a reclamação) ou null (ok).
                     validator: (valor) {
@@ -158,7 +161,6 @@ class _TelaLoginState extends State<TelaLogin> {
                     decoration: InputDecoration(
                       labelText: 'Senha',
                       prefixIcon: const Icon(Icons.lock_outline),
-                      border: const OutlineInputBorder(),
                       // O suffix é o botão do olhinho, à direita do campo.
                       suffixIcon: IconButton(
                         icon: Icon(
@@ -184,7 +186,7 @@ class _TelaLoginState extends State<TelaLogin> {
                     const SizedBox(height: 8),
                     Text(
                       _erro!,
-                      style: const TextStyle(color: Colors.red),
+                      style: const TextStyle(color: Cores.vermelho),
                       textAlign: TextAlign.center,
                     ),
                   ],

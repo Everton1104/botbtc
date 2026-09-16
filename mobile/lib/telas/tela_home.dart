@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 
 import '../servicos/api.dart';
+import '../tema.dart';
 import 'tela_login.dart';
 
 class TelaHome extends StatefulWidget {
@@ -78,7 +79,7 @@ class _TelaHomeState extends State<TelaHome> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.wifi_off, size: 48, color: Colors.grey),
+                  const Icon(Icons.wifi_off, size: 48, color: Cores.textoSuave),
                   const SizedBox(height: 8),
                   Text('$erro', textAlign: TextAlign.center),
                 ],
@@ -100,7 +101,10 @@ class _TelaHomeState extends State<TelaHome> {
                       Row(
                         children: [
                           CircleAvatar(
-                            // Iniciais do nome: "Everton" → "E".
+                            // Iniciais do nome: "Everton" → "E". Fundo
+                            // dourado com letra escura, na linha do site.
+                            backgroundColor: Cores.dourado,
+                            foregroundColor: Cores.fundo,
                             child: Text(usuario.nome.isNotEmpty ? usuario.nome[0] : '?'),
                           ),
                           const SizedBox(width: 12),
@@ -112,7 +116,7 @@ class _TelaHomeState extends State<TelaHome> {
                                   usuario.nome,
                                   style: Theme.of(context).textTheme.titleMedium,
                                 ),
-                                Text(usuario.email, style: const TextStyle(color: Colors.grey)),
+                                Text(usuario.email, style: const TextStyle(color: Cores.textoSuave)),
                               ],
                             ),
                           ),
@@ -122,7 +126,8 @@ class _TelaHomeState extends State<TelaHome> {
                       _linha('WhatsApp', usuario.whatsapp ?? 'não cadastrado'),
                       const SizedBox(height: 4),
                       // A linha do status de verificação é um widget próprio
-                      // porque mistura texto + ícone colorido.
+                      // porque mistura texto + ícone colorido. Verde/vermelho
+                      // são os mesmos --green e --red do site.
                       Row(
                         children: [
                           const Text('Status:  '),
@@ -131,13 +136,13 @@ class _TelaHomeState extends State<TelaHome> {
                                 ? Icons.verified
                                 : Icons.warning_amber_rounded,
                             size: 18,
-                            color: usuario.whatsappVerificado ? Colors.green : Colors.orange,
+                            color: usuario.whatsappVerificado ? Cores.verde : Cores.dourado,
                           ),
                           const SizedBox(width: 4),
                           Text(
                             usuario.whatsappVerificado ? 'verificado' : 'verificação pendente',
                             style: TextStyle(
-                              color: usuario.whatsappVerificado ? Colors.green : Colors.orange,
+                              color: usuario.whatsappVerificado ? Cores.verde : Cores.dourado,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -155,7 +160,7 @@ class _TelaHomeState extends State<TelaHome> {
                   child: Text(
                     'Em breve: saldos, ordens e o painel do bot — '
                     'espelhando o site pela API.',
-                    style: TextStyle(color: Colors.grey),
+                    style: TextStyle(color: Cores.textoSuave),
                   ),
                 ),
               ),

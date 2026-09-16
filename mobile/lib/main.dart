@@ -15,6 +15,7 @@
 import 'package:flutter/material.dart';
 
 import 'servicos/api.dart';
+import 'tema.dart';
 import 'telas/tela_home.dart';
 import 'telas/tela_login.dart';
 
@@ -42,13 +43,9 @@ class BotbtcApp extends StatelessWidget {
       title: 'BotBTC',
       debugShowCheckedModeBanner: false, // tira a faixa "debug" do canto
 
-      // Material 3 é o visual atual do Flutter. A cor semente (laranja
-      // bitcoin #F7931A) gera automaticamente todo o esquema de cores —
-      // botões, campos e realces herdam tons dela.
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF7931A)),
-      ),
+      // O tema vem do tema.dart: as MESMAS cores da versão web
+      // (fundo #0d1117, dourado #f0b90b, verde #00d68f, vermelho #ff4757).
+      theme: temaBotbtc(),
 
       // A porta de entrada do app: Home se já tem token, Login se não.
       home: iniciaLogado ? const TelaHome() : const TelaLogin(),
