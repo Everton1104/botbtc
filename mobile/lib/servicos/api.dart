@@ -13,6 +13,7 @@
 //      chamadas. É como um crachá: apresentou, entra.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async'; // TimeoutException e a constante de timeout
 import 'dart:convert'; // jsonEncode / jsonDecode: converte objetos Dart ↔ JSON
 
 import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
@@ -133,18 +134,20 @@ class ApiService {
     // Content-Type diz "meu CORPO é JSON". Sem o Content-Type o servidor
     // lê o corpo como texto solto e não encontra os campos — foi o bug
     // do "Informe o e-mail" com o e-mail já preenchido.
-    final resposta = await http.post(
-      Uri.parse('$kBaseUrl/api/login'), // endpoint completo
-      headers: {
-        'Accept': applicationJson,
-        'Content-Type': applicationJson,
-      },
-      body: jsonEncode({
-        'email': email,
-        'password': senha, // o servidor espera "password", não "senha"
-        'device_name': 'android', // nome do token no servidor (aparece no banco)
-      }),
-    );
+    final resposta = await http
+        .post(
+          Uri.parse('$kBaseUrl/api/login'), // endpoint completo
+          headers: {
+            'Accept': applicationJson,
+            'Content-Type': applicationJson,
+          },
+          body: jsonEncode({
+            'email': email,
+            'password': senha, // o servidor espera "password", não "senha"
+            'device_name': 'android', // nome do token no servidor (aparece no banco)
+          }),
+        )
+        .timeout(kTimeoutApi);
 
     // 200 = sucesso. Qualquer outro código cai no _lancaErro.
     if (resposta.statusCode == 200) {
@@ -164,38 +167,56 @@ class ApiService {
   /// Serve também para CONFIRMAR que o token ainda é válido — se o servidor
   /// responder 401, o token foi revogado/expirou e o app volta pro login.
   static Future<Usuario> me() async {
-    // Se o app abriu direto na Home (sem login nesta sessão), o token ainda
-    // está só no disco — precisamos trazê-lo para a memória antes de usar.
-    await carregarTokenSalvo();
+    try {
+      // Se o app abriu direto na Home (sem login nesta sessão), o token ainda
+      // está só no disco — precisamos trazê-lo para a memória antes de usar.
+      await carregarTokenSalvo();
 
-    final resposta = await http.get(
-      Uri.parse('$kBaseUrl/api/me'),
-      headers: _headersComToken(),
-    );
+      final resposta = await http
+          .get(
+            Uri.parse('$kBaseUrl/api/me'),
+            headers: _headersComToken(),
+          )
+          .timeout(kTimeoutApi);
 
-    if (resposta.statusCode == 200) {
-      final dados = jsonDecode(resposta.body) as Map<String, dynamic>;
-      return Usuario.fromJson(dados['user'] as Map<String, dynamic>);
+      if (resposta.statusCode == 200) {
+        final dados = jsonDecode(resposta.body) as Map<String, dynamic>;
+        return Usuario.fromJson(dados['user'] as Map<String, dynamic>);
+      }
+
+      _lancaErro(resposta);
+    } on TimeoutException {
+      throw ApiException('Tempo esgotado ao contatar o servidor.');
     }
-
-    _lancaErro(resposta);
   }
 
   /// Busca o painel completo (aba "Início" do site) em UMA chamada:
   /// tiles de saldo, ordens abertas, investidores e saques pendentes.
+  ///
+  /// O try/on TimeoutException traduz a espera demais numa mensagem
+  /// amigável — sem ele a tela mostraria "TimeoutException after...".
   static Future<Painel> painel() async {
-    await carregarTokenSalvo(); // garante o header com o token certo
+    try {
+      await carregarTokenSalvo(); // garante o header com o token certo
 
-    final resposta = await http.get(
-      Uri.parse('$kBaseUrl/api/painel'),
-      headers: _headersComToken(),
-    );
+      final resposta = await http
+          .get(
+            Uri.parse('$kBaseUrl/api/painel'),
+            headers: _headersComToken(),
+          )
+          .timeout(kTimeoutApi);
 
-    if (resposta.statusCode == 200) {
-      return Painel.fromJson(jsonDecode(resposta.body) as Map<String, dynamic>);
+      if (resposta.statusCode == 200) {
+        return Painel.fromJson(jsonDecode(resposta.body) as Map<String, dynamic>);
+      }
+
+      _lancaErro(resposta);
+    } on TimeoutException {
+      throw ApiException(
+        'Tempo esgotado — o servidor (ou a Binance) demorou demais. '
+        'Puxe de novo em instantes.',
+      );
     }
-
-    _lancaErro(resposta);
   }
 
   /// Encerra a sessão: pede ao servidor para revogar o token atual.
@@ -263,3 +284,11 @@ class ApiService {
 
 /// Constante evita digitar essa string em vários lugares (e errar sem perceber).
 const String applicationJson = 'application/json';
+
+/// Tempo máximo que o app espera uma resposta do servidor.
+///
+/// Sem isso o http do Dart espera PARA SEMPRE: se o servidor estiver
+/// engasgado (a Binance tem timeout de 10s por chamada, e o painel faz
+/// algumas em série), o loader girava por mais de um minuto. Com 20s o
+/// pior caso é uma mensagem de erro clara em vez de espera infinita.
+const Duration kTimeoutApi = Duration(seconds: 20);

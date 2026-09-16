@@ -61,6 +61,8 @@ class Tiles {
   final double btcBloqueadoBrl;
   final double bnbBrl;
   final double totalGeralBrl; // BRL + BTC em R$ + BNB em R$
+  final double atr; // volatilidade que dimensiona o grid
+  final double saltoAtr; // o "salto" dinâmico que o bot usa (ATR × fator)
 
   const Tiles({
     required this.binanceOk,
@@ -73,6 +75,8 @@ class Tiles {
     required this.btcBloqueadoBrl,
     required this.bnbBrl,
     required this.totalGeralBrl,
+    required this.atr,
+    required this.saltoAtr,
   });
 
   factory Tiles.fromJson(Map<String, dynamic> json) {
@@ -89,6 +93,8 @@ class Tiles {
       btcBloqueadoBrl: _num(btc['bloqueado']),
       bnbBrl: _num(json['bnb_brl']),
       totalGeralBrl: _num(json['total_geral_brl']),
+      atr: _num(json['atr']),
+      saltoAtr: _num(json['salto_atr']),
     );
   }
 }

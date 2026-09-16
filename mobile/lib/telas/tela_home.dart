@@ -124,6 +124,33 @@ class _TelaHomeState extends State<TelaHome> {
                 _tituloSecao('Painel do Bot', Icons.speed),
                 _gridTiles(painel.tiles),
 
+                // Oscilação do grid — o mesmo "salto · ATR dinâmico" do site,
+                // em badge dourado logo abaixo dos tiles.
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Cores.dourado.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.swap_vert, size: 15, color: Cores.dourado),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Salto (ATR): ${moeda(painel.tiles.saltoAtr)}',
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Cores.dourado),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
                 _tituloSecao('Ordens Abertas', Icons.checklist),
                 if (painel.ordens.isEmpty)
                   const _CardVazio(texto: 'Nenhuma ordem aberta.')

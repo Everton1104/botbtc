@@ -6,8 +6,10 @@ use App\Http\Controllers\BinanceController;
 use App\Http\Controllers\Controller;
 use App\Models\BotInvestment;
 use App\Models\BotWithdrawalRequest;
+use App\Services\BotExecutor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Painel do app mobile — versão API da aba "Início" do site.
@@ -16,6 +18,13 @@ use Illuminate\Http\Request;
  * getOrdens, /admin/usuarios-investimentos e /bot/saques-pendentes).
  * O app pede tudo num endpoint único: menos idas e vindas, um só
  * pull-to-refresh.
+ *
+ * Latência: cada chamada à Binance pode levar até 10s (timeout do
+ * BinanceController), e chamadas em SÉRIE somam — a versão antiga fazia
+ * 6 viagens no pior caso (~1min com a Binance pendurada). Agora:
+ *   • saldos/preços buscados UMA vez e reaproveitados nos investidores;
+ *   • tendência (ATR do salto) cacheada 60s — klines 4h/1d não mudam
+ *     num minuto, e o cálculo é idêntico ao do bot (analisarTendencia).
  */
 class PainelApiController extends Controller
 {
@@ -34,7 +43,14 @@ class PainelApiController extends Controller
             'btc_brl'    => ['total' => 0.0, 'livre' => 0.0, 'bloqueado' => 0.0],
             'bnb_brl'    => 0.0,
             'total_geral_brl' => 0.0,
+            'atr'        => 0.0,
+            'salto_atr'  => 0.0,
         ];
+
+        // Saldos/preços buscados UMA vez e reaproveitados em tudo daqui
+        // pra frente (tiles, investidores e a âncora de preço da tendência).
+        $saldos = null;
+        $btcbrl = 0.0;
 
         try {
             $saldos = $binance->getSaldos() ?? ['balances' => []];
@@ -66,9 +82,26 @@ class PainelApiController extends Controller
                 'bnb_brl'    => $bnbTotalBrl,
                 // Mesma conta do JS do site: BRL + BTC em R$ + BNB em R$.
                 'total_geral_brl' => $brlTotal + $btcTotalBrl + $bnbTotalBrl,
+                'atr'        => 0.0, // preenchido abaixo (tendência)
+                'salto_atr'  => 0.0,
             ];
         } catch (\Throwable) {
             // mantém os zeros do $tiles inicial
+        }
+
+        // ── Tendência (ATR do salto) — cacheada 60s ───────────────────────
+        // analisarTendencia é a MESMA análise que o bot usa pra operar
+        // (fonte única de verdade), mas custa 3 chamadas de klines — sem
+        // cache, cada pull do app dispararia tudo de novo. 60s de atraso
+        // no ATR é imperceptível no painel.
+        try {
+            $tendencia = Cache::remember('painel.tendencia', 60, function () use ($btcbrl) {
+                return app(BotExecutor::class)->analisarTendencia($btcbrl, false);
+            });
+            $tiles['atr']       = (float) ($tendencia['atr'] ?? 0);
+            $tiles['salto_atr'] = (float) ($tendencia['salto_dinamico'] ?? 0);
+        } catch (\Throwable) {
+            // tendência é bônus: sem ela o painel segue de pé
         }
 
         // ── Ordens abertas ────────────────────────────────────────────────
@@ -89,7 +122,8 @@ class PainelApiController extends Controller
         $saques = [];
 
         if ($user->id === 1) {
-            $investidores = $this->investidores($binance);
+            // Saldos e preço já buscados lá em cima — nada de segunda viagem.
+            $investidores = $this->investidores($saldos, $btcbrl);
             $saques = $this->saquesPendentes();
         }
 
@@ -103,12 +137,12 @@ class PainelApiController extends Controller
 
     /**
      * Réplica do /admin/usuarios-investimentos (web.php) — cotas valorizadas
-     * pelo patrimônio atual lido da Binance.
+     * pelo patrimônio atual. Diferença: recebe saldos e preço JÁ BUSCADOS
+     * (a versão do site buscava tudo de novo).
      */
-    private function investidores(BinanceController $binance): array
+    private function investidores(?array $saldos, float $preco): array
     {
-        $saldos = $binance->getSaldos() ?? ['balances' => []];
-        $preco  = $binance->getPrecoBTC();
+        $saldos = $saldos ?? ['balances' => []];
 
         $brl = collect($saldos['balances'])->firstWhere('asset', 'BRL') ?? ['free' => 0, 'locked' => 0];
         $btc = collect($saldos['balances'])->firstWhere('asset', 'BTC') ?? ['free' => 0, 'locked' => 0];
