@@ -1,8 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Permissão de internet — sem ela nenhuma chamada à API sai do aparelho.
+         (A build de debug já acrescenta isso sozinha, mas a release não.) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
-        android:label="botbtc_app"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:label="BotBTC"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

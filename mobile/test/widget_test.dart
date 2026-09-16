@@ -1,30 +1,35 @@
-// This is a basic Flutter widget test.
+// Teste de widget — versão "smoke test" do app real.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Smoke test: verifica o mínimo para o app estar "respirando" — abre sem
+// quebrar e a tela de login aparece com os campos esperados.
+//
+// Nota: passamos `iniciaLogado: false` para forçar a tela de login sem
+// depender do armazenamento (que não existe direito num ambiente de teste).
+// O plugin shared_preferences, por isso, é substituído por uma versão falsa
+// (mock) antes de construir o widget.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:botbtc_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App abre na tela de login', (WidgetTester tester) async {
+    // O shared_preferences real conversa com o Android; nos testes,
+    // inicializamos com valores fake para simular o "caderninho" vazio.
+    SharedPreferences.setMockInitialValues({});
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Monta o app inteiro.
+    await tester.pumpWidget(const BotbtcApp(iniciaLogado: false));
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    // Um frame normal; o segundo com duração extra dá tempo de animações
+    // iniciais terminarem (pumpAndSettle esperaria a rede — não queremos).
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // A tela de login precisa mostrar título e o botão de entrar.
+    expect(find.text('Acesse sua conta'), findsOneWidget);
+    expect(find.text('Entrar'), findsOneWidget);
+    expect(find.text('E-mail'), findsOneWidget);
+    expect(find.text('Senha'), findsOneWidget);
   });
 }
