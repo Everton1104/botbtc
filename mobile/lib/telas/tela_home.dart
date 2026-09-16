@@ -97,7 +97,9 @@ class _TelaHomeState extends State<TelaHome> {
             final painel = snapshot.data!;
             return ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(12),
+              // padding lateral/de-cima 12; embaixo maior pra última seção
+              // não encostar na borda/gesture bar do aparelho.
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
               children: [
                 // Aviso quando a Binance não respondeu (tiles zerados).
                 if (!painel.tiles.binanceOk)
@@ -140,7 +142,7 @@ class _TelaHomeState extends State<TelaHome> {
                 else
                   ...painel.saques.map(_cardSaque),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: 48),
               ],
             );
           },
