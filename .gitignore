@@ -28,3 +28,15 @@ Thumbs.db
 # Dados locais (não versionar)
 balanco.txt
 backups/
+
+# Flutter (app mobile/ — redundância de segurança, o mobile/.gitignore também cobre)
+/mobile/build/
+/mobile/.dart_tool/
+/mobile/.flutter-plugins
+/mobile/.flutter-plugins-dependencies
+/mobile/coverage/
+/mobile/android/.gradle/
+/mobile/android/app/release/
+/mobile/android/local.properties
+/mobile/ios/Pods/
+/mobile/ios/.symlinks/
