@@ -18,16 +18,15 @@ import 'dart:convert'; // jsonEncode / jsonDecode: converte objetos Dart ↔ JSO
 import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
 import 'package:shared_preferences/shared_preferences.dart'; // "caderninho" que salva dados no aparelho
 
-/// URL base do servidor.
+/// URL base do servidor — DIRETO DA PRODUÇÃO.
 ///
-/// IMPORTANTE — por que 127.0.0.1 (o próprio aparelho)?
-/// Neste projeto o servidor Laravel roda DENTRO DO CELULAR, no Termux/proot
-/// (a "dev box" é o próprio aparelho). Um app Android acessando 127.0.0.1
-/// chega nos programas do Termux, porque compartilham a mesma rede local
-/// do Android. Vantagem: funciona até sem Wi-Fi, pois não depende do IP da rede.
+/// O app é de uso pessoal (não vai pra Play Store), então ele sempre fala
+/// com o site oficial. É HTTPS, então nem precisaria do cleartext liberado
+/// no manifest (que ficou lá por causa da época do servidor local).
 ///
-/// Quando o app for publicado, trocar por: https://botbtc.com.br
-const String kBaseUrl = 'http://127.0.0.1:8000';
+/// Se um dia quiser testar contra o servidor local do Termux, troque
+/// temporariamente por: http://127.0.0.1:8000
+const String kBaseUrl = 'https://botbtc.com.br';
 
 /// Chave usada para guardar/ler o token no armazenamento local.
 /// Centralizada aqui para não espalhar a string 'token_api' pelo código
@@ -127,9 +126,17 @@ class ApiService {
   }) async {
     // Monta e envia a requisição POST (o `await` pausa SÓ esta função,
     // a interface continua respondendo — é a graça do async).
+    //
+    // ATENÇÃO aos DOIS headers: Accept diz "quero RESPOSTA em JSON";
+    // Content-Type diz "meu CORPO é JSON". Sem o Content-Type o servidor
+    // lê o corpo como texto solto e não encontra os campos — foi o bug
+    // do "Informe o e-mail" com o e-mail já preenchido.
     final resposta = await http.post(
       Uri.parse('$kBaseUrl/api/login'), // endpoint completo
-      headers: {'Accept': applicationJson}, // pedimos resposta em JSON
+      headers: {
+        'Accept': applicationJson,
+        'Content-Type': applicationJson,
+      },
       body: jsonEncode({
         'email': email,
         'password': senha, // o servidor espera "password", não "senha"
@@ -208,15 +215,19 @@ class ApiService {
     String mensagem = 'Erro inesperado (${resposta.statusCode}).';
     try {
       final corpo = jsonDecode(resposta.body);
-      if (corpo is Map && corpo['message'] is String) {
-        // O Laravel quase sempre manda {"message": "..."} nos erros.
-        mensagem = corpo['message'] as String;
-      } else if (corpo is Map && corpo['errors'] is Map && (corpo['errors'] as Map).isNotEmpty) {
-        // Erros de validação (422): pega a primeira reclamação do formulário.
+
+      // Ordem importa: nos 422 (validação), o Laravel manda BOTH "errors"
+      // (uma lista por campo, mensagens limpas) e "message" (resumo que
+      // termina com "(and 1 more error)" — em inglês, sem tradução).
+      // Preferimos a mensagem LIMPA de errors; "message" fica para os
+      // casos em que só ele existe (401, 500...).
+      if (corpo is Map && corpo['errors'] is Map && (corpo['errors'] as Map).isNotEmpty) {
         final primeiro = (corpo['errors'] as Map).values.first;
         if (primeiro is List && primeiro.isNotEmpty) {
           mensagem = primeiro.first as String;
         }
+      } else if (corpo is Map && corpo['message'] is String) {
+        mensagem = corpo['message'] as String;
       }
     } catch (_) {
       // O corpo não era JSON — mantemos a mensagem genérica acima.
