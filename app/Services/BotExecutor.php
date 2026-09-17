@@ -7,6 +7,7 @@ use App\Models\BotConfig;
 use App\Models\BotTrade;
 use App\Http\Controllers\BinanceController;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class BotExecutor
@@ -15,6 +16,11 @@ class BotExecutor
 
     private const SYMBOL  = 'BTCBRL';
     private const ALLIN_CAP = 0.95;
+
+    // Ordens com fill recente esperando o push único agregado. A lista vive
+    // no cache (chave = "symbol:orderId" → dedup de graça) e é consumida pelo
+    // fecharOrdensPendentes() no fim de cada ciclo.
+    private const CACHE_PUSH_PENDENTES = 'bot.push_pendentes';
 
     // Salto dinâmico (tamanho do grid): piso/teto em BRL e multiplicador do ATR.
     // Piso subido p/ 3k (era 2k) — com BTC a ~340k, 3k ≈ 0,9% de spread, deixando
@@ -358,7 +364,88 @@ class BotExecutor
             Log::info("BotExecutor: sincronizados {$total} trades novos para bot_trades.");
         }
 
+        // Push único por ordem — roda SEMPRE, mesmo sem trades novos neste
+        // ciclo: uma ordem que ficou pendente (getOrder falhou / ainda havia
+        // fração a executar) precisa ser rechecada até fechar.
+        $this->fecharOrdensPendentes();
+
         return $total;
+    }
+
+    /**
+     * Push ÚNICO por ordem, não por fill. Ordem limite no grid executa em
+     * frações — cada fração que entra em bot_trades só registra a ordem no
+     * cache (puxarPaginado). Aqui, no fim do ciclo, pergunta à Binance se a
+     * ordem JÁ TERMINOU:
+     *
+     *   FILLED                    → executou inteira;
+     *   CANCELED/EXPIRED/REJECTED → acabou antes, com o que deu (ex.: ordem
+     *                             cancelada ao confirmar um saque).
+     *   NEW/PARTIALLY_FILLED      → ainda pode vir mais fração: espera o
+     *                             próximo ciclo (TTL de 6h corta órfãos).
+     *
+     * Quando fecha: soma qty/valor/nº de execuções dos fills em bot_trades e
+     * manda UM push agregado (preço = média ponderada). A ordem sai da lista
+     * ANTES do push, então falha no FCM nunca causa reenvio. Push é apelido:
+     * nada aqui pode afetar a execução do bot.
+     */
+    private function fecharOrdensPendentes(): void
+    {
+        $pendentes = Cache::get(self::CACHE_PUSH_PENDENTES, []);
+        if (!$pendentes) {
+            return;
+        }
+
+        foreach ($pendentes as $chave => $p) {
+            $ordem = $this->binance->getOrder($p['symbol'], (string) $p['order_id']);
+
+            if (!is_array($ordem)) {
+                continue; // Binance não respondeu — tenta de novo no próximo ciclo
+            }
+
+            $status = $ordem['status'] ?? '';
+            if (!in_array($status, ['FILLED', 'CANCELED', 'EXPIRED', 'REJECTED'], true)) {
+                continue; // NEW / PARTIALLY_FILLED: ordem ainda viva, não empurra ainda
+            }
+
+            // Fechou (cheia ou cancelada): sai da lista antes de qualquer push.
+            unset($pendentes[$chave]);
+
+            // Agregação dos fills desta ordem já persistidos em bot_trades.
+            // MAX(side): todos os fills de uma mesma ordem têm o mesmo lado.
+            $agg = BotTrade::where('symbol', $p['symbol'])
+                ->where('binance_order_id', $p['order_id'])
+                ->selectRaw('COUNT(*) AS execucoes, SUM(qty) AS qty, SUM(quote_qty) AS quote, MAX(side) AS lado')
+                ->first();
+
+            $execucoes = (int) ($agg->execucoes ?? 0);
+            $qty       = (float) ($agg->qty ?? 0);
+
+            // Cancelada sem executar nada → não existe o que notificar.
+            if ($execucoes === 0 || $qty <= 0) {
+                continue;
+            }
+
+            FcmService::notificarOrdemExecutada(
+                (string) $agg->lado,
+                $qty,
+                (float) ($agg->quote ?? 0),
+                $p['symbol'],
+                $execucoes,
+                $status !== 'FILLED',
+            );
+
+            Log::info(sprintf(
+                'BotExecutor: push de ordem %s #%d (%s) — %d fill(s), %.8f.',
+                $p['symbol'],
+                $p['order_id'],
+                $status,
+                $execucoes,
+                $qty,
+            ));
+        }
+
+        Cache::put(self::CACHE_PUSH_PENDENTES, $pendentes, now()->addHours(6));
     }
 
     /**
@@ -404,16 +491,42 @@ class BotExecutor
                 $ultimoId = max($ultimoId, $id);
             }
 
+            // Quais fills desta página são NOVOS de verdade? O insertOrIgnore
+            // deduplica o INSERT, mas $rows traz TUDO que a Binance devolveu —
+            // notificar $rows reenviaria o mesmo fill a cada ciclo do bot
+            // (era o bug do push "contínuo": 1 push por minuto durante 1h).
+            $idsPagina    = array_column($rows, 'binance_trade_id');
+            $jaConhecidos = BotTrade::where('symbol', $symbol)
+                ->whereIn('binance_trade_id', $idsPagina)
+                ->pluck('binance_trade_id')
+                ->flip(); // [id => true] → lookup O(1) no filtro abaixo
+            $novos = array_filter(
+                $rows,
+                fn($r) => !$jaConhecidos->has($r['binance_trade_id'])
+            );
+
             // insertOrIgnore respeita o unique (symbol, binance_trade_id) → dedup seguro.
             $total += BotTrade::insertOrIgnore($rows);
 
-            // Push dos fills que ACABARAM de acontecer (janela de 1h).
-            // Sem a janela, o backfill da primeira execução — que puxa 1 ano
-            // de histórico — encheria o celular de notificações de trades velhos.
-            // FcmService engole qualquer erro: push nunca trava o bot.
-            $frescos = array_filter($rows, fn($r) => $r['traded_at']->gt(now()->subHour()));
+            // Fills inéditos e FRESCOS (janela de 1h — sem ela, o backfill da
+            // primeira execução puxa 1 ano de histórico e registra ordens
+            // velhas). Aqui NÃO vai push: um fill é só uma FRAÇÃO da ordem.
+            // Registra as ordens envolvidas no cache e deixa o
+            // fecharOrdensPendentes() mandar UM push por ordem quando ela
+            // terminar de executar (a "cotação atingir o objetivo" de verdade).
+            $frescos = array_filter($novos, fn($r) => $r['traded_at']->gt(now()->subHour()));
             if ($frescos) {
-                FcmService::notificarTrades($frescos);
+                $pendentes = Cache::get(self::CACHE_PUSH_PENDENTES, []);
+                foreach ($frescos as $r) {
+                    if (!empty($r['binance_order_id'])) {
+                        $chave = $r['symbol'] . ':' . $r['binance_order_id'];
+                        $pendentes[$chave] = [
+                            'symbol'   => $r['symbol'],
+                            'order_id' => $r['binance_order_id'],
+                        ];
+                    }
+                }
+                Cache::put(self::CACHE_PUSH_PENDENTES, $pendentes, now()->addHours(6));
             }
 
             // Próxima página a partir do último id visto.

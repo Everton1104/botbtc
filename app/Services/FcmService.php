@@ -93,24 +93,44 @@ class FcmService
     }
 
     /**
-     * Push de trades executados — chamado pelo BotExecutor a cada fill novo
-     * que entra em bot_trades. Um push por trade (um fill pode virar vários).
+     * Push de ORDEM executada — UM por ordem, não um por fill. O BotExecutor
+     * espera a ordem fechar (FILLED, ou cancelada com o que executou) e chama
+     * aqui já com a soma das frações: qty total, valor total em BRL e preço
+     * médio ponderado (valor ÷ qty).
      *
-     * @param array $trades rows no formato de bot_trades (side, price, qty, symbol)
+     * @param string $lado      BUY / SELL (todos os fills de uma ordem têm o mesmo)
+     * @param float  $qty       quantidade total executada (moeda base)
+     * @param float  $quote     valor total executado em BRL
+     * @param string $symbol    par da Binance (ex.: BTCBRL)
+     * @param int    $execucoes quantas frações a ordem levou até fechar
+     * @param bool   $cancelada true = ordem cancelada antes de executar inteira
      */
-    public static function notificarTrades(array $trades): void
-    {
-        foreach ($trades as $t) {
-            $compra = ($t['side'] ?? '') === 'BUY';
-            $qty    = rtrim(rtrim(number_format((float) $t['qty'], 8, ',', '.'), '0'), ',');
-            $preco  = 'R$ ' . number_format((float) $t['price'], 2, ',', '.');
+    public static function notificarOrdemExecutada(
+        string $lado,
+        float $qty,
+        float $quote,
+        string $symbol,
+        int $execucoes,
+        bool $cancelada = false,
+    ): void {
+        $compra = $lado === 'BUY';
+        // BTCBRL → BTC: no corpo da notificação o par completo só polui.
+        $base   = str_ends_with($symbol, 'BRL') ? substr($symbol, 0, -3) : $symbol;
+        $qtyFmt = rtrim(rtrim(number_format($qty, 8, ',', '.'), '0'), ',');
+        $media  = $qty > 0 ? $quote / $qty : 0.0;
 
-            self::enviar(
-                $compra ? '🟢 Compra executada' : '🔴 Venda executada',
-                "{$qty} {$t['symbol']} a {$preco}",
-                ['tipo' => 'trade', 'lado' => $t['side'] ?? ''],
-            );
+        $titulo = $compra ? '🟢 Compra executada' : '🔴 Venda executada';
+        if ($cancelada) {
+            $titulo = $compra ? '🟠 Compra parcial (cancelada)' : '🟠 Venda parcial (cancelada)';
         }
+
+        $corpo = "{$qtyFmt} {$base} por R$ " . number_format($quote, 2, ',', '.')
+            . ' · média R$ ' . number_format($media, 2, ',', '.');
+        if ($execucoes > 1) {
+            $corpo .= " · {$execucoes} execuções";
+        }
+
+        self::enviar($titulo, $corpo, ['tipo' => 'trade', 'lado' => $lado]);
     }
 
     /** Push de saque solicitado — espelha o WhatsApp que o admin já recebe. */
