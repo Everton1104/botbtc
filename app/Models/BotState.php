@@ -20,6 +20,7 @@ class BotState extends Model
         'order_id_venda',
         'ativo',
         'pausado_ate',
+        'pausa_motivo',
         'modo_subida',
         'pausado_manual',
     ];
