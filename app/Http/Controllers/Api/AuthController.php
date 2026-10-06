@@ -8,6 +8,9 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Password;
+use Symfony\Component\Mailer\Exception\TransportException;
 
 /**
  * Autenticação do app mobile (token Sanctum).
@@ -46,6 +49,54 @@ class AuthController extends Controller
             'token' => $token,
             'user'  => $this->dadosUsuario($user),
         ]);
+    }
+
+    /**
+     * POST /api/esqueci-senha — dispara o MESMO e-mail de redefinição do site.
+     *
+     * Reutiliza o Password broker padrão (token em `password_reset_tokens` +
+     * link para `/reset-password/{token}` do site): o usuário troca a senha
+     * no navegador, pela página que o site já tem, e volta a logar no app.
+     */
+    public function esqueciSenha(Request $request): JsonResponse
+    {
+        $dados = $request->validate([
+            'email' => ['required', 'email'],
+        ], [
+            'email.required' => 'Informe o e-mail.',
+            'email.email'    => 'E-mail inválido.',
+        ]);
+
+        $status = null;
+
+        try {
+            $status = Password::sendResetLink($dados);
+        } catch (TransportException $e) {
+            // SMTP fora do ar / recusando o envio: o app mostra a mensagem
+            // em vez de um "Server Error" seco. O motivo fica no log.
+            Log::error('Falha ao enviar e-mail de reset: '.$e->getMessage());
+
+            return response()->json([
+                'message' => 'Não foi possível enviar o e-mail agora. Tente novamente em instantes.',
+            ], 503);
+        }
+
+        if ($status === Password::RESET_LINK_SENT) {
+            return response()->json([
+                'mensagem' => 'Link enviado! Abra o e-mail, toque no link e cadastre a nova senha — depois entre no app com ela.',
+            ]);
+        }
+
+        if ($status === Password::RESET_THROTTLED) {
+            return response()->json([
+                'message' => 'Um link já foi enviado há pouco. Aguarde um minuto antes de pedir outro.',
+            ], 429);
+        }
+
+        // INVALID_USER — mesma revelação do site (validação padrão do broker).
+        return response()->json([
+            'message' => 'Não encontramos uma conta com esse e-mail.',
+        ], 422);
     }
 
     /**
