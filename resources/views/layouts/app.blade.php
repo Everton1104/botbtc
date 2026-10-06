@@ -242,6 +242,9 @@
                             <a class="nav-link" href="/relatorio"><i class="fa-solid fa-chart-column me-1"></i>Relatório</a>
                         </li>
                         @endif
+                        <li class="nav-item">
+                            <a class="nav-link" href="/download"><i class="fa-brands fa-android me-1"></i>App Android</a>
+                        </li>
                         <li class="nav-item dropdown">
                             <a id="navbarDropdown" class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
                                 <i class="fa-regular fa-circle-user me-1"></i>{{ Auth::user()->name }}
