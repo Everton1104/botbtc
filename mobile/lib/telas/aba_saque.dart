@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// TELA DE SAQUES — o fluxo completo do site, no app.
+// ABA DE SAQUES (dentro da tela "Ações") — o fluxo completo do site, no app.
 //
 // Para o investidor:
+//   • Cadastrar a chave PIX de recebimento (exigida — o admin paga nela)
 //   • Solicitar saque (com valor, ou vazio = sacar tudo)
 //   • Cancelar um pendente (o servidor devolve as cotas)
 //   • Ver o histórico de saques confirmados
@@ -10,7 +11,8 @@
 // extras; para os demais usuários elas simplesmente não existem):
 //   • Aprovar o saque de qualquer investidor — o botão faz TUDO que o
 //     site faz: vende BTC se faltar BRL, cancela as ordens abertas e
-//     pausa o bot por 3 min (tempo do PIX na Binance);
+//     pausa o bot por 3 min (tempo do PIX na Binance), com a chave PIX
+//     do pedido em destaque para pagar;
 //   • Banner "bot pausado" com botão de retomar quando a transferência
 //     terminar antes do prazo.
 //
@@ -19,21 +21,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Clipboard (copiar a chave PIX)
 
 import '../modelos/saque.dart';
 import '../servicos/api.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
+import 'banner_pausa_bot.dart';
 import 'tela_login.dart';
 
-class TelaSaque extends StatefulWidget {
-  const TelaSaque({super.key});
+/// Aba da tela "Ações" — sem Scaffold próprio (a AppBar/TabBar ficam
+/// na TelaAcoes); é um corpo com RefreshIndicator, como as outras abas.
+class AbaSaque extends StatefulWidget {
+  const AbaSaque({super.key});
 
   @override
-  State<TelaSaque> createState() => _TelaSaqueState();
+  State<AbaSaque> createState() => _AbaSaqueState();
 }
 
-class _TelaSaqueState extends State<TelaSaque> {
+class _AbaSaqueState extends State<AbaSaque> {
   // ── Estado ────────────────────────────────────────────────────────────────
   DadosSaque? _dados; // null = primeira carga ainda não terminou
   bool _carregando = true;
@@ -42,8 +48,12 @@ class _TelaSaqueState extends State<TelaSaque> {
   // Campo do valor do saque (vazio = sacar tudo).
   final _ctrlValor = TextEditingController();
 
+  // Campo da chave PIX de recebimento (prefill com a salva no servidor).
+  final _ctrlChave = TextEditingController();
+
   // Botões de ação se desligam enquanto a requisição corre (sem envio duplo).
   bool _solicitando = false;
+  bool _salvandoChave = false;
   int? _processandoId; // id do saque com ação em curso (cancelar/confirmar)
 
   @override
@@ -55,10 +65,11 @@ class _TelaSaqueState extends State<TelaSaque> {
   @override
   void dispose() {
     _ctrlValor.dispose();
+    _ctrlChave.dispose();
     super.dispose();
   }
 
-  /// Busca a tela inteira no servidor (mesmo padrão da Home: loader só na
+  /// Busca a aba inteira no servidor (mesmo padrão da Home: loader só na
   /// primeira carga, SnackBar nos erros seguintes, puxão pra atualizar).
   Future<void> _carregar() async {
     if (_dados == null) setState(() => _carregando = true);
@@ -70,6 +81,11 @@ class _TelaSaqueState extends State<TelaSaque> {
         _dados = dados;
         _erro = null;
         _carregando = false;
+        // Prefill da chave só quando o campo está vazio — não atropela
+        // quem já está digitando (mesma regra do site).
+        if (_ctrlChave.text.isEmpty && (dados.chavePix ?? '').isNotEmpty) {
+          _ctrlChave.text = dados.chavePix!;
+        }
       });
     } on ApiException catch (e) {
       if (e.status == 401) {
@@ -99,7 +115,7 @@ class _TelaSaqueState extends State<TelaSaque> {
 
   /// Executa uma ação de saque (solicitar/cancelar/confirmar/retomar) com o
   /// ritual completo: desliga o botão, chama a API, mostra a mensagem do
-  /// servidor num SnackBar e recarrega a tela (os números mudaram).
+  /// servidor num SnackBar e recarrega a aba (os números mudaram).
   Future<void> _acao({
     required Future<String> Function() chamada,
     required bool Function() bloqueado,
@@ -148,9 +164,42 @@ class _TelaSaqueState extends State<TelaSaque> {
     return double.tryParse(texto);
   }
 
+  /// SALVAR a chave PIX de recebimento.
+  Future<void> _salvarChave() async {
+    final chave = _ctrlChave.text.trim();
+
+    if (chave.length < 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('A chave PIX deve ter pelo menos 5 caracteres.'),
+            backgroundColor: Cores.vermelho),
+      );
+      return;
+    }
+
+    await _acao(
+      chamada: () => ApiService.salvarChavePix(chave),
+      bloqueado: () => _salvandoChave,
+      ligar: () => setState(() => _salvandoChave = false),
+      desligar: () => setState(() => _salvandoChave = true),
+    );
+  }
+
   /// SOLICITAR saque — com diálogo de confirmação (é dinheiro saindo).
   Future<void> _solicitar() async {
     final valor = _valorDigitado;
+
+    // Sem chave cadastrada o servidor recusa (422) — o aviso local chega
+    // antes, já apontando o campo que falta preencher.
+    if (_ctrlChave.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content:
+                Text('Cadastre sua chave PIX antes de sacar — o saque é pago nela.'),
+            backgroundColor: Cores.vermelho),
+      );
+      return;
+    }
 
     // Digitou algo que não vira número? Avisa antes de chamar o servidor.
     if (_ctrlValor.text.trim().isNotEmpty && valor == null) {
@@ -199,6 +248,7 @@ class _TelaSaqueState extends State<TelaSaque> {
     final prosseguir = await _confirmar(
       titulo: 'Confirmar saque',
       mensagem: 'Confirmar o PIX de ${moeda(s.valorLiquido)} para ${s.nome}?\n\n'
+          'Chave PIX: ${s.chavePix}\n\n'
           'Se faltar BRL, o bot vende BTC a mercado, cancela as ordens '
           'abertas e pausa por 3 minutos para a transferência.',
       botao: 'Confirmar PIX',
@@ -220,6 +270,15 @@ class _TelaSaqueState extends State<TelaSaque> {
       bloqueado: () => _processandoId != null,
       ligar: () => setState(() => _processandoId = null),
       desligar: () => setState(() => _processandoId = -1), // -1 = banner
+    );
+  }
+
+  /// Copia a chave PIX de um pedido (o admin paga colando no banco).
+  void _copiarChave(String chave) {
+    Clipboard.setData(ClipboardData(text: chave));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Chave PIX copiada.'), backgroundColor: Cores.verde),
     );
   }
 
@@ -278,20 +337,26 @@ class _TelaSaqueState extends State<TelaSaque> {
       corpo = _lista(_dados!);
     }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Saques')),
-      body: RefreshIndicator(onRefresh: _carregar, child: corpo),
-    );
+    // Sem Scaffold: a AppBar e a TabBar pertencem à TelaAcoes.
+    return RefreshIndicator(onRefresh: _carregar, child: corpo);
   }
 
-  /// A lista completa da tela de saques.
+  /// A lista completa da aba de saques.
   Widget _lista(DadosSaque d) {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
         // ── Banner do bot pausado (só aparece pro admin com pausa ativa) ──
-        if (d.ehAdmin && (d.pausa?.pausado ?? false)) _bannerPausa(d.pausa!),
+        if (d.ehAdmin && (d.pausa?.pausado ?? false))
+          BannerPausaBot(
+            pausa: d.pausa!,
+            onRetomar: _retomarBot,
+            ocupado: _processandoId != null,
+          ),
+
+        _tituloSecao('Minha chave PIX', Icons.vpn_key_outlined),
+        _cardChave(),
 
         _tituloSecao('Solicitar saque', Icons.outbox_outlined),
         _cardSolicitar(d),
@@ -322,34 +387,46 @@ class _TelaSaqueState extends State<TelaSaque> {
     );
   }
 
-  /// Banner dourado: o bot está pausado por causa de uma confirmação.
-  Widget _bannerPausa(StatusPausa p) {
+  /// Card da chave PIX de recebimento — onde o admin paga os saques.
+  Widget _cardChave() {
+    final preenchida = _ctrlChave.text.trim().isNotEmpty;
     return Card(
-      margin: const EdgeInsets.only(bottom: 4),
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.pause_circle_outline, color: Cores.dourado),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Bot pausado para a transferência',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
-                  Text(
-                    'Retoma sozinho em ${p.segundos}s — ou libere já se o PIX acabou.',
-                    style: const TextStyle(fontSize: 11.5, color: Cores.textoSuave),
-                  ),
-                ],
+            TextField(
+              controller: _ctrlChave,
+              keyboardType: TextInputType.text,
+              decoration: const InputDecoration(
+                labelText: 'Chave PIX de recebimento',
+                prefixIcon: Icon(Icons.vpn_key_outlined),
+                hintText: 'CPF, e-mail, telefone ou chave aleatória',
               ),
             ),
-            const SizedBox(width: 8),
-            // Botão menor (TextButton) porque é uma ação secundária do banner.
-            TextButton(
-              onPressed: _processandoId != null ? null : _retomarBot,
-              child: const Text('Retomar'),
+            const SizedBox(height: 6),
+            Text(
+              preenchida
+                  ? 'Os saques são pagos pelo administrador nesta chave.'
+                  : 'Cadastre sua chave PIX — ela é exigida para solicitar saques.',
+              style: const TextStyle(fontSize: 11, color: Cores.textoSuave),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _salvandoChave ? null : _salvarChave,
+                icon: _salvandoChave
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label:
+                    Text(_salvandoChave ? 'Salvando...' : 'Salvar chave PIX'),
+              ),
             ),
           ],
         ),
@@ -489,7 +566,8 @@ class _TelaSaqueState extends State<TelaSaque> {
     );
   }
 
-  /// Card de aprovação (admin): quem pediu, quanto, e o botão que decide.
+  /// Card de aprovação (admin): quem pediu, quanto, a chave PIX (pra pagar
+  /// direto do app do banco, colando) e o botão que decide.
   Widget _cardAprovacao(SaqueAprovacao s) {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -517,7 +595,44 @@ class _TelaSaqueState extends State<TelaSaque> {
                         const TextStyle(fontSize: 11, color: Cores.textoSuave)),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
+            // A chave PIX em destaque: é onde o admin paga o saque.
+            InkWell(
+              onTap: s.chavePix == '—' ? null : () => _copiarChave(s.chavePix),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Cores.dourado.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Cores.dourado.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.vpn_key_outlined,
+                        size: 16, color: Cores.dourado),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'PIX: ${s.chavePix}',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Cores.dourado),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (s.chavePix != '—') ...[
+                      const SizedBox(width: 8),
+                      const Icon(Icons.copy, size: 16, color: Cores.dourado),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(

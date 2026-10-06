@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // TELA DE LOGIN — email + senha, com validação e tratamento de erros.
+// Tem também o "Esqueci minha senha": dispara o e-mail de redefinição do
+// site (a troca em si acontece no navegador, pelo link que chega no e-mail).
 //
 // Conceitos de Dart/Flutter usados aqui:
 //   • StatefulWidget: tela que MUDA de estado (campo digitado, carregando,
@@ -48,6 +50,109 @@ class _TelaLoginState extends State<TelaLogin> {
     _emailController.dispose();
     _senhaController.dispose();
     super.dispose();
+  }
+
+  /// RECUPERAR SENHA — abre o diálogo que pede o e-mail e dispara o link.
+  /// A troca em si acontece no navegador (página do site que vem no e-mail);
+  /// aqui o app só dispara o pedido, igual à tela "Esqueceu a senha" do site.
+  Future<void> _esqueciSenha() async {
+    // Prefill com o e-mail já digitado no login (o caso comum é ter errado
+    // a senha, não o e-mail).
+    final ctrl = TextEditingController(text: _emailController.text.trim());
+
+    // Estado interno do diálogo: o loader do botão e a mensagem de erro
+    // (o StatefulBuilder dá o setState só dentro dele).
+    var enviando = false;
+    String? erro;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Recuperar senha'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Enviaremos um link para o seu e-mail. Toque no link, cadastre '
+                'a nova senha e volte a entrar no app com ela.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                decoration: const InputDecoration(
+                  labelText: 'E-mail',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
+              ),
+              if (erro != null) ...[
+                const SizedBox(height: 8),
+                Text(erro!, style: const TextStyle(color: Cores.vermelho)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: enviando ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('Voltar'),
+            ),
+            FilledButton.icon(
+              onPressed: enviando
+                  ? null
+                  : () async {
+                      final email = ctrl.text.trim();
+                      if (!email.contains('@') || !email.contains('.')) {
+                        setDialog(() => erro = 'Informe um e-mail válido.');
+                        return;
+                      }
+
+                      setDialog(() {
+                        enviando = true;
+                        erro = null;
+                      });
+
+                      try {
+                        final mensagem = await ApiService.esqueciSenha(email);
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text(mensagem),
+                              backgroundColor: Cores.verde),
+                        );
+                      } on ApiException catch (e) {
+                        // Mantém o diálogo aberto com o motivo (e-mail não
+                        // cadastrado, muitas tentativas...).
+                        setDialog(() {
+                          enviando = false;
+                          erro = e.mensagem;
+                        });
+                      } catch (_) {
+                        setDialog(() {
+                          enviando = false;
+                          erro = 'Não foi possível conectar ao servidor.';
+                        });
+                      }
+                    },
+              icon: enviando
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send_outlined, size: 18),
+              label: Text(enviando ? 'Enviando...' : 'Enviar link'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    ctrl.dispose(); // o diálogo morreu, o controller também
   }
 
   /// Envia o formulário: valida os campos e chama a API.
@@ -214,6 +319,13 @@ class _TelaLoginState extends State<TelaLogin> {
                           )
                         : const Icon(Icons.login),
                     label: Text(_carregando ? 'Entrando...' : 'Entrar'),
+                  ),
+                  const SizedBox(height: 4),
+
+                  // ── Recuperar senha: o mesmo e-mail com link do site ──
+                  TextButton(
+                    onPressed: _carregando ? null : _esqueciSenha,
+                    child: const Text('Esqueci minha senha'),
                   ),
                 ],
               ),

@@ -19,6 +19,7 @@ import 'dart:convert'; // jsonEncode / jsonDecode: converte objetos Dart ↔ JSO
 import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
 import 'package:shared_preferences/shared_preferences.dart'; // "caderninho" que salva dados no aparelho
 
+import '../modelos/deposito.dart';
 import '../modelos/painel.dart';
 import '../modelos/saque.dart';
 
@@ -163,6 +164,31 @@ class ApiService {
     _lancaErro(resposta); // nunca retorna: sempre joga uma ApiException
   }
 
+  /// Pede a recuperação de senha — o MESMO e-mail que o site manda: chega um
+  /// link que abre a página de troca de senha no navegador; depois é só
+  /// entrar no app com a senha nova. Rota pública (quem pede é justamente
+  /// quem não consegue logar), então nem envia token — igual ao login.
+  static Future<String> esqueciSenha(String email) async {
+    try {
+      final resposta = await http
+          .post(
+            Uri.parse('$kBaseUrl/api/esqueci-senha'),
+            headers: {
+              'Accept': applicationJson,
+              'Content-Type': applicationJson,
+            },
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(kTimeoutApi);
+
+      if (resposta.statusCode == 200) return _mensagemDe(resposta);
+
+      _lancaErro(resposta); // nunca retorna: sempre joga uma ApiException
+    } on TimeoutException {
+      throw ApiException('Tempo esgotado — tente de novo em instantes.');
+    }
+  }
+
   /// Busca os dados do dono do token salvo (GET /api/me).
   ///
   /// Serve também para CONFIRMAR que o token ainda é válido — se o servidor
@@ -251,7 +277,7 @@ class ApiService {
     // no servidor (mesma convenção do formulário do site).
     final corpo = valor == null || valor <= 0 ? <String, dynamic>{} : {'valor': valor};
 
-    final resposta = await _requisicaoSaque(
+    final resposta = await _requisicaoAcao(
       'POST',
       '/api/saque/solicitar',
       corpo: corpo,
@@ -261,26 +287,120 @@ class ApiService {
 
   /// Cancela um saque pendente SEU (o servidor devolve as cotas).
   static Future<String> cancelarSaque(int id) async {
-    final resposta = await _requisicaoSaque('DELETE', '/api/saque/cancelar/$id');
+    final resposta = await _requisicaoAcao('DELETE', '/api/saque/cancelar/$id');
     return _mensagemDe(resposta);
   }
 
   /// CONFIRMA um saque como admin (vende BTC se faltar BRL, cancela as
   /// ordens abertas e pausa o bot 3 min — a mesma rotina do site).
   static Future<String> confirmarSaque(int id) async {
-    final resposta = await _requisicaoSaque('POST', '/api/saque/confirmar/$id');
+    final resposta = await _requisicaoAcao('POST', '/api/saque/confirmar/$id');
     return _mensagemDe(resposta);
   }
 
   /// Libera o bot da pausa pós-confirmação (admin).
   static Future<String> retomarBot() async {
-    final resposta = await _requisicaoSaque('POST', '/api/saque/retomar');
+    final resposta = await _requisicaoAcao('POST', '/api/saque/retomar');
     return _mensagemDe(resposta);
   }
 
-  /// Executor comum das ações de saque: montar a chamada, anexar o token,
-  /// aplicar timeout e traduzir qualquer erro em ApiException.
-  static Future<http.Response> _requisicaoSaque(
+  /// Salva a chave PIX de recebimento do usuário (exigida no saque —
+  /// o administrador paga o PIX nela).
+  static Future<String> salvarChavePix(String chave) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/saque/chave-pix',
+      corpo: {'chave_pix': chave},
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// Busca a tela de depósitos inteira (GET /api/deposito/tela): cobrança
+  /// pendente (retomada do QR) e histórico; os depósitos de todos vêm
+  /// embutidos quando o usuário é o admin — igual ao /saque/tela.
+  static Future<DadosDeposito> telaDeposito() async {
+    try {
+      await carregarTokenSalvo();
+
+      final resposta = await http
+          .get(
+            Uri.parse('$kBaseUrl/api/deposito/tela'),
+            headers: _headersComToken(),
+          )
+          .timeout(kTimeoutApi);
+
+      if (resposta.statusCode == 200) {
+        return DadosDeposito.fromJson(
+            jsonDecode(resposta.body) as Map<String, dynamic>);
+      }
+
+      _lancaErro(resposta);
+    } on TimeoutException {
+      throw ApiException('Tempo esgotado ao carregar os depósitos.');
+    }
+  }
+
+  /// Gera uma cobrança PIX de depósito — o MESMO endpoint do site; a
+  /// resposta traz o QR (base64), o copia-e-cola e a expiração.
+  static Future<DepositoPendente> criarDeposito({required double valor}) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/deposito/criar',
+      corpo: {'valor': valor, 'descricao': 'Depósito BotBTC'},
+    );
+
+    return DepositoPendente.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// Consulta o status de uma cobrança (polling de 5s enquanto aguarda).
+  static Future<StatusDeposito> statusDeposito(String txid) async {
+    final resposta = await _requisicaoAcao('GET', '/api/deposito/status/$txid');
+
+    return StatusDeposito.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// REGISTRA um depósito no bot como admin (credita cotas + marca
+  /// registrado, numa única transaction no servidor).
+  static Future<String> registrarDeposito(int id) async {
+    final resposta = await _requisicaoAcao('POST', '/api/deposito/registrar/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// ESTORNA um depósito como admin (devolve via MercadoPago).
+  static Future<String> estornarDeposito(int id) async {
+    final resposta = await _requisicaoAcao('POST', '/api/deposito/estornar/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// DEPÓSITO MANUAL (admin): aporte direto sem gateway — cotas creditadas
+  /// na hora, registro já pago + registrado. O servidor pausa o bot até o
+  /// admin transferir o valor pra Binance e liberar (retomarBot).
+  static Future<String> depositoManual({
+    required int userId,
+    required double valor,
+  }) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/deposito/manual',
+      corpo: {'user_id': userId, 'valor': valor},
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// REMOVE a conta de um usuário sem cotas (admin) — o servidor recusa
+  /// se houver qualquer dinheiro/histórico envolvido.
+  static Future<String> removerUsuario(int id) async {
+    final resposta = await _requisicaoAcao('POST', '/api/usuario/$id/remover');
+    return _mensagemDe(resposta);
+  }
+
+  /// Executor comum das ações de dinheiro (saques e depósitos): montar a
+  /// chamada, anexar o token, aplicar timeout e traduzir erros em ApiException.
+  static Future<http.Response> _requisicaoAcao(
     String metodo,
     String caminho, {
     Map<String, dynamic>? corpo,
@@ -399,6 +519,9 @@ class ApiService {
         }
       } else if (corpo is Map && corpo['message'] is String) {
         mensagem = corpo['message'] as String;
+      } else if (corpo is Map && corpo['error'] is String) {
+        // O PixController devolve {"error": "..."} nos erros 500 dele.
+        mensagem = corpo['error'] as String;
       }
     } catch (_) {
       // O corpo não era JSON — mantemos a mensagem genérica acima.

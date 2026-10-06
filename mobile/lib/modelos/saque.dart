@@ -19,6 +19,7 @@
 class DadosSaque {
   final bool ehAdmin; // true = usuário id 1 (quem aprova os saques)
   final double disponivel; // valor atual do investimento (teto do saque)
+  final String? chavePix; // chave de recebimento (exigida no saque)
   final List<SaqueMeu> pendentes; // meus saques aguardando aprovação
   final List<SaqueHistorico> historico; // meus saques já confirmados
   final List<SaqueAprovacao> aprovacoes; // TODOS os pendentes (só admin)
@@ -27,6 +28,7 @@ class DadosSaque {
   const DadosSaque({
     required this.ehAdmin,
     required this.disponivel,
+    required this.chavePix,
     required this.pendentes,
     required this.historico,
     required this.aprovacoes,
@@ -37,6 +39,7 @@ class DadosSaque {
     return DadosSaque(
       ehAdmin: json['eh_admin'] as bool? ?? false,
       disponivel: _num(json['disponivel']),
+      chavePix: json['chave_pix'] as String?,
       pendentes: (json['pendentes'] as List? ?? [])
           .map((s) => SaqueMeu.fromJson(s as Map<String, dynamic>))
           .toList(),
@@ -94,6 +97,7 @@ class SaqueAprovacao {
   final int id;
   final String nome;
   final String email;
+  final String chavePix; // onde o admin paga o PIX ('—' se legado sem snapshot)
   final double valorBruto;
   final double valorLiquido;
   final double cotas;
@@ -103,6 +107,7 @@ class SaqueAprovacao {
     required this.id,
     required this.nome,
     required this.email,
+    required this.chavePix,
     required this.valorBruto,
     required this.valorLiquido,
     required this.cotas,
@@ -113,6 +118,7 @@ class SaqueAprovacao {
         id: json['id'] as int,
         nome: json['name'] as String,
         email: json['email'] as String,
+        chavePix: json['chave_pix'] as String? ?? '—',
         valorBruto: _num(json['valor_bruto']),
         valorLiquido: _num(json['valor_liquido']),
         cotas: _num(json['cotas']),
@@ -120,16 +126,27 @@ class SaqueAprovacao {
       );
 }
 
-/// Situação da pausa do bot depois de confirmar um saque (só admin).
+/// Situação da pausa do bot (só admin). O motivo diz quem pausou:
+/// 'saque' = confirmação de saque (retoma sozinho em 3 min) |
+/// 'deposito' = depósito manual (fica pausado até o admin liberar).
 class StatusPausa {
   final bool pausado;
   final int segundos; // quanto tempo falta (0 quando não está pausado)
+  final String? motivo; // 'saque' | 'deposito' | null
 
-  const StatusPausa({required this.pausado, required this.segundos});
+  const StatusPausa({
+    required this.pausado,
+    required this.segundos,
+    this.motivo,
+  });
+
+  /// Pausa de depósito manual: sem countdown — sai quando o admin libera.
+  bool get ehDeposito => motivo == 'deposito';
 
   factory StatusPausa.fromJson(Map<String, dynamic> json) => StatusPausa(
         pausado: json['pausado'] as bool? ?? false,
         segundos: (json['segundos'] as num?)?.toInt() ?? 0,
+        motivo: json['motivo'] as String?,
       );
 }
 

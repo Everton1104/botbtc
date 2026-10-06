@@ -26,8 +26,8 @@ import '../modelos/painel.dart';
 import '../servicos/api.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
+import 'tela_acoes.dart';
 import 'tela_login.dart';
-import 'tela_saque.dart';
 
 class TelaHome extends StatefulWidget {
   const TelaHome({super.key});
@@ -171,12 +171,12 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     );
   }
 
-  /// Abre a tela de saques. O `await` espera ela fechar para então
-  /// atualizar a Home em silêncio — solicitar/cancelar/aprovar muda a
-  /// lista "Saques Pendentes" (e o painel) que está aqui embaixo.
-  Future<void> _abrirSaques() async {
+  /// Abre a tela "Ações" (saques e depósitos em abas). O `await` espera
+  /// ela fechar para então atualizar a Home em silêncio — solicitar saque,
+  /// registrar depósito, aprovar... tudo isso muda os números daqui embaixo.
+  Future<void> _abrirAcoes() async {
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const TelaSaque()),
+      MaterialPageRoute(builder: (_) => const TelaAcoes()),
     );
     if (mounted) _carregar(silencioso: true);
   }
@@ -213,12 +213,12 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('BotBTC'),
         actions: [
-          // Saques: o fluxo completo (solicitar/cancelar/histórico e, pro
-          // admin, aprovar com pausa do bot) mora na TelaSaque.
+          // Ações de dinheiro: saques (solicitar/cancelar/aprovar) e
+          // depósitos PIX moram na TelaAcoes, em duas abas.
           IconButton(
             icon: const Icon(Icons.currency_exchange),
-            tooltip: 'Saques',
-            onPressed: _abrirSaques,
+            tooltip: 'Ações',
+            onPressed: _abrirAcoes,
           ),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Sair', onPressed: _sair),
         ],
