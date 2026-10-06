@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+
+use App\Notifications\ResetPassword as ResetPasswordNotification;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -11,7 +13,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'whatsapp', 'whatsapp_code', 'whatsapp_code_expires_at', 'whatsapp_verified_at', 'password'])]
+#[Fillable(['name', 'email', 'whatsapp', 'whatsapp_code', 'whatsapp_code_expires_at', 'whatsapp_verified_at', 'chave_pix', 'password'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -43,5 +45,14 @@ class User extends Authenticatable
         return $this->whatsapp_code === $codigo
             && $this->whatsapp_code_expires_at
             && $this->whatsapp_code_expires_at->isFuture();
+    }
+
+    /**
+     * E-mail de recuperação de senha em português (o padrão do framework
+     * chega todo em inglês). Vale pro site e pro app — mesmo broker.
+     */
+    public function sendPasswordResetNotification($token): void
+    {
+        $this->notify(new ResetPasswordNotification($token));
     }
 }

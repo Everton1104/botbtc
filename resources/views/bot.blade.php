@@ -759,6 +759,16 @@
                             Você receberá: <strong id="saque-liquido-preview" class="text-green">—</strong> @if(auth()->user()->id == 1)(sem taxa)@else(após 1% de taxa)@endif
                         </div>
                     </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Chave PIX de recebimento</label>
+                        <div class="input-group input-group-sm">
+                            <input type="text" id="saque-chave-pix" class="form-control" maxlength="140" placeholder="CPF, e-mail, telefone ou chave aleatória">
+                            <button class="btn btn-outline-muted btn-sm" type="button" onclick="salvarChavePix()">Salvar</button>
+                        </div>
+                        <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
+                            O saque é pago pelo administrador nesta chave.
+                        </div>
+                    </div>
                     <div class="col-12 col-md-3">
                         <button class="btn btn-success w-100" onclick="solicitarSaque()">
                             <i class="fa-solid fa-paper-plane me-1"></i>Solicitar
@@ -1274,6 +1284,7 @@ function carregarSaques() {
                     <td>
                         <div class="fw-600">${s.name}</div>
                         <div class="text-muted" style="font-size:.78rem;">${s.email}</div>
+                        <div class="text-muted" style="font-size:.78rem;">PIX: ${s.chave_pix ?? '—'}</div>
                     </td>
                     <td class="text-muted">${s.criado_em}</td>
                     <td>R$ ${fmt(s.valor_bruto)}</td>
@@ -1644,16 +1655,20 @@ document.getElementById('saque-valor')?.addEventListener('input', function() {
 function solicitarSaque() {
     const input = document.getElementById('saque-valor');
     const valor = parseFloat(input?.value) || 0;
+    const chave = (document.getElementById('saque-chave-pix')?.value ?? '').trim();
 
     if (valor <= 0) { alert('Informe um valor para sacar.'); return; }
     if (valor > valorAtualCache + 0.01) { alert('Valor maior que o saldo disponível.'); return; }
+    if (!chave) { alert('Informe sua chave PIX de recebimento — o saque é pago nela.'); return; }
 
     const liquido = fmt(valor * (ehAdmin ? 1 : 0.99));
     const msgTaxa = ehAdmin ? 'via Pix (sem taxa)' : 'via Pix (1% de taxa)';
-    if (!confirm(`Confirma o saque de R$ ${fmt(valor)}?\n\nVocê receberá R$ ${liquido} ${msgTaxa}.\nAs cotas serão descontadas imediatamente.`)) return;
+    if (!confirm(`Confirma o saque de R$ ${fmt(valor)}?\n\nVocê receberá R$ ${liquido} ${msgTaxa} na chave PIX ${chave}.\nAs cotas serão descontadas imediatamente.`)) return;
 
     input.disabled = true;
-    axios.post('/bot/solicitar-saque', { valor })
+    // Garante que a chave digitada está salva antes de gerar o pedido
+    axios.post('/bot/salvar-chave-pix', { chave_pix: chave })
+        .then(() => axios.post('/bot/solicitar-saque', { valor }))
         .then(res => {
             alert(res.data.mensagem);
             input.value = '';
@@ -1667,6 +1682,15 @@ function solicitarSaque() {
             alert(err?.response?.data?.mensagem ?? 'Erro ao solicitar saque.');
             input.disabled = false;
         });
+}
+
+function salvarChavePix() {
+    const chave = (document.getElementById('saque-chave-pix')?.value ?? '').trim();
+    if (!chave) { alert('Informe sua chave PIX.'); return; }
+
+    axios.post('/bot/salvar-chave-pix', { chave_pix: chave })
+        .then(res => alert(res.data.mensagem))
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao salvar a chave PIX.'));
 }
 
 function cancelarSaque(id) {
@@ -1734,11 +1758,15 @@ function carregarMeusSaques() {
         axios.get('/bot/meus-saques'),
         axios.get('/bot/meus-depositos'),
     ]).then(([resSaques, resDepositos]) => {
-        const { pendentes, historico } = resSaques.data;
+        const { pendentes, historico, chave_pix } = resSaques.data;
         const depositos = resDepositos.data;
 
         depositosCache = depositos;
         renderizarTabelaBTC();
+
+        // Prefill da chave PIX (só quando vazia — não atropela quem digita)
+        const elChave = document.getElementById('saque-chave-pix');
+        if (elChave && !elChave.value && chave_pix) elChave.value = chave_pix;
 
         // Pendentes
         const areaPend = document.getElementById('area-saques-pendentes');

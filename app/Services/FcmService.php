@@ -133,14 +133,18 @@ class FcmService
         self::enviar($titulo, $corpo, ['tipo' => 'trade', 'lado' => $lado]);
     }
 
-    /** Push de saque solicitado — espelha o WhatsApp que o admin já recebe. */
-    public static function notificarSaque(float $valorBruto, string $nome): void
+    /**
+     * Push de saque solicitado — espelha o WhatsApp que o admin já recebe.
+     * A chave PIX (opcional) vai no corpo: o admin paga lendo a notificação.
+     */
+    public static function notificarSaque(float $valorBruto, string $nome, ?string $chavePix = null): void
     {
-        self::enviar(
-            '💸 Saque solicitado',
-            'R$ ' . number_format($valorBruto, 2, ',', '.') . " por {$nome} — aguardando sua aprovação",
-            ['tipo' => 'saque'],
-        );
+        $corpo = 'R$ ' . number_format($valorBruto, 2, ',', '.') . " por {$nome} — aguardando sua aprovação";
+        if ($chavePix !== null && $chavePix !== '') {
+            $corpo .= " · PIX: {$chavePix}";
+        }
+
+        self::enviar('💸 Saque solicitado', $corpo, ['tipo' => 'saque']);
     }
 
     /**

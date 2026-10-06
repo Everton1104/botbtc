@@ -18,6 +18,10 @@ Auth::routes();
 
 Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
 
+// Download do app Android — página pública (o APK em /app-botbtc.apk
+// baixa direto); o navbar dos clientes logados aponta pra cá.
+Route::view('/download', 'download')->name('download');
+
 // ── Verificação de WhatsApp ───────────────────────────────────────────────────
 
 Route::middleware('auth')->group(function () {
@@ -144,9 +148,11 @@ Route::get('/bot/patrimonio', function (BinanceController $binance) {
     ];
 })->middleware(['auth', 'whatsapp.verified']);
 
-Route::post('/bot/investir-manual', function (Request $req, BinanceController $binance) {
+// Crédito direto de cotas sem gateway — ação exclusiva do admin. O cálculo
+// vive no DepositoService (mesma fonte do "registrar depósito" do app);
+// aqui é só a casca HTTP que o site chama.
+Route::post('/bot/investir-manual', function (Request $req) {
 
-    // Crédito direto de cotas sem gateway — ação exclusiva do admin
     if (Auth::id() !== 1) {
         return response()->json(['mensagem' => 'Acesso negado.'], 403);
     }
@@ -159,42 +165,9 @@ Route::post('/bot/investir-manual', function (Request $req, BinanceController $b
 
     $userId = $req->filled('userId') ? (int) $req->input('userId') : Auth::id();
 
-    // Patrimônio lido ANTES da transaction (chamada externa — Binance)
-    $saldos = $binance->getSaldos();
-    $preco  = $binance->getPrecoBTC();
+    $r = app(\App\Services\DepositoService::class)->investirManual($userId, $valor);
 
-    $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
-    $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
-
-    $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
-                     + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
-
-    DB::transaction(function () use ($userId, $valor, $patrimonioAtual) {
-        // Lock para evitar corrida com outros depósitos simultâneos
-        $totalCotas = (float) BotInvestment::lockForUpdate()->sum('cotas');
-
-        // Remove o aporte do patrimônio — o dinheiro já está na Binance
-        // mas não deve inflar o preço da cota antes do registro
-        $patrimonioSemDeposito = max(0, $patrimonioAtual - $valor);
-        $precoPorCota          = $totalCotas > 0 ? $patrimonioSemDeposito / $totalCotas : 1.0;
-        $novasCotas            = $valor / $precoPorCota;
-
-        $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
-
-        if ($invest) {
-            $invest->investimento_inicial += $valor;
-            $invest->cotas                += $novasCotas;
-            $invest->save();
-        } else {
-            BotInvestment::create([
-                'user_id'              => $userId,
-                'investimento_inicial' => $valor,
-                'cotas'                => $novasCotas,
-            ]);
-        }
-    });
-
-    return ['mensagem' => 'Investimento realizado com sucesso!'];
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
 })->middleware(['auth', 'whatsapp.verified']);
 
 
@@ -516,6 +489,12 @@ Route::post('/bot/solicitar-saque', function (Request $req) {
 // Usuário: cancelar saque pendente (devolve cotas)
 Route::delete('/bot/cancelar-saque/{id}', function ($id) {
     $r = app(\App\Services\SaqueService::class)->cancelar(Auth::id(), (int) $id);
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Usuário: salva a chave PIX de recebimento (exigida no saque)
+Route::post('/bot/salvar-chave-pix', function (Request $req) {
+    $r = app(\App\Services\SaqueService::class)->salvarChavePix(Auth::id(), (string) $req->input('chave_pix', ''));
     return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
 })->middleware(['auth', 'whatsapp.verified']);
 

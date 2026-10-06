@@ -42,6 +42,14 @@ class SaqueService
      */
     public function solicitar(int $userId, float $valorSolicitado): array
     {
+        $user = User::find($userId);
+
+        // Sem chave de recebimento o admin não consegue pagar o saque —
+        // exigir aqui (e não na UI) cobre site e app com a mesma regra.
+        if ($user === null || trim((string) $user->chave_pix) === '') {
+            return ['ok' => false, 'code' => 422, 'mensagem' => 'Cadastre sua chave PIX antes de sacar.'];
+        }
+
         $saldos = $this->binance->getSaldos();
         $preco  = $this->binance->getPrecoBTC();
 
@@ -54,7 +62,7 @@ class SaqueService
         $valorBruto = 0.0;
 
         try {
-            DB::transaction(function () use ($userId, $patrimonioAtual, $valorSolicitado, &$valorBruto) {
+            DB::transaction(function () use ($userId, $user, $patrimonioAtual, $valorSolicitado, &$valorBruto) {
 
                 // Lock: impede dois saques simultâneos do mesmo usuário
                 $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
@@ -83,6 +91,7 @@ class SaqueService
 
                 BotWithdrawalRequest::create([
                     'user_id'        => $userId,
+                    'chave_pix'      => $user->chave_pix, // snapshot: pedido antigo não muda se a chave mudar
                     'valor_bruto'    => $valorBruto,
                     'valor_liquido'  => $valorLiquido,
                     'cotas'          => $cotasAQueimar,
@@ -125,7 +134,8 @@ class SaqueService
         }
 
         // Push pro app (o WhatsApp de btc_saque foi aposentado — ver FcmService).
-        FcmService::notificarSaque($valorBruto, User::find($userId)?->name ?? 'Desconhecido');
+        // A chave vai no corpo: o admin paga o PIX lendo a notificação.
+        FcmService::notificarSaque($valorBruto, $user->name, $user->chave_pix);
 
         return [
             'ok'          => true,
@@ -179,6 +189,24 @@ class SaqueService
     }
 
     /**
+     * Salva (ou atualiza) a chave PIX de recebimento do investidor.
+     * Validação manual em vez de validate() para manter a resposta no
+     * formato {"mensagem": ...} que site e app exibem direto.
+     */
+    public function salvarChavePix(int $userId, string $chave): array
+    {
+        $chave = trim($chave);
+
+        if (mb_strlen($chave) < 5 || mb_strlen($chave) > 140) {
+            return ['ok' => false, 'code' => 422, 'mensagem' => 'A chave PIX deve ter entre 5 e 140 caracteres.'];
+        }
+
+        User::find($userId)?->update(['chave_pix' => $chave]);
+
+        return ['ok' => true, 'mensagem' => 'Chave PIX salva com sucesso.'];
+    }
+
+    /**
      * Pendentes + histórico do usuário, e o valor disponível pra sacar hoje
      * (cotas × preço da cota). 'disponivel' é aditivo: o site ignora a chave.
      */
@@ -208,6 +236,7 @@ class SaqueService
 
         return [
             'disponivel' => $this->valorDisponivel($userId),
+            'chave_pix'  => User::find($userId)?->chave_pix, // prefill do campo no site e no app
             'pendentes'  => $pendentes,
             'historico'  => $historico,
         ];
@@ -254,6 +283,7 @@ class SaqueService
                 'user_id'       => $s->user_id,
                 'name'          => $s->user?->name ?? 'Desconhecido',
                 'email'         => $s->user?->email ?? '—',
+                'chave_pix'     => $s->chave_pix ?: ($s->user?->chave_pix ?: '—'), // snapshot ?? chave atual
                 'valor_bruto'   => $s->valor_bruto,
                 'valor_liquido' => $s->valor_liquido,
                 'cotas'         => $s->cotas,
@@ -310,7 +340,10 @@ class SaqueService
         }
 
         // Pausar todos os estados do bot por 3 minutos para o admin fazer a transferência
-        BotState::query()->update(['pausado_ate' => now()->addMinutes(3)]);
+        BotState::query()->update([
+            'pausado_ate'  => now()->addMinutes(3),
+            'pausa_motivo' => 'saque',
+        ]);
 
         $saque->status        = 'confirmado';
         $saque->confirmado_at = now();
@@ -319,25 +352,27 @@ class SaqueService
         return ['ok' => true, 'mensagem' => 'PIX confirmado com sucesso!'];
     }
 
-    /** Situação da pausa pós-confirmação (admin). */
+    /** Situação da pausa (admin) — motivo diz se foi saque (3 min) ou depósito manual. */
     public function statusPausa(): array
     {
         $state = BotState::whereNotNull('pausado_ate')->where('pausado_ate', '>', now())->first();
 
         if (!$state) {
-            return ['pausado' => false, 'segundos' => 0];
+            return ['pausado' => false, 'segundos' => 0, 'motivo' => null];
         }
 
         return [
             'pausado'  => true,
             'segundos' => (int) now()->diffInSeconds($state->pausado_ate),
+            // Pausas gravadas antes da coluna existir são de saque (era o único motivo)
+            'motivo'   => $state->pausa_motivo ?? 'saque',
         ];
     }
 
     /** Libera o bot da pausa (admin terminou a transferência antes do tempo). */
     public function retomarBot(): array
     {
-        BotState::query()->update(['pausado_ate' => null]);
+        BotState::query()->update(['pausado_ate' => null, 'pausa_motivo' => null]);
 
         return ['ok' => true, 'mensagem' => 'Bot liberado com sucesso.'];
     }

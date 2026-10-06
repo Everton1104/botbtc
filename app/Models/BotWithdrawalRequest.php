@@ -10,6 +10,7 @@ class BotWithdrawalRequest extends Model
 
     protected $fillable = [
         'user_id',
+        'chave_pix', // snapshot da chave de recebimento no momento do pedido
         'valor_bruto',
         'valor_liquido',
         'cotas',

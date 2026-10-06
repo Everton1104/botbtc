@@ -89,4 +89,16 @@ class SaqueApiController extends Controller
 
         return response()->json(['mensagem' => $this->saques->retomarBot()['mensagem']]);
     }
+
+    /**
+     * POST /api/saque/chave-pix — salva a chave PIX de recebimento do
+     * usuário (exigida para solicitar saque; o admin paga o PIX nela).
+     * Validação fica no service para manter a resposta em {"mensagem": ...}.
+     */
+    public function salvarChavePix(Request $request): JsonResponse
+    {
+        $r = $this->saques->salvarChavePix($request->user()->id, (string) $request->input('chave_pix', ''));
+
+        return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+    }
 }
