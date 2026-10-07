@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\BotConfig;
 use App\Models\BotTrade;
 use App\Models\BotTransfer;
 use Illuminate\Support\Carbon;
@@ -576,6 +577,108 @@ class PnlService
             'patrimonio_ini_em' => $patrimonioEm,
             'patrimonio_fonte'  => $fontePatrimonio,
             'patrimonio_aproximado' => $defasagemDias !== null && $defasagemDias > 7,
+        ];
+    }
+
+    // ── M8 — Painel de performance persistido ───────────────────────────
+
+    /**
+     * Performance do bot contra a base fotografada na primeira execução
+     * (bot_config: patrimonio/btc/brl iniciais): situação atual (saldos live
+     * passados pela rota), série diária desde a base com pico/drawdown (a
+     * própria base entra como primeiro ponto e o valor live como último),
+     * contagem de operações (bot_trades) e P&L realizado acumulado (FIFO já
+     * cacheado do realizado() — não roda o FIFO de novo por painel aberto).
+     */
+    public function performance(float $saldoBrl, float $saldoBtc, float $precoAtual): array
+    {
+        $config = BotConfig::atual();
+
+        $valorBtc   = $saldoBtc * $precoAtual;
+        $patrimonio = $valorBtc + $saldoBrl;
+        $pctBtc     = $patrimonio > 0 ? ($valorBtc / $patrimonio) * 100 : 50.0;
+
+        $temBase = $config->base_iniciada_em !== null && (float) $config->patrimonio_inicial > 0;
+
+        $variacao = static function (float $inicial, float $atual): ?float {
+            return $inicial > 0 ? round(($atual - $inicial) / $inicial * 100, 2) : null;
+        };
+
+        // Série diária desde a base (snapshot do cron em bot_patrimonio),
+        // caminhando pico/drawdown ponto a ponto.
+        $serie     = [];
+        $picoValor = $temBase ? (float) $config->patrimonio_inicial : $patrimonio;
+        $picoEm    = $temBase ? $config->base_iniciada_em->timezone(self::TZ)->format('d/m/Y') : 'agora';
+        $ddMax     = 0.0;
+
+        if ($temBase) {
+            $rows = DB::table('bot_patrimonio')
+                ->where('dia', '>=', $config->base_iniciada_em->format('Y-m-d'))
+                ->orderBy('dia')
+                ->get(['dia', 'total']);
+
+            foreach ($rows as $r) {
+                $total = (float) $r->total;
+                $serie[] = ['dia' => Carbon::parse($r->dia)->format('d/m/Y'), 'patrimonio' => round($total, 2)];
+                if ($total > $picoValor) {
+                    $picoValor = $total;
+                    $picoEm    = Carbon::parse($r->dia)->format('d/m/Y');
+                }
+                if ($picoValor > 0) {
+                    $ddMax = max($ddMax, ($picoValor - $total) / $picoValor * 100);
+                }
+            }
+        }
+
+        // Ponto live (mais fresco que o snapshot do primeiro ciclo do dia).
+        $serie[] = ['dia' => 'agora', 'patrimonio' => round($patrimonio, 2)];
+        if ($patrimonio > $picoValor) {
+            $picoValor = $patrimonio;
+            $picoEm    = 'agora';
+        }
+        if ($picoValor > 0) {
+            $ddMax = max($ddMax, ($picoValor - $patrimonio) / $picoValor * 100);
+        }
+
+        // Contagem de operações desde o início (agregação leve).
+        $agg = BotTrade::where('symbol', self::SYMBOL)
+            ->selectRaw("COUNT(*) AS total, COALESCE(SUM(side = 'BUY'), 0) AS compras, COALESCE(SUM(side = 'SELL'), 0) AS vendas, MIN(traded_at) AS desde")
+            ->first();
+
+        $realizado = $this->realizado()['totais'];
+
+        return [
+            'base' => [
+                'patrimonio_inicial' => $temBase ? round((float) $config->patrimonio_inicial, 2) : null,
+                'btc_inicial'        => $temBase ? (float) $config->btc_inicial : null,
+                'brl_inicial'        => $temBase ? round((float) $config->brl_inicial, 2) : null,
+                'em'                 => $temBase ? $config->base_iniciada_em->timezone(self::TZ)->format('d/m/Y H:i') : null,
+            ],
+            'atual' => [
+                'preco_btc'  => round($precoAtual, 2),
+                'saldo_brl'  => round($saldoBrl, 2),
+                'saldo_btc'  => round($saldoBtc, 8),
+                'valor_btc'  => round($valorBtc, 2),
+                'patrimonio' => round($patrimonio, 2),
+                'pct_btc'    => round($pctBtc, 2),
+                'pct_brl'    => round(100.0 - $pctBtc, 2),
+                'variacao_patrimonio_pct' => $temBase ? $variacao((float) $config->patrimonio_inicial, $patrimonio) : null,
+                'variacao_btc_pct'        => $temBase ? $variacao((float) $config->btc_inicial, $saldoBtc) : null,
+                'variacao_brl_pct'        => $temBase ? $variacao((float) $config->brl_inicial, $saldoBrl) : null,
+            ],
+            'serie'            => $serie,
+            'pico'             => ['valor' => round($picoValor, 2), 'em' => $picoEm],
+            'drawdown_max_pct' => round($ddMax, 2),
+            'trades' => [
+                'total'   => (int) $agg->total,
+                'compras' => (int) $agg->compras,
+                'vendas'  => (int) $agg->vendas,
+                'desde'   => $agg->desde ? Carbon::parse($agg->desde)->timezone(self::TZ)->format('d/m/Y') : null,
+            ],
+            'pnl' => [
+                'realizado_acumulado' => round((float) ($realizado['acumulado'] ?? 0), 2),
+                'fees_brl'            => round((float) ($realizado['fees_brl'] ?? 0), 2),
+            ],
         ];
     }
 

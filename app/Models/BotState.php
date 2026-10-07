@@ -23,6 +23,8 @@ class BotState extends Model
         'pausa_motivo',
         'modo_subida',
         'pausado_manual',
+        'modo_subida_auto',
+        'par_criado_em',
     ];
 
     protected $casts = [
@@ -35,5 +37,7 @@ class BotState extends Model
         'pausado_ate'       => 'datetime',
         'modo_subida'       => 'boolean',
         'pausado_manual'    => 'boolean',
+        'modo_subida_auto'  => 'boolean',
+        'par_criado_em'     => 'datetime',
     ];
 }

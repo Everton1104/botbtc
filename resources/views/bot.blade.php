@@ -324,6 +324,100 @@
                     @endforeach
                 </div>
 
+                {{-- M1: alocação BTC/BRL — targets e zonas de alerta/bloqueio --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Alocação patrimonial BTC/BRL (%)</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alvo BTC</label>
+                        <input type="number" id="cfg-target-btc" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="50">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alvo BRL</label>
+                        <input type="number" id="cfg-target-brl" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="50">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Zona de alerta ≥</label>
+                        <input type="number" id="cfg-alerta" class="form-control form-control-sm" min="50" max="100" step="1" placeholder="70">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Zona de bloqueio ≥</label>
+                        <input type="number" id="cfg-bloqueio" class="form-control form-control-sm" min="50" max="100" step="1" placeholder="80">
+                    </div>
+                </div>
+                <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
+                    Acima do alerta o lado majoritário é reduzido e o contrário ampliado; acima do bloqueio ordens normais do lado majoritário param (só excepcionais).
+                </div>
+
+                {{-- M2/M3: pisos em tendência forte --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Proteção de tendência forte — pisos (%)</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">BTC mínimo na alta forte</label>
+                        <input type="number" id="cfg-btc-piso-alta" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="40">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">BRL mínimo na baixa forte</label>
+                        <input type="number" id="cfg-brl-piso-baixa" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="40">
+                    </div>
+                </div>
+                <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
+                    Tendência forte confirmada (EMA·RSI4h·MA21_4h·MACD·trend4h) bloqueia venda abaixo do piso de BTC na alta e compra abaixo do piso de BRL na baixa.
+                </div>
+
+                {{-- M5: spread e taxa · M7: extremos de RSI --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Spread do grid & extremos</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Spread mínimo (%)</label>
+                        <input type="number" id="cfg-spread-min" class="form-control form-control-sm" min="0.1" max="5" step="0.05" placeholder="0.90">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Taxa total estimada (%)</label>
+                        <input type="number" id="cfg-taxa-total" class="form-control form-control-sm" min="0" max="2" step="0.01" placeholder="0.15">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">RSI máx. p/ comprar</label>
+                        <input type="number" id="cfg-rsi-max-compra" class="form-control form-control-sm" min="50" max="100" step="1" placeholder="80">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">RSI mín. p/ vender</label>
+                        <input type="number" id="cfg-rsi-min-venda" class="form-control form-control-sm" min="0" max="50" step="1" placeholder="20">
+                    </div>
+                </div>
+
+                {{-- M9: adaptação do grid --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Adaptação do grid ao regime (reposiciona mantendo o centro)</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Divergência mínima (%)</label>
+                        <input type="number" id="cfg-adapt-histerese" class="form-control form-control-sm" min="5" max="90" step="1" placeholder="30">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Persistência (min)</label>
+                        <input type="number" id="cfg-adapt-persist" class="form-control form-control-sm" min="0" max="720" step="1" placeholder="30">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Cooldown do par (min)</label>
+                        <input type="number" id="cfg-adapt-cooldown" class="form-control form-control-sm" min="0" max="1440" step="1" placeholder="240">
+                    </div>
+                </div>
+
+                {{-- M4/M6: switches --}}
+                <div class="row g-2 mb-3">
+                    <div class="col-12 col-md-4 d-flex align-items-center">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="cfg-subida-auto">
+                            <label class="form-check-label" for="cfg-subida-auto" style="font-size:.78rem;color:#aaa;">Modo subida <strong>automático</strong> (M4)</label>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-4 d-flex align-items-center">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="cfg-camadas-atr">
+                            <label class="form-check-label" for="cfg-camadas-atr" style="font-size:.78rem;color:#aaa;">Camadas de salto por ATR (M6)</label>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="d-flex align-items-center gap-3">
                     <button type="submit" class="btn btn-sm btn-warning px-4">
                         <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
@@ -406,8 +500,83 @@
         </div>
     </div>
 
-    {{-- Pausa manual do admin: cancela ordens e congela o bot até despausar --}}
+    {{-- Performance do bot: base fotografada × atual, pico/drawdown, trades, P&L --}}
     </div>{{-- /sec-maisinfo Lucro do Bot --}}
+    <div class="sec-maisinfo">
+    <div class="section-title mt-2"><i class="fa-solid fa-scale-balanced me-2"></i>Performance do Bot</div>
+
+    {{-- Tiles resumo --}}
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+            <div class="stat-tile">
+                <div class="label">Patrimônio atual</div>
+                <div class="value text-gold">R$ <span id="perf-patrimonio">—</span></div>
+                <div class="sub" id="perf-patrimonio-var">carregando...</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-tile">
+                <div class="label">Alocação</div>
+                <div class="value"><span class="text-gold" id="perf-pct-btc">—</span> <span style="font-size:.7rem;color:var(--muted);">BTC</span></div>
+                <div class="mt-1" style="height:8px;border-radius:6px;overflow:hidden;display:flex;background:var(--surface2);">
+                    <div id="perf-barra-btc" style="background:#f0b90b;height:100%;width:50%;transition:width .4s;"></div>
+                    <div id="perf-barra-brl" style="background:#0ecb81;height:100%;width:50%;transition:width .4s;"></div>
+                </div>
+                <div class="sub"><span id="perf-pct-brl">—</span> BRL <span style="color:#0ecb81;">■</span></div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-tile">
+                <div class="label">Pico / Drawdown</div>
+                <div class="value">R$ <span id="perf-pico">—</span></div>
+                <div class="sub" id="perf-pico-em">—</div>
+                <div class="sub text-red" id="perf-drawdown">—</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-tile">
+                <div class="label">P&L realizado (histórico)</div>
+                <div class="value" id="perf-pnl">—</div>
+                <div class="sub" id="perf-pnl-sub">—</div>
+            </div>
+        </div>
+    </div>
+
+    {{-- Base × atual --}}
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Métrica</th>
+                            <th>Base <span class="text-muted fw-normal" style="font-size:.75rem;" id="perf-base-em">(—)</span></th>
+                            <th>Agora</th>
+                            <th>Variação</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-performance">
+                        <tr><td colspan="4" class="text-center text-muted py-3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-body pt-2" style="font-size:.76rem;color:#888;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            A base é fotografada automaticamente na primeira execução do bot e usada como ponto de partida das variações.
+            <strong>P&L realizado</strong> é o total histórico (FIFO, líquido de fees) — independe da base.
+            <span id="perf-trades-sub">—</span>
+        </div>
+        <div class="card-body pt-0 pb-3">
+            <button type="button" class="btn btn-sm btn-outline-danger px-3" onclick="resetarBasePerformance()">
+                <i class="fa-solid fa-rotate-left me-1"></i>Resetar base
+            </button>
+            <span style="font-size:.74rem;color:#777;">Recomeça a contagem: o próximo ciclo do bot (≤1 min) fotografia a base nova (útil após saque/depósito grande).</span>
+        </div>
+    </div>
+    </div>{{-- /sec-maisinfo Performance do Bot --}}
+
+    {{-- Pausa manual do admin: cancela ordens e congela o bot até despausar --}}
     <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-circle-pause me-2"></i>Pausa Manual</div>
     <div class="card mb-4" id="card-pausa-manual">
@@ -1115,6 +1284,115 @@ document.getElementById('pnl-exemplo-valor').addEventListener('input', renderPnl
 carregarPnlDecomp();
 setInterval(carregarPnlDecomp, 300000);
 
+// ── Performance do bot (base × atual) ─────────────────
+function carregarPerformance() {
+    axios.get('/bot/performance').then(res => {
+        const d = res.data;
+        const temBase = d.base && d.base.patrimonio_inicial !== null;
+        const cls = v => v > 0 ? 'text-green' : v < 0 ? 'text-red' : '';
+        const sgn = v => v > 0 ? '+' : v < 0 ? '−' : '';
+        const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+
+        // Tiles
+        set('perf-patrimonio', fmt(d.atual.patrimonio));
+        const varEl = document.getElementById('perf-patrimonio-var');
+        if (temBase) {
+            const v = d.atual.variacao_patrimonio_pct;
+            varEl.innerHTML = `<span class="${cls(v)}">${sgn(v)}${Math.abs(v).toFixed(2)}%</span> desde a base`;
+        } else {
+            varEl.innerHTML = '<span class="text-muted">sem base ainda — o próximo ciclo fotografia</span>';
+        }
+
+        set('perf-pct-btc', d.atual.pct_btc.toFixed(1) + '%');
+        set('perf-pct-brl', d.atual.pct_brl.toFixed(1) + '%');
+        document.getElementById('perf-barra-btc').style.width = Math.max(0, Math.min(100, d.atual.pct_btc)) + '%';
+        document.getElementById('perf-barra-brl').style.width = Math.max(0, Math.min(100, d.atual.pct_brl)) + '%';
+
+        set('perf-pico', fmt(d.pico.valor));
+        set('perf-pico-em', 'pico em ' + d.pico.em);
+        set('perf-drawdown', 'drawdown máx: ' + d.drawdown_max_pct.toFixed(2) + '%');
+
+        const pnl = d.pnl.realizado_acumulado;
+        const pnlEl = document.getElementById('perf-pnl');
+        pnlEl.className = 'value ' + cls(pnl);
+        pnlEl.textContent = (pnl > 0 ? '▲ ' : pnl < 0 ? '▼ ' : '') + 'R$ ' + fmt(Math.abs(pnl));
+        set('perf-pnl-sub', 'fees pagos: R$ ' + fmt(d.pnl.fees_brl));
+
+        // Cabeçalho da base
+        set('perf-base-em', temBase ? '(' + d.base.em + ')' : '(sem base)');
+
+        // Tabela base × atual
+        const linhas = [];
+        const celVar = v => v === null || v === undefined
+            ? '<td class="text-muted">—</td>'
+            : `<td class="${cls(v)} fw-600">${sgn(v)}${Math.abs(v).toFixed(2)}%</td>`;
+        if (temBase) {
+            linhas.push(`
+                <tr>
+                    <td class="fw-500">Patrimônio</td>
+                    <td class="text-muted">R$ ${fmt(d.base.patrimonio_inicial)}</td>
+                    <td class="fw-600">R$ ${fmt(d.atual.patrimonio)}</td>
+                    ${celVar(d.atual.variacao_patrimonio_pct)}
+                </tr>
+                <tr>
+                    <td class="fw-500">Bitcoin
+                        <div class="sub">BTC ${fmtBTC(d.atual.saldo_btc)} hoje</div>
+                    </td>
+                    <td class="text-muted">${fmtBTC(d.base.btc_inicial)} BTC</td>
+                    <td class="fw-600">R$ ${fmt(d.atual.valor_btc)}</td>
+                    ${celVar(d.atual.variacao_btc_pct)}
+                </tr>
+                <tr>
+                    <td class="fw-500">Reais (BRL)</td>
+                    <td class="text-muted">R$ ${fmt(d.base.brl_inicial)}</td>
+                    <td class="fw-600">R$ ${fmt(d.atual.saldo_brl)}</td>
+                    ${celVar(d.atual.variacao_brl_pct)}
+                </tr>
+                <tr>
+                    <td class="fw-500">Preço BTC</td>
+                    <td class="text-muted">—</td>
+                    <td class="fw-600">R$ ${fmt(d.atual.preco_btc)}</td>
+                    <td class="text-muted">—</td>
+                </tr>`);
+        } else {
+            linhas.push(`
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-3">
+                        Sem base fotografada ainda — o próximo ciclo do bot (≤1 min) grava o ponto de partida.
+                    </td>
+                </tr>
+                <tr>
+                    <td class="fw-500">Patrimônio agora</td>
+                    <td class="text-muted">—</td>
+                    <td class="fw-600">R$ ${fmt(d.atual.patrimonio)}</td>
+                    <td class="text-muted">—</td>
+                </tr>`);
+        }
+        document.getElementById('tabela-performance').innerHTML = linhas.join('');
+
+        const tradesSub = document.getElementById('perf-trades-sub');
+        if (tradesSub) tradesSub.innerHTML =
+            'Operações: <strong>' + d.trades.total + '</strong> (' + d.trades.compras + ' compras · ' + d.trades.vendas + ' vendas)' +
+            (d.trades.desde ? ' desde ' + d.trades.desde : '') + '.';
+    }).catch(err => {
+        const msg = err?.response?.status === 503
+            ? 'Saldos ou preço indisponíveis agora — tenta de novo em 1 min.'
+            : 'Erro ao carregar performance.';
+        document.getElementById('tabela-performance').innerHTML =
+            '<tr><td colspan="4" class="text-center text-muted py-3">' + msg + '</td></tr>';
+    });
+}
+carregarPerformance();
+setInterval(carregarPerformance, 60000);
+
+function resetarBasePerformance() {
+    if (!confirm('Resetar a base de performance?\n\nA variação "desde a base" volta a zero e o próximo ciclo do bot (≤1 min) fotografia a base nova com os saldos atuais.\nÚtil após saque/depósito grande que distorce a leitura.')) return;
+    axios.post('/bot/performance/reset-base').then(res => {
+        alert(res.data.mensagem);
+        carregarPerformance();
+    }).catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao resetar a base.'));
+}
+
 // Tabela de investidores
 function carregarTabela() {
     axios.get('/admin/usuarios-investimentos').then(res => {
@@ -1232,6 +1510,30 @@ function carregarConfig() {
             const el = document.getElementById('cfg-nivel' + n);
             if (el) el.value = d['nivel' + n] ?? '';
         }
+        // M1-M9 — mesmos nomes do backend; vazio deixa o placeholder falar
+        const mapa = {
+            'cfg-target-btc':      'target_btc_pct',
+            'cfg-target-brl':      'target_brl_pct',
+            'cfg-alerta':          'limite_alerta_pct',
+            'cfg-bloqueio':        'limite_bloqueio_pct',
+            'cfg-btc-piso-alta':   'btc_minimo_tendencia_alta',
+            'cfg-brl-piso-baixa':  'brl_minimo_tendencia_baixa',
+            'cfg-spread-min':      'spread_minimo_pct',
+            'cfg-taxa-total':      'taxa_total_pct',
+            'cfg-rsi-max-compra':  'rsi_maximo_compra',
+            'cfg-rsi-min-venda':   'rsi_minimo_venda',
+            'cfg-adapt-histerese': 'adapt_histerese_pct',
+            'cfg-adapt-persist':   'adapt_persistencia_min',
+            'cfg-adapt-cooldown':  'adapt_cooldown_min',
+        };
+        Object.entries(mapa).forEach(([id, campo]) => {
+            const el = document.getElementById(id);
+            if (el && d[campo] !== null && d[campo] !== undefined) el.value = d[campo];
+        });
+        const subidaAuto = document.getElementById('cfg-subida-auto');
+        if (subidaAuto) subidaAuto.checked = !!d.modo_subida_auto_habilitado;
+        const camadasAtr = document.getElementById('cfg-camadas-atr');
+        if (camadasAtr) camadasAtr.checked = !!d.camadas_atr_habilitado;
     }).catch(() => {});
 }
 carregarConfig();
@@ -1248,6 +1550,33 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         const val = document.getElementById('cfg-nivel' + n)?.value;
         if (val) payload['nivel' + n] = parseFloat(val);
     }
+
+    // M1-M9 — floats do painel de otimização (backend clampa)
+    const campos = {
+        'cfg-target-btc':      'target_btc_pct',
+        'cfg-target-brl':      'target_brl_pct',
+        'cfg-alerta':          'limite_alerta_pct',
+        'cfg-bloqueio':        'limite_bloqueio_pct',
+        'cfg-btc-piso-alta':   'btc_minimo_tendencia_alta',
+        'cfg-brl-piso-baixa':  'brl_minimo_tendencia_baixa',
+        'cfg-spread-min':      'spread_minimo_pct',
+        'cfg-taxa-total':      'taxa_total_pct',
+        'cfg-rsi-max-compra':  'rsi_maximo_compra',
+        'cfg-rsi-min-venda':   'rsi_minimo_venda',
+        'cfg-adapt-histerese': 'adapt_histerese_pct',
+        'cfg-adapt-persist':   'adapt_persistencia_min',
+        'cfg-adapt-cooldown':  'adapt_cooldown_min',
+    };
+    Object.entries(campos).forEach(([id, campo]) => {
+        const val = document.getElementById(id)?.value;
+        if (val) payload[campo] = parseFloat(val);
+    });
+
+    // Switches sempre enviam o estado (checkbox sem "vazio")
+    const subidaAuto = document.getElementById('cfg-subida-auto');
+    if (subidaAuto) payload.modo_subida_auto_habilitado = subidaAuto.checked;
+    const camadasAtr = document.getElementById('cfg-camadas-atr');
+    if (camadasAtr) payload.camadas_atr_habilitado = camadasAtr.checked;
 
     axios.post('/bot/config', payload)
         .then(res => {

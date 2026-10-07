@@ -13,6 +13,13 @@ class BotConfig extends Model
         'nivel1', 'nivel2', 'nivel3', 'nivel4', 'nivel5', 'nivel6', 'nivel7',
         'allin_threshold',
         'min_notional',
+        // Otimização M1-M9 (defaults nas migrations)
+        'target_btc_pct', 'target_brl_pct', 'limite_alerta_pct', 'limite_bloqueio_pct',
+        'btc_minimo_tendencia_alta', 'brl_minimo_tendencia_baixa',
+        'modo_subida_auto_habilitado', 'spread_minimo_pct', 'taxa_total_pct',
+        'camadas_atr_habilitado', 'rsi_maximo_compra', 'rsi_minimo_venda',
+        'adapt_histerese_pct', 'adapt_cooldown_min', 'adapt_persistencia_min',
+        'patrimonio_inicial', 'btc_inicial', 'brl_inicial', 'base_iniciada_em',
     ];
 
     protected $casts = [
@@ -20,6 +27,17 @@ class BotConfig extends Model
         'nivel4' => 'float', 'nivel5' => 'float', 'nivel6' => 'float',
         'nivel7' => 'float', 'allin_threshold' => 'integer',
         'min_notional' => 'float',
+        'target_btc_pct' => 'float', 'target_brl_pct' => 'float',
+        'limite_alerta_pct' => 'float', 'limite_bloqueio_pct' => 'float',
+        'btc_minimo_tendencia_alta' => 'float', 'brl_minimo_tendencia_baixa' => 'float',
+        'modo_subida_auto_habilitado' => 'boolean',
+        'spread_minimo_pct' => 'float', 'taxa_total_pct' => 'float',
+        'camadas_atr_habilitado' => 'boolean',
+        'rsi_maximo_compra' => 'float', 'rsi_minimo_venda' => 'float',
+        'adapt_histerese_pct' => 'float',
+        'adapt_cooldown_min' => 'integer', 'adapt_persistencia_min' => 'integer',
+        'patrimonio_inicial' => 'float', 'btc_inicial' => 'float', 'brl_inicial' => 'float',
+        'base_iniciada_em' => 'datetime',
     ];
 
     private static ?self $cache = null;
@@ -38,6 +56,22 @@ class BotConfig extends Model
                 'nivel7'          => 0.03,
                 'allin_threshold' => 15,
                 'min_notional'    => 50.0,
+                // M1-M9 — mesmos defaults da migration
+                'target_btc_pct'  => 50.0,
+                'target_brl_pct'  => 50.0,
+                'limite_alerta_pct'    => 70.0,
+                'limite_bloqueio_pct'  => 80.0,
+                'btc_minimo_tendencia_alta'  => 40.0,
+                'brl_minimo_tendencia_baixa' => 40.0,
+                'modo_subida_auto_habilitado' => true,
+                'spread_minimo_pct' => 0.90,
+                'taxa_total_pct'    => 0.15,
+                'camadas_atr_habilitado' => true,
+                'rsi_maximo_compra' => 80.0,
+                'rsi_minimo_venda'  => 20.0,
+                'adapt_histerese_pct'    => 30.0,
+                'adapt_cooldown_min'     => 240,
+                'adapt_persistencia_min' => 30,
             ]);
         }
 

@@ -48,6 +48,43 @@ class BotExecutor
     // diagnostica a causa raiz se houver recaída).
     private const MIN_NOTIONAL_FLOOR = 50.0;
 
+    // ── M5: spread mínimo do grid ──────────────────────────────────────────
+    // Largura total do grid = 2× salto. Piso para cobrir a taxa total
+    // (2× 0,075% = 0,15%) + lucro líquido mínimo por ciclo (0,75%) → 0,90%.
+    // Configurável em bot_config (spread_minimo_pct); constantes = fallback.
+    private const TAXA_TOTAL_PCT        = 0.15;
+    private const LUCRO_LIQUIDO_MIN_PCT = 0.75;
+
+    // ── M6: camadas de salto por ATR (vol diária 30d/14d) ──────────────────
+    // O regime define a FAIXA do grid; o modulador de Bollinger width continua
+    // ajustando fino DENTRO da faixa. Com ATR ~7000 o salto antigo escalava
+    // até 10000 (grid largo demais → poucas operações); as camadas mantêm o
+    // grid proporcional ao regime: baixa volatilidade → grid apertado (mais
+    // ciclos), alta volatilidade → grid largo (ciclos com folga).
+    // [atr_maximo_da_camada, salto_min_da_faixa, salto_max_da_faixa]
+    private const CAMADAS_ATR = [
+        [4000.0, 3000, 4000],
+        [8000.0, 4000, 6000],
+        [PHP_FLOAT_MAX, 6000, 8000],
+    ];
+
+    // ── M7: extremos de Bollinger/F&G (redução) — RSI é configurável ───────
+    private const BOLL_PCT_B_MAX_COMPRA = 0.95; // banda superior colada → reduzir compras
+    private const BOLL_PCT_B_MIN_VENDA  = 0.05; // banda inferior colada → reduzir vendas
+    private const FNG_EUFORIA           = 90;   // >90 → favorecer realização
+    private const FNG_PANICO            = 10;   // <10 → favorecer acumulação
+
+    // ── M4: modo subida automático — histerese de ativação/desativação ─────
+    private const SUBIDA_AUTO_RSI_ENTRA = 65.0;
+    private const SUBIDA_AUTO_RSI_SAI   = 55.0;
+    private const SUBIDA_AUTO_FNG       = 60;
+
+    // ── M9: adaptação do grid ao regime (reposiciona pernas mantendo centro) ──
+    private const ADAPT_HISTERESE_PCT    = 30.0; // divergência mínima p/ considerar
+    private const ADAPT_COOLDOWN_MIN     = 240;  // espera mínima desde a criação do par
+    private const ADAPT_PERSISTENCIA_MIN = 30;   // divergência precisa durar (min)
+    private const CACHE_ADAPT_DESDE      = 'bot.adapt.divergente_desde';
+
     public function __construct(BinanceController $binance)
     {
         $this->binance = $binance;
@@ -66,7 +103,7 @@ class BotExecutor
      * Fluxo isolado do state machine — não toca em direção/contadores, então não
      * dispara o guard de "par incompleto" nem contadores fantasmas.
      */
-    private function executarModoSubida(BotState $state, array $open, float $precoAtual): string
+    private function executarModoSubida(BotState $state, array $open, float $precoAtual, ?array $tendencia = null): string
     {
         // 1. Cancela qualquer ordem de VENDA aberta (no modo só compramos).
         $cancelou = false;
@@ -92,7 +129,7 @@ class BotExecutor
         if ($comprasAbertas === 0) {
             $state->order_id_compra = null;
             $state->order_id_venda  = null;
-            $ok = $this->criarOrdensNovas($state, $precoAtual, true);
+            $ok = $this->criarOrdensNovas($state, $precoAtual, true, $tendencia);
             if ($ok) {
                 Log::info("BotExecutor: modo subida — compra criada em {$precoAtual} (venda inibida).");
                 return "Modo subida ativo: compra criada, venda inibida.";
@@ -153,12 +190,37 @@ class BotExecutor
         }
 
         // ============================================================
+        // M4/M8/M9 — ANÁLISE ÚNICA DO CICLO: calculada uma vez e reusada
+        // pelo modo subida automático, pelo log detalhado, pela adaptação
+        // do grid e pelas criações de ordem deste ciclo (sem re-buscar
+        // klines no mesmo minuto). Sem $registrarLog aqui — a linha
+        // unificada do ciclo sai no logCicloDetalhado().
+        // ============================================================
+        $config    = BotConfig::atual();
+        $tendencia = $this->analisarTendencia($precoAtual, false);
+        $this->avaliarModoSubidaAutomatico($state, $tendencia, $config);
+
+        // M8 — base de performance: fotografa na primeira execução pós-deploy
+        // (state novo fotografa na inicialização; state que já existia, aqui).
+        $this->fotografarBasePerformance($config, $precoAtual);
+
+        // M9 — par criado antes desta feature: fotografia a idade agora para
+        // o cooldown da adaptação começar a valer daqui (não reposiciona um
+        // par legítimo de horas atrás logo no primeiro ciclo pós-deploy).
+        if ($state->par_criado_em === null) {
+            $state->par_criado_em = now();
+            $state->save();
+        }
+
+        $this->logCicloDetalhado($userId, $state, $precoAtual, $tendencia, $config);
+
+        // ============================================================
         // MODO "PREPARAR SUBIDA" (gatilho manual do admin) — fluxo próprio:
         // cancela ordens de venda, mantém/cria só compra, sem tocar no state
         // machine (contadores congelam). Volta ao normal quando desligado.
         // ============================================================
         if ($state->modo_subida) {
-            return $this->executarModoSubida($state, $open, $precoAtual);
+            return $this->executarModoSubida($state, $open, $precoAtual, $tendencia);
         }
 
         // ============================================================
@@ -209,7 +271,7 @@ class BotExecutor
             if (!$cancelledAny && !empty($state->order_id_compra) && !empty($state->order_id_venda)) {
                 Log::warning("BotExecutor [{$userId}]: 0 ordens sem cancelamento prévio — possível whipsaw (ambas as pernas executaram entre ciclos). Direção não registrada.");
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
                 return "Erro ao criar par (saldo ou API). Verifique os logs.";
             }
             Log::info("BotExecutor [{$userId}]: 0 ordens abertas. Par recriado em {$precoAtual}.");
@@ -217,10 +279,14 @@ class BotExecutor
         }
 
         // ============================================================
-        // 2 OU MAIS ORDENS → nada a fazer
+        // 2 OU MAIS ORDENS → M9: adaptação do grid ao regime
         // ============================================================
+        // Antes: "nada a fazer" até uma perna executar. Agora: com o par
+        // completo, avalia reposicionar as pernas para o salto que o ATR
+        // atual pede (mantendo o centro), com todas as travas anti-churn.
+        // Sem divergência suficiente, o comportamento é o mesmo de antes.
         if ($qtd >= 2) {
-            return "Duas ou mais ordens ativas. Nada a fazer.";
+            return $this->adaptarGridARegime($userId, $state, $open, $precoAtual, $tendencia, $config);
         }
 
         // ============================================================
@@ -235,7 +301,7 @@ class BotExecutor
                 Log::warning("BotExecutor [{$userId}]: timeout ao cancelar ordens (range). Abortando.");
                 return "Timeout ao cancelar ordens fora do range.";
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
                 return "Erro ao recriar par após cancelamento de range.";
             }
             Log::info("BotExecutor [{$userId}]: ordem fora do range removida. Par recriado em {$precoAtual}.");
@@ -288,7 +354,7 @@ class BotExecutor
                 Log::warning("BotExecutor [{$userId}]: timeout ao cancelar par incompleto. Abortando.");
                 return "Timeout ao cancelar par incompleto.";
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
                 return "Erro ao recriar par incompleto.";
             }
             Log::info("BotExecutor [{$userId}]: par incompleto (só perna {$side}) detectado. Par recriado em {$precoAtual} sem registrar direção.");
@@ -329,7 +395,7 @@ class BotExecutor
             return "Timeout ao cancelar ordem restante. Direção já registrada.";
         }
 
-        if (!$this->criarOrdensNovas($state, $precoExecucao)) {
+        if (!$this->criarOrdensNovas($state, $precoExecucao, false, $tendencia)) {
             return "Direção registrada mas erro ao criar novo par. Verifique os logs.";
         }
 
@@ -610,6 +676,11 @@ class BotExecutor
         $tendenciaInit = $this->analisarTendencia($precoAtual);
         $saltoInit     = $tendenciaInit['salto_dinamico'];
 
+        // M8 — base de performance (helper único, critério free+locked igual
+        // ao snapshot diário do cron; executar() também chama p/ o state que
+        // já existia quando a coluna chegou — em produção é este o caminho).
+        $this->fotografarBasePerformance(BotConfig::atual(), $precoAtual);
+
         $state = new BotState();
         $state->id_user           = $userId;
         $state->preco_referencia  = $precoAtual;
@@ -641,6 +712,7 @@ class BotExecutor
         // perna ainda existe (essencial para o guard de "par incompleto").
         $state->order_id_compra = null;
         $state->order_id_venda  = null;
+        $state->par_criado_em   = now(); // M9 — idade do par p/ cooldown da adaptação
 
         if ($valorCompra >= $this->minNotionalEfetivo($config)) {
             $orderCompra            = $this->binance->buyLimit($precoCompra, $valorCompra / $precoCompra);
@@ -785,9 +857,29 @@ class BotExecutor
         //   expansão (bandas largas, ~0.06+)   → aumenta → espera mais em mercado elétrico
         $base     = $atrSalto * self::ATR_MULT;
         $widthMod = max(0.65, min(1.5, 0.65 + ($bollData['width'] / 0.04) * 0.35));
-        $saltoDin = $atrSalto > 0
-            ? (int) round(max(self::SALTO_MIN, min(self::SALTO_MAX, $base * $widthMod)) / 500) * 500
-            : 2500;
+
+        // ── M6: camadas por ATR — o regime define a FAIXA, o widthMod ajusta ──
+        // fino dentro dela. Sem camadas (desligado no config), comporta como
+        // antes: clamp global [SALTO_MIN, SALTO_MAX].
+        $cfgCamadas = BotConfig::atual();
+        [$camadaMin, $camadaMax] = $this->camadaSaltoPorAtr($atrSalto, $cfgCamadas);
+        if ($atrSalto > 0) {
+            $bruto = $base * $widthMod;
+            $saltoDin = $cfgCamadas->camadas_atr_habilitado
+                ? (int) round(max($camadaMin, min($camadaMax, $bruto)) / 500) * 500
+                : (int) round(max(self::SALTO_MIN, min(self::SALTO_MAX, $bruto)) / 500) * 500;
+        } else {
+            $saltoDin = 2500;
+        }
+
+        // ── M5: piso de spread — a largura do grid (2× salto) precisa cobrir ──
+        // a taxa total + lucro líquido mínimo. Sem isso o bot monta ciclos que
+        // executam e ainda assim devolvem o ganho em taxa. Aplicado POR ÚLTIMO:
+        // lucro mínimo é inegociável (passa por cima até do teto da camada).
+        $saltoMinimoSpread = $this->saltoMinimoPorSpread($precoAtual, $cfgCamadas);
+        if ($saltoMinimoSpread > $saltoDin) {
+            $saltoDin = (int) ceil($saltoMinimoSpread / 500) * 500;
+        }
 
         // ── Tendência 4h: calcula os valores (os boosts entram no acúmulo abaixo) ──
         $trend4h = 0;
@@ -867,10 +959,11 @@ class BotExecutor
         // Log só quando o bot executa de verdade; o dashboard chama com $registrarLog=false
         if ($registrarLog) {
             Log::info(sprintf(
-                "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR4h=%.0f salto=%d ATRdL=%.0f ATRdC=%.0f wMod=%.2f dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f F&G=%d",
+                "BotExecutor: MA21=%.0f EMA9=%.0f RSI=%.1f ATR4h=%.0f salto=%d ATRdL=%.0f ATRdC=%.0f wMod=%.2f dist=%.2f%% MACD=%.0f sig=%.0f Boll%%B=%.2f W=%.3f trend4h=%+d RSI4h=%.1f MA21_4h=%.0f fC=%.2f fV=%.2f F&G=%d camada=%d-%d spread=%.2f%%",
                 $ma21, $ema9, $rsi, $atr, $saltoDin, $atrLongaDia, $atrCurtaDia, $widthMod, $distancia * 100,
                 $macdData['macd'], $macdData['signal'], $bollData['pct_b'], $bollData['width'],
-                $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda, $fngVal
+                $trend4h, $rsi4h, $ma21_4h, $fatorCompra, $fatorVenda, $fngVal,
+                $camadaMin, $camadaMax, ($saltoDin * 2 / max(1, $precoAtual)) * 100
             ));
         }
 
@@ -883,6 +976,10 @@ class BotExecutor
             'atr_curta'      => round($atrCurtaDia, 2),
             'atr_salto'      => round($atrSalto, 2),
             'salto_dinamico' => $saltoDin,
+            // M5/M6 — faixa da camada vigente e spread efetivo do grid
+            'camada_salto'      => [$camadaMin, $camadaMax],
+            'spread_pct'        => round(($saltoDin * 2 / max(1, $precoAtual)) * 100, 3),
+            'salto_minimo_spread' => (int) ceil($saltoMinimoSpread / 500) * 500,
             'macd'           => $macdData['macd'],
             'macd_signal'    => $macdData['signal'],
             'macd_hist'      => $macdData['histogram'],
@@ -901,6 +998,447 @@ class BotExecutor
             'tendencia'      => $tendencia,
             'fear_greed'     => $fngVal,
         ];
+    }
+
+    // ============================================================
+    // M2/M3 — TENDÊNCIA FORTE (todos os indicadores alinhados)
+    // ============================================================
+    // "Forte" exige o CONJUNTO completo — meia-tendência não conta. Usado
+    // pelo controle de alocação (pisos) e pelo painel.
+
+    /** M2 — bull protection: EMA9>MA21, RSI4h>60, preço>MA21_4h, MACD>signal, trend4h+. */
+    public function mercadoForteAltista(array $t): bool
+    {
+        return $t['ema9'] > $t['ma21']
+            && $t['rsi_4h'] > 60
+            && $t['preco'] > $t['ma21_4h']
+            && $t['macd'] > $t['macd_signal']
+            && $t['trend_4h'] === 1;
+    }
+
+    /** M3 — bear protection: espelho do mercadoForteAltista. */
+    public function mercadoForteBaixista(array $t): bool
+    {
+        return $t['ema9'] < $t['ma21']
+            && $t['rsi_4h'] < 40
+            && $t['preco'] < $t['ma21_4h']
+            && $t['macd'] < $t['macd_signal']
+            && $t['trend_4h'] === -1;
+    }
+
+    // ============================================================
+    // M1/M2/M3 — CONTROLE PATRIMONIAL BTC/BRL
+    // ============================================================
+    // valorBTC = saldoBTC × preço; patrimônio = valorBTC + saldoBRL;
+    // percentuais contra os targets (50/50 default). Zonas de desvio:
+    //   > alerta (70%)  → reduz o lado majoritário e amplia o contrário;
+    //   > bloqueio (80%) → bloqueia ordens NORMAIS do lado majoritário
+    //                      (all-in de exaustão é a ordem excepcional e passa).
+    // Em tendência FORTE, os pisos btc/brl_minimo_tendencia (40%) travam o
+    // lado que interessa com bloqueio TOTAL (nem all-in passa — piso é piso):
+    // alta forte não deixa o %BTC cair do piso; baixa forte, o %BRL.
+    // Precedência: zonas de alerta/bloqueio do M1 não são desfazíveis pelas
+    // modulações do M2/M3 — vender em força extrema (BTC alto) é realizar no
+    // melhor momento; o piso do M2 protege o lado de BAIXO, não o de cima.
+    public function calcularAlocacao(float $saldoBRL, float $saldoBTC, float $precoAtual, BotConfig $config, array $tendencia): array
+    {
+        $valorBTC   = $saldoBTC * $precoAtual;
+        $patrimonio = $valorBTC + $saldoBRL;
+        $pctBTC     = $patrimonio > 0 ? ($valorBTC / $patrimonio) * 100 : 50.0;
+        $pctBRL     = 100.0 - $pctBTC;
+
+        $fatorCompra = 1.0;
+        $fatorVenda  = 1.0;
+        $bloquearCompraNormal = false;
+        $bloquearVendaNormal  = false;
+        $bloquearCompraTotal  = false;
+        $bloquearVendaTotal   = false;
+        $motivos = [];
+        $zona = 'equilibrado';
+        $forte = null;
+
+        if ($this->mercadoForteAltista($tendencia)) {
+            $forte = 'alta';
+        } elseif ($this->mercadoForteBaixista($tendencia)) {
+            $forte = 'baixa';
+        }
+
+        if ($patrimonio > 0) {
+            $alerta   = (float) $config->limite_alerta_pct;
+            $bloqueio = (float) $config->limite_bloqueio_pct;
+
+            // ── M1: desvios contra o target ─────────────────────────────
+            if ($pctBTC > $bloqueio) {
+                $zona = 'bloqueio_btc_alto';
+                $fatorCompra = 0.0;
+                $fatorVenda  = 1.5;
+                $bloquearCompraNormal = true;
+                $motivos[] = sprintf('BTC %.1f%% > limite %.0f%%: compra normal bloqueada, venda ampliada', $pctBTC, $bloqueio);
+            } elseif ($pctBTC > $alerta) {
+                $zona = 'alerta_btc_alto';
+                $fatorCompra = 0.5;
+                $fatorVenda  = 1.5;
+                $motivos[] = sprintf('BTC %.1f%% > alerta %.0f%%: compra reduzida, venda ampliada', $pctBTC, $alerta);
+            } elseif ($pctBRL > $bloqueio) {
+                $zona = 'bloqueio_brl_alto';
+                $fatorVenda  = 0.0;
+                $fatorCompra = 1.5;
+                $bloquearVendaNormal = true;
+                $motivos[] = sprintf('BRL %.1f%% > limite %.0f%%: venda normal bloqueada, compra ampliada', $pctBRL, $bloqueio);
+            } elseif ($pctBRL > $alerta) {
+                $zona = 'alerta_brl_alto';
+                $fatorVenda  = 0.5;
+                $fatorCompra = 1.5;
+                $motivos[] = sprintf('BRL %.1f%% > alerta %.0f%%: venda reduzida, compra ampliada', $pctBRL, $alerta);
+            }
+
+            // ── M2/M3: tendência forte protege o lado vencedor ──────────
+            $btcAlto = in_array($zona, ['alerta_btc_alto', 'bloqueio_btc_alto'], true);
+            $brlAlto = in_array($zona, ['alerta_brl_alto', 'bloqueio_brl_alto'], true);
+
+            if ($forte === 'alta') {
+                $pisoBTC = (float) $config->btc_minimo_tendencia_alta;
+                if (!$btcAlto) {
+                    $fatorVenda = min($fatorVenda, 0.5); // reduzir vendas agressivamente
+                    $motivos[]  = 'alta forte: vendas reduzidas';
+                    if (!$bloquearCompraNormal) {
+                        $fatorCompra = max($fatorCompra, 1.2);
+                    }
+                }
+                if ($pctBTC <= $pisoBTC) {
+                    $bloquearVendaTotal = true;
+                    $fatorVenda = 0.0;
+                    $motivos[]  = sprintf('alta forte com BTC %.1f%% ≤ piso %.0f%%: venda bloqueada (acumular)', $pctBTC, $pisoBTC);
+                }
+            } elseif ($forte === 'baixa') {
+                $pisoBRL = (float) $config->brl_minimo_tendencia_baixa;
+                if (!$brlAlto) {
+                    $fatorCompra = min($fatorCompra, 0.5);
+                    $motivos[]   = 'baixa forte: compras reduzidas';
+                    if (!$bloquearVendaNormal) {
+                        $fatorVenda = max($fatorVenda, 1.2);
+                    }
+                }
+                if ($pctBRL <= $pisoBRL) {
+                    $bloquearCompraTotal = true;
+                    $fatorCompra = 0.0;
+                    $motivos[]   = sprintf('baixa forte com BRL %.1f%% ≤ piso %.0f%%: compra bloqueada (segurar caixa)', $pctBRL, $pisoBRL);
+                }
+            }
+        }
+
+        return [
+            'pct_btc'     => round($pctBTC, 2),
+            'pct_brl'     => round($pctBRL, 2),
+            'valor_btc'   => round($valorBTC, 2),
+            'patrimonio'  => round($patrimonio, 2),
+            'target_btc'  => (float) $config->target_btc_pct,
+            'desvio_btc'  => round($pctBTC - (float) $config->target_btc_pct, 2),
+            'fator_compra' => round($fatorCompra, 3),
+            'fator_venda'  => round($fatorVenda, 3),
+            'bloquear_compra_normal' => $bloquearCompraNormal,
+            'bloquear_venda_normal'  => $bloquearVendaNormal,
+            'bloquear_compra_total'  => $bloquearCompraTotal,
+            'bloquear_venda_total'   => $bloquearVendaTotal,
+            'zona'    => $zona,
+            'forte'   => $forte,
+            'motivos' => $motivos,
+        ];
+    }
+
+    // ============================================================
+    // M4 — MODO "PREPARAR SUBIDA" AUTOMÁTICO
+    // ============================================================
+    // Ativa com o conjunto COMPLETO de força: EMA9>MA21, RSI4h>65, MACD>signal,
+    // trend4h+ e F&G>60. Desativa com qualquer fraqueza: EMA9<MA21, RSI4h<55,
+    // MACD cruzando pra baixo ou trend4h fora de alta. Histerese proposital
+    // (ativa em 65 / desativa em 55) pra não liga/desliga em ruído.
+    // Convive com o gatilho MANUAL: o manual (state->modo_subida) tem
+    // precedência e fluxo próprio (inibe vendas por completo). O automático
+    // apenas modula a criação de ordens (venda ×0,3 · compra ×1,3).
+    private function avaliarModoSubidaAutomatico(BotState $state, array $t, BotConfig $config): void
+    {
+        if (!$config->modo_subida_auto_habilitado) {
+            if ($state->modo_subida_auto) {
+                $state->modo_subida_auto = false;
+                $state->save();
+                Log::info('BotExecutor: MODO SUBIDA AUTO desativado (desabilitado no config).');
+            }
+            return;
+        }
+
+        $fng = (int) ($t['fear_greed'] ?? 50);
+
+        if (!$state->modo_subida_auto) {
+            $ativa = $t['ema9'] > $t['ma21']
+                && $t['rsi_4h'] > self::SUBIDA_AUTO_RSI_ENTRA
+                && $t['macd'] > $t['macd_signal']
+                && $t['trend_4h'] === 1
+                && $fng > self::SUBIDA_AUTO_FNG;
+
+            if ($ativa) {
+                $state->modo_subida_auto = true;
+                $state->save();
+                Log::info(sprintf(
+                    'BotExecutor: MODO SUBIDA AUTO ATIVADO — EMA9>MA21, RSI4h=%.1f, MACD>signal, trend4h=+, F&G=%d.',
+                    $t['rsi_4h'], $fng
+                ));
+            }
+            return;
+        }
+
+        $desativa = $t['ema9'] < $t['ma21']
+            || $t['rsi_4h'] < self::SUBIDA_AUTO_RSI_SAI
+            || $t['macd'] < $t['macd_signal']
+            || $t['trend_4h'] !== 1;
+
+        if ($desativa) {
+            $state->modo_subida_auto = false;
+            $state->save();
+            Log::info(sprintf(
+                'BotExecutor: MODO SUBIDA AUTO DESATIVADO — RSI4h=%.1f, trend4h=%+d, F&G=%d.',
+                $t['rsi_4h'], $t['trend_4h'], $fng
+            ));
+        }
+    }
+
+    // ============================================================
+    // M8 — LOG DETALHADO DO CICLO (uma linha por execução)
+    // ============================================================
+    // Preço, saldos, valor em BTC, patrimônio, alocação vs targets, desvios,
+    // ATR, salto, RSI/RSI4h, MACD, F&G, modos de subida e direção. Falha ao
+    // buscar saldos NÃO aborta o ciclo (só a linha fica sem a parte de saldo).
+    private function logCicloDetalhado(string $userId, BotState $state, float $preco, array $t, BotConfig $config): void
+    {
+        $brl = null;
+        $btc = null;
+
+        try {
+            $saldos = $this->binance->getSaldos();
+            if (isset($saldos['balances'])) {
+                $b   = collect($saldos['balances']);
+                $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+                $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
+            }
+        } catch (\Throwable $e) {
+            Log::warning("BotExecutor [{$userId}]: log de ciclo sem saldos — " . $e->getMessage());
+        }
+
+        if ($brl === null || $btc === null) {
+            Log::info(sprintf(
+                'CICLO [%s]: preco=%.0f (saldos indisponíveis) ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaManual=%d subidaAuto=%d dir=%s',
+                $userId, $preco, $t['atr_salto'], $t['salto_dinamico'], $t['rsi'], $t['rsi_4h'],
+                $t['macd_hist'], $t['fear_greed'], $state->modo_subida ? 1 : 0,
+                $state->modo_subida_auto ? 1 : 0, $state->direcao_atual ?? '—'
+            ));
+            return;
+        }
+
+        $aloc = $this->calcularAlocacao($brl, $btc, $preco, $config, $t);
+
+        Log::info(sprintf(
+            'CICLO [%s]: preco=%.0f BRL=%.2f BTC=%.8f valBTC=%.2f patr=%.2f %%BTC=%.1f/%.0f(desvio %+.1f) %%BRL=%.1f ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaManual=%d subidaAuto=%d dir=%s zona=%s%s',
+            $userId, $preco, $brl, $btc, $btc * $preco, $aloc['patrimonio'],
+            $aloc['pct_btc'], $aloc['target_btc'], $aloc['desvio_btc'], $aloc['pct_brl'],
+            $t['atr_salto'], $t['salto_dinamico'], $t['rsi'], $t['rsi_4h'], $t['macd_hist'],
+            $t['fear_greed'], $state->modo_subida ? 1 : 0, $state->modo_subida_auto ? 1 : 0,
+            $state->direcao_atual ?? '—', $aloc['zona'],
+            $aloc['motivos'] ? ' · ' . implode(' · ', $aloc['motivos']) : ''
+        ));
+    }
+
+    // ============================================================
+    // M8 — FOTOGRAFIA DA BASE DE PERFORMANCE (uma vez, persistida)
+    // ============================================================
+    // Ponto de partida do painel de performance. Saldos free+locked (mesmo
+    // critério do snapshot diário do cron e do log do ciclo). Falha da
+    // Binance aqui NUNCA aborta o ciclo — tenta de novo no próximo (a base
+    // segue null até conseguir).
+    private function fotografarBasePerformance(BotConfig $config, float $precoAtual): void
+    {
+        if ($config->base_iniciada_em !== null && $config->patrimonio_inicial !== null) {
+            return;
+        }
+
+        try {
+            $saldos = $this->binance->getSaldos();
+            if (!isset($saldos['balances'])) {
+                return;
+            }
+            $b   = collect($saldos['balances']);
+            $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+            $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
+
+            $config->patrimonio_inicial = round($brl + $btc * $precoAtual, 2);
+            $config->btc_inicial        = $btc;
+            $config->brl_inicial        = round($brl, 2);
+            $config->base_iniciada_em   = now();
+            $config->save();
+
+            Log::info(sprintf(
+                'BotExecutor: base de performance fotografada — patr=%.2f BTC=%.8f BRL=%.2f.',
+                $config->patrimonio_inicial, $btc, $brl
+            ));
+        } catch (\Throwable $e) {
+            Log::warning('BotExecutor: falha ao fotografar base de performance (tenta de novo no próximo ciclo) — ' . $e->getMessage());
+        }
+    }
+
+    // ============================================================
+    // M6/M5 — ajudantes do salto (camada por ATR · piso por spread)
+    // ============================================================
+
+    /** Faixa [min, max] do salto conforme a camada do ATR diário (mistura 30d/14d). */
+    private function camadaSaltoPorAtr(float $atr): array
+    {
+        foreach (self::CAMADAS_ATR as [$atrAte, $min, $max]) {
+            if ($atr <= $atrAte) {
+                return [$min, $max];
+            }
+        }
+        return [self::SALTO_MIN, self::SALTO_MAX];
+    }
+
+    /** Salto mínimo para a largura do grid (2× salto) cobrir taxa + lucro líquido mínimo. */
+    private function saltoMinimoPorSpread(float $precoAtual, ?BotConfig $config = null): float
+    {
+        $cfg = $config ?? BotConfig::atual();
+        $spreadPct = (float) $cfg->spread_minimo_pct;
+        if ($spreadPct <= 0) {
+            // Sem spread explícito: taxa total configurada (M5) + lucro líquido mínimo.
+            $taxa      = (float) $cfg->taxa_total_pct;
+            $spreadPct = ($taxa > 0 ? $taxa : self::TAXA_TOTAL_PCT) + self::LUCRO_LIQUIDO_MIN_PCT;
+        }
+        return $precoAtual * ($spreadPct / 100.0) / 2.0;
+    }
+
+    // ============================================================
+    // M9 — ADAPTAÇÃO DO GRID AO REGIME (reposicionamento por ATR)
+    // ============================================================
+    // O salto só era aplicado na CRIAÇÃO do par; um par podia viver dias com
+    // grid desproporcional ao regime (apertado pós-explosão de vol → ciclos
+    // com lucro líquido insuficiente; largo pós-calmaria → ordens nunca
+    // alcançadas = "poucas operações"). Aqui, com o par completo, o grid é
+    // reposicionado MANTENDO O CENTRO, aproximando/afastando as pernas para
+    // o salto que o ATR atual pede. Nunca se move uma perna sozinha (quebra
+    // a reconstrução do fill price precoRestante ∓ 2×salto).
+    //
+    // Travas anti-churn: (1) histerese de divergência; (2) persistência da
+    // divergência (cache); (3) cooldown desde a criação do par; (4) preço
+    // nunca além da perna velha (dist ≥ salto do par = execução iminente →
+    // deixa executar) e clamp do anel garantindo que a BUY nova nasce abaixo
+    // do mercado e a SELL acima (LIMIT válido).
+    // Reposição NÃO registra direção — contadores intactos (mesmo caminho do
+    // "cancelado por range → recria par sem registrar direção").
+    private function adaptarGridARegime(string $userId, BotState $state, array $open, float $precoAtual, array $tendencia, BotConfig $config): string
+    {
+        $nada = 'Duas ou mais ordens ativas. Nada a fazer.';
+
+        // Pré-condição: par completo exato (1 BUY + 1 SELL). Perna única é
+        // território do state machine — nunca mexe.
+        $buy = null;
+        $sell = null;
+        foreach ($open as $o) {
+            if (($o['side'] ?? '') === 'BUY') $buy = $o;
+            elseif (($o['side'] ?? '') === 'SELL') $sell = $o;
+        }
+        if ($buy === null || $sell === null || count($open) !== 2) {
+            return $nada;
+        }
+
+        $saltoPar   = (float) $state->salto;
+        $saltoIdeal = (int) $tendencia['salto_dinamico'];
+        if ($saltoPar <= 0 || $saltoIdeal <= 0) {
+            return $nada;
+        }
+
+        // Âncora = CENTRO DO PAR (preço de criação — as pernas são simétricas),
+        // NUNCA o preço atual: recentralizar no valor atual faria o grid
+        // "perseguir" o preço a cada adaptação e nenhuma ordem executaria.
+        // Ex.: par 400k/420k centrado em 410k com ATR novo de 3k → 407k/413k,
+        // mesmo que o BTC esteja lá em 419k.
+        $centro = ((float) $buy['price'] + (float) $sell['price']) / 2.0;
+        $dist   = abs($precoAtual - $centro);
+
+        // Preço colado/alem da perna VELHA (dist ≥ salto do par): execução
+        // iminente ou range rompido — não mexe (zombie guard resolve o resto).
+        if ($dist >= $saltoPar) {
+            Cache::forget(self::CACHE_ADAPT_DESDE);
+            return $nada;
+        }
+
+        // Salto final da reposição, ancoraado no centro:
+        //  · preço DENTRO da banda nova → salto ideal puro;
+        //  · preço no ANEL entre a banda nova e a velha → "ordem limite":
+        //    clampa no maior salto que ainda cerca o preço com o centro
+        //    intacto (perna próxima fica ≥ 25% do salto novo além do preço).
+        //    Sem isso, ao aproximar as pernas uma delas nasceria do lado
+        //    errado do mercado (LIMIT que executa na hora como taker).
+        if ($dist <= $saltoIdeal) {
+            $saltoNovo = $saltoIdeal;
+        } else {
+            $margem    = max(500, (int) (0.25 * $saltoIdeal));
+            $saltoNovo = min(
+                (int) $saltoPar,
+                (int) ceil(($dist + $margem) / 500) * 500
+            );
+        }
+
+        if ($saltoNovo <= 0 || $saltoNovo === (int) $saltoPar) {
+            return $nada;
+        }
+
+        // (1) Histerese: divergência mínima (default 30%) — medida contra o
+        // salto que SERIA APLICADO. No anel ele sai clamped; se o clamp deixar
+        // o grid quase igual ao atual, não há ganho real e não se mexe.
+        $divergenciaPct = abs($saltoNovo - $saltoPar) / $saltoPar * 100.0;
+        $histerese = (float) $config->adapt_histerese_pct ?: self::ADAPT_HISTERESE_PCT;
+        if ($divergenciaPct < $histerese) {
+            Cache::forget(self::CACHE_ADAPT_DESDE); // voltou à tolerância — zera a persistência
+            return $nada;
+        }
+
+        // (2) Persistência: a divergência precisa durar (evita reposicionar por spike).
+        $desde = Cache::get(self::CACHE_ADAPT_DESDE);
+        if (!$desde) {
+            Cache::put(self::CACHE_ADAPT_DESDE, now()->timestamp, now()->addHours(6));
+            return sprintf('Grid divergente do regime (%.1f%%) — cronometrando persistência.', $divergenciaPct);
+        }
+        $persistenciaMin = (int) ($config->adapt_persistencia_min ?: self::ADAPT_PERSISTENCIA_MIN);
+        $restamPersist = ($persistenciaMin * 60) - (now()->timestamp - (int) $desde);
+        if ($restamPersist > 0) {
+            return sprintf('Grid divergente do regime (%.1f%%) — persistência em %d min.', $divergenciaPct, (int) ceil($restamPersist / 60));
+        }
+
+        // (3) Cooldown desde a criação do par atual.
+        $cooldownMin = (int) ($config->adapt_cooldown_min ?: self::ADAPT_COOLDOWN_MIN);
+        if ($state->par_criado_em) {
+            $idadeMin = (int) Carbon::parse($state->par_criado_em)->diffInMinutes(now());
+            if ($idadeMin < $cooldownMin) {
+                return sprintf('Grid divergente do regime (%.1f%%) — cooldown em %d min.', $divergenciaPct, $cooldownMin - $idadeMin);
+            }
+        }
+
+        // Reposiciona: cancela o par e recria centrado no MESMO centro com o
+        // salto NOVO (forçado — não o da análise, que pode divergir do clamp),
+        // sem registrar direção (contadores intactos). O clamp do anel acima
+        // já garantiu BUY < mercado < SELL no par novo (LIMIT válido).
+        if (!$this->limparTodasOrdensEAguardar(self::SYMBOL)) {
+            Log::warning("BotExecutor [{$userId}]: adaptação do grid — timeout ao cancelar par. Par mantido.");
+            return 'Adaptação do grid: timeout no cancelamento. Par mantido.';
+        }
+        Cache::forget(self::CACHE_ADAPT_DESDE);
+
+        if (!$this->criarOrdensNovas($state, $centro, false, $tendencia, $saltoNovo)) {
+            return 'Adaptação do grid: falha ao recriar par (próximo ciclo recria no fluxo normal).';
+        }
+
+        $clamp = $dist > $saltoIdeal ? ' (clamp do anel)' : '';
+        Log::info(sprintf(
+            'BotExecutor [%s]: GRID ADAPTADO AO REGIME — salto %d→%d%s (divergência %.1f%%, ATR=%.0f), centro=%.0f mantido.',
+            $userId, (int) $saltoPar, $saltoNovo, $clamp, $divergenciaPct, $tendencia['atr_salto'], $centro
+        ));
+        return sprintf('Grid adaptado ao regime: salto %d → %d%s (centro mantido).', (int) $saltoPar, $saltoNovo, $clamp);
     }
 
     private function calcularEMA(array $closes, int $periodo): float
@@ -1011,15 +1549,28 @@ class BotExecutor
     // CRIAÇÃO DE NOVAS ORDENS
     // ============================================================
 
-    private function criarOrdensNovas(BotState $state, float $precoAtual, bool $soCompra = false): bool
+    private function criarOrdensNovas(BotState $state, float $precoAtual, bool $soCompra = false, ?array $tendencia = null, ?int $saltoForcado = null): bool
     {
-        $config    = BotConfig::atual();
-        $tendencia = $this->analisarTendencia($precoAtual);
+        $config = BotConfig::atual();
+        // Reusa a análise do ciclo quando disponível (executar() já calculou —
+        // evita re-buscar klines no mesmo minuto); só calcula quando chamado
+        // isolado (ex.: inicialização).
+        $tendencia = $tendencia ?? $this->analisarTendencia($precoAtual);
 
         // Salto sempre baseado nas métricas (ATR + Bollinger width). Não há mais salto fixo.
-        $salto = $tendencia['salto_dinamico'];
+        // $saltoForcado (M9): a adaptação do grid passa o salto clamped pelo
+        // anel — o da análise pode não cercar o preço com o centro mantido.
+        // M5 (defesa): o piso de spread é inegociável — vale mesmo para o
+        // salto forçado e para análise de outro centro de preço.
+        $salto = max(
+            $saltoForcado ?? (int) $tendencia['salto_dinamico'],
+            (int) ceil($this->saltoMinimoPorSpread($precoAtual, $config) / 500) * 500
+        );
         Log::info("BotExecutor: salto = {$salto} | ATR={$tendencia['atr']} BollW=" . round($tendencia['boll_width'], 4));
         $state->salto = $salto;
+
+        // M9 — idade do par atual (base do cooldown da adaptação do grid).
+        $state->par_criado_em = now();
 
         $precoCompra = max(1.0, $precoAtual - $salto);
         $precoVenda  = $precoAtual + $salto;
@@ -1049,6 +1600,62 @@ class BotExecutor
         $fatorCompra = $tendencia['fator_compra'];
         $fatorVenda  = $tendencia['fator_venda'];
 
+        // ── M1/M2/M3: controle patrimonial BTC/BRL ────────────────────
+        // Fatores de alocação multiplicam os de tendência; bloqueios normais
+        // seguram ordens comuns (all-in de exaustão é a excepcional e passa),
+        // bloqueios TOTAIS (pisos de tendência forte) seguram tudo.
+        // Modo subida MANUAL (soCompra) é decisão explícita do admin — fica
+        // fora do controle de alocação.
+        $alocacao = $soCompra
+            ? null
+            : $this->calcularAlocacao($saldoBRL, $saldoBTC, $precoAtual, $config, $tendencia);
+
+        if ($alocacao !== null) {
+            $fatorCompra *= $alocacao['fator_compra'];
+            $fatorVenda  *= $alocacao['fator_venda'];
+
+            // ── M4: modo subida AUTOMÁTICO ativo (manual tem fluxo próprio) ──
+            if ($state->modo_subida_auto) {
+                $fatorVenda  = min($fatorVenda, 0.30);          // reduzir vendas com força
+                $fatorCompra = min(1.50, $fatorCompra * 1.30);  // priorizar recompra/acumular
+            }
+
+            // ── M7: extremos — RSI 1h bloqueia o lado; Bollinger colado ──
+            // reduz; F&G extremo favorece realização/acumulação.
+            $bloquearCompraExtremo = $tendencia['rsi'] >= (float) $config->rsi_maximo_compra;
+            $bloquearVendaExtrema  = $tendencia['rsi'] <= (float) $config->rsi_minimo_venda;
+            if ($tendencia['boll_pct_b'] >= self::BOLL_PCT_B_MAX_COMPRA) $fatorCompra *= 0.5;
+            if ($tendencia['boll_pct_b'] <= self::BOLL_PCT_B_MIN_VENDA)  $fatorVenda  *= 0.5;
+            if ($tendencia['fear_greed'] >= self::FNG_EUFORIA) $fatorVenda  = min(1.5, $fatorVenda * 1.2);
+            if ($tendencia['fear_greed'] <= self::FNG_PANICO)  $fatorCompra = min(1.5, $fatorCompra * 1.2);
+
+            // Bloqueios compostos: total (piso) > normal+extremo (all-in passa).
+            $compraBloqueada = $alocacao['bloquear_compra_total']
+                || (($alocacao['bloquear_compra_normal'] || $bloquearCompraExtremo)
+                    && !($allin && $direcao === 'down'));
+            $vendaBloqueada = $alocacao['bloquear_venda_total']
+                || (($alocacao['bloquear_venda_normal'] || $bloquearVendaExtrema)
+                    && !($allin && $direcao === 'up'));
+
+            if ($compraBloqueada || $vendaBloqueada) {
+                Log::info('BotExecutor: bloqueio de ordem — ' . implode(' · ', array_merge(
+                    $alocacao['motivos'],
+                    array_filter([
+                        $bloquearCompraExtremo && !($allin && $direcao === 'down') ? sprintf('RSI %.1f ≥ %.0f: compra bloqueada', $tendencia['rsi'], (float) $config->rsi_maximo_compra) : null,
+                        $bloquearVendaExtrema && !($allin && $direcao === 'up') ? sprintf('RSI %.1f ≤ %.0f: venda bloqueada', $tendencia['rsi'], (float) $config->rsi_minimo_venda) : null,
+                    ])
+                )) . ($state->modo_subida_auto ? ' · (subida auto ativa)' : ''));
+            }
+
+            // Com fatores podendo somar >1 (rebalanceio/subida auto), trava o
+            // tamanho no saldo disponível — nunca tenta comprar/vender além.
+            $fatorCompra = max(0.0, $fatorCompra);
+            $fatorVenda  = max(0.0, $fatorVenda);
+        } else {
+            $compraBloqueada = false;
+            $vendaBloqueada  = false;
+        }
+
         // Zera os ids antes de recriar: um id velho não pode fingir que a perna
         // ainda existe (o guard de "par incompleto" depende disso).
         $state->order_id_compra = null;
@@ -1062,12 +1669,22 @@ class BotExecutor
             // Modo "preparar subida": sempre compra nível1 (independente da direção)
             // para capturar pullbacks sem realizar lucro cedo.
             $valorCompra = $saldoBRL * $config->nivel1 * $fatorCompra;
-        } elseif ($allin && $direcao === 'down') {
+        } elseif ($allin && $direcao === 'down' && !($alocacao['bloquear_compra_total'] ?? false)) {
+            // Excepcional (exaustão de queda): passa bloqueio NORMAL — o piso
+            // de baixa forte (bloqueio total) continua valendo nem pro all-in.
             $valorCompra = $saldoBRL * self::ALLIN_CAP;
+        } elseif ($compraBloqueada) {
+            $valorCompra = 0.0;
         } elseif ($direcao === 'down') {
             $valorCompra = $saldoBRL * $this->percentualPorSalto($contadorAtual, $config) * $fatorCompra;
         } elseif ($direcao === 'up' || $direcao === null) {
             $valorCompra = $saldoBRL * $config->nivel1 * $fatorCompra;
+        }
+
+        // M1/M4: fatores somados podem passar de 1 — trava no saldo livre
+        // (margem de 0,5% contra arredondamento de qty da Binance).
+        if ($valorCompra > $saldoBRL * 0.995) {
+            $valorCompra = $saldoBRL * 0.995;
         }
 
         // Bump simétrico ao da SELL: se o tamanho parcial ficou abaixo do
@@ -1108,13 +1725,22 @@ class BotExecutor
         // All-in de venda só faz sentido no topo (longa sequência de subidas =
         // realizar lucro). O guard de 'up' é o espelho do guard de compra (down);
         // sem ele, uma sequência de 15+ quedas venderia 95% do BTC no fundo.
-        if ($allin && $direcao === 'up') {
+        if ($allin && $direcao === 'up' && !($alocacao['bloquear_venda_total'] ?? false)) {
+            // Excepcional (realizar no topo): passa bloqueio NORMAL — o piso
+            // de alta forte (bloqueio total) não deixa nem o all-in vender.
             $percentualVenda = self::ALLIN_CAP;
+        } elseif ($vendaBloqueada) {
+            $percentualVenda = 0.0;
         } elseif ($direcao === 'up') {
             $offset          = $nivelMaximo >= 3 ? 1 : 0;
             $percentualVenda = $this->percentualPorSalto($contadorAtual + $offset, $config) * $fatorVenda;
         } elseif ($direcao === 'down' || $direcao === null) {
             $percentualVenda = $this->percentualPorSalto(max(1, $contadorAtual), $config) * $fatorVenda;
+        }
+
+        // M1/M4: fatores somados podem passar de 1 — teto do all-in (95%).
+        if ($percentualVenda > self::ALLIN_CAP) {
+            $percentualVenda = self::ALLIN_CAP;
         }
 
         $criouVenda = false;

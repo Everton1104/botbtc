@@ -365,9 +365,84 @@ Route::post('/bot/config', function (Request $req) {
         $cfg->min_notional = max(10.0, min(500.0, (float) $req->input('min_notional')));
     }
 
+    // ── Otimização M1-M9 — mesmos campos/defaults da migration, com clamps ──
+    $floats = [
+        // M1 — alocação: targets e zonas de alerta/bloqueio (0-100%)
+        'target_btc_pct'            => [0.0, 100.0],
+        'target_brl_pct'            => [0.0, 100.0],
+        'limite_alerta_pct'         => [50.0, 100.0],
+        'limite_bloqueio_pct'       => [50.0, 100.0],
+        // M2/M3 — pisos por tendência forte (0-100%)
+        'btc_minimo_tendencia_alta' => [0.0, 100.0],
+        'brl_minimo_tendencia_baixa'=> [0.0, 100.0],
+        // M5 — spread mínimo do grid (0,1% a 5%) e taxa total (0 a 2%)
+        'spread_minimo_pct'         => [0.1, 5.0],
+        'taxa_total_pct'            => [0.0, 2.0],
+        // M7 — extremos de RSI 1h
+        'rsi_maximo_compra'         => [50.0, 100.0],
+        'rsi_minimo_venda'          => [0.0, 50.0],
+        // M9 — histerese da adaptação do grid
+        'adapt_histerese_pct'       => [5.0, 90.0],
+    ];
+    foreach ($floats as $campo => [$min, $max]) {
+        if ($req->has($campo)) {
+            $cfg->$campo = max($min, min($max, (float) $req->input($campo)));
+        }
+    }
+
+    $ints = [
+        'adapt_cooldown_min'     => [0, 1440],
+        'adapt_persistencia_min' => [0, 720],
+    ];
+    foreach ($ints as $campo => [$min, $max]) {
+        if ($req->has($campo)) {
+            $cfg->$campo = max($min, min($max, (int) $req->input($campo)));
+        }
+    }
+
+    foreach (['modo_subida_auto_habilitado', 'camadas_atr_habilitado'] as $campo) {
+        if ($req->has($campo)) {
+            $cfg->$campo = (bool) $req->input($campo);
+        }
+    }
+
     $cfg->save();
 
     return ['mensagem' => 'Configuração salva com sucesso!'];
+})->middleware(['auth', 'whatsapp.verified']);
+
+// M8 — painel de performance persistido: base fotografada vs. agora, série
+// diária com pico/drawdown, contagem de operações e P&L realizado. Admin only.
+Route::get('/bot/performance', function (BinanceController $binance) {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $saldos = $binance->getSaldos();
+    $preco  = $binance->getPrecoBTC();
+    if (!isset($saldos['balances']) || $preco <= 0) {
+        return response()->json(['erro' => 'Saldos ou preço indisponíveis agora.'], 503);
+    }
+
+    $b   = collect($saldos['balances']);
+    $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+    $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
+
+    return response()->json(app(\App\Services\PnlService::class)->performance($brl, $btc, $preco));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// M8 — zera a base de performance; o próximo ciclo do bot fotografia de novo
+// (útil após saque/depósito grande que distorce a variação desde a base).
+Route::post('/bot/performance/reset-base', function () {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $cfg = BotConfig::atual();
+    $cfg->patrimonio_inicial = null;
+    $cfg->btc_inicial        = null;
+    $cfg->brl_inicial        = null;
+    $cfg->base_iniciada_em   = null;
+    $cfg->save();
+
+    \Illuminate\Support\Facades\Log::info('BotConfig: base de performance resetada pelo admin — será re-fotografada no próximo ciclo.');
+    return ['mensagem' => 'Base resetada. O próximo ciclo do bot fotografia a nova base.'];
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Gatilho manual do admin: modo "preparar subida" (inibe vendas, só compra).
