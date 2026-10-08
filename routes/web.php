@@ -349,7 +349,7 @@ Route::post('/bot/config', function (Request $req) {
     // Salto não é mais configurável — sempre dinâmico (ATR). Mantém forçado em 0.
     $cfg->salto = 0;
 
-    foreach (['nivel1','nivel2','nivel3','nivel4','nivel5','nivel6','nivel7'] as $n) {
+    foreach (['nivel1','nivel2','nivel3','nivel4','nivel5','nivel6','nivel7','nivel_final'] as $n) {
         if ($req->has($n)) {
             $cfg->$n = max(0.01, min(1.0, (float) $req->input($n)));
         }
@@ -375,6 +375,10 @@ Route::post('/bot/config', function (Request $req) {
         // M2/M3 — pisos por tendência forte (0-100%)
         'btc_minimo_tendencia_alta' => [0.0, 100.0],
         'brl_minimo_tendencia_baixa'=> [0.0, 100.0],
+        // Dimensionamento de ordens — piso por ordem (% do saldo) e guard de
+        // meta do rebalanceamento (% do alvo; 0 desliga cada um)
+        'piso_ordem_pct'            => [0.0, 50.0],
+        'guard_meta_pct'            => [0.0, 100.0],
         // M5 — spread mínimo do grid (0,1% a 5%) e taxa total (0 a 2%)
         'spread_minimo_pct'         => [0.1, 5.0],
         'taxa_total_pct'            => [0.0, 2.0],

@@ -761,13 +761,18 @@ class BotExecutor
 
     // ============================================================
     // PERCENTUAIS — níveis 1..7 lidos do banco. Após o nível 7
-    // (sequência longa na mesma direção) o percentual cai para 1%:
-    // tese de reversão graduada, apostar cada vez menos até o all-in.
+    // (sequência longa na mesma direção) usa nivel_final (default 8%):
+    // tese de reversão graduada, apostar cada vez menos — mas com um
+    // degrau final ESTÁVEL. O 1% fixo antigo, multiplicado pelos freios
+    // de tendência (~0.5), gerava ordens de R$39 num saldo de R$7.8k:
+    // abaixo do min_notional, dust de R$50 e grid funcionalmente morto.
     // ============================================================
 
     private function percentualPorSalto(int $contador, BotConfig $config): float
     {
-        return $config->niveis()[max(1, $contador)] ?? 0.01;
+        $nivelFinal = (float) ($config->nivel_final ?? 0);
+        return $config->niveis()[max(1, $contador)]
+            ?? ($nivelFinal > 0 ? $nivelFinal : 0.08);
     }
 
     // ============================================================
@@ -1099,8 +1104,18 @@ class BotExecutor
             if ($forte === 'alta') {
                 $pisoBTC = (float) $config->btc_minimo_tendencia_alta;
                 if (!$btcAlto) {
-                    $fatorVenda = min($fatorVenda, 0.5); // reduzir vendas agressivamente
-                    $motivos[]  = 'alta forte: vendas reduzidas';
+                    // Guard de meta (espelho da baixa forte): BRL bem abaixo do
+                    // alvo → freio de venda suavizado (0.8) — o rebalanceamento
+                    // pede é segurar caixa pra recomprar; freio forte × nível
+                    // baixo gerava perna SELL dust.
+                    $metaBrl  = (float) ($config->target_brl_pct ?? 0);
+                    $guardPct = (float) ($config->guard_meta_pct ?? 0);
+                    $brlAbaixoMeta = $guardPct > 0 && $metaBrl > 0
+                        && $pctBRL <= $metaBrl * ($guardPct / 100.0);
+                    $fatorVenda = min($fatorVenda, $brlAbaixoMeta ? 0.8 : 0.5);
+                    $motivos[]  = $brlAbaixoMeta
+                        ? sprintf('alta forte suavizada: BRL %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBRL, $guardPct, $metaBrl)
+                        : 'alta forte: vendas reduzidas';
                     if (!$bloquearCompraNormal) {
                         $fatorCompra = max($fatorCompra, 1.2);
                     }
@@ -1113,8 +1128,20 @@ class BotExecutor
             } elseif ($forte === 'baixa') {
                 $pisoBRL = (float) $config->brl_minimo_tendencia_baixa;
                 if (!$brlAlto) {
-                    $fatorCompra = min($fatorCompra, 0.5);
-                    $motivos[]   = 'baixa forte: compras reduzidas';
+                    // Guard de meta: BTC bem abaixo do alvo (default ≤80% da
+                    // meta, i.e. ≤40% com alvo 50) → freio de compra suavizado
+                    // (0.8 em vez de 0.5). Sem isso o bot freava compras pela
+                    // metade exatamente quando o rebalanceamento pedia recomprar
+                    // barato — e o freio ×0.5 multiplicado com níveis 6-8%
+                    // produzia ordens de R$39-R$110 (dust).
+                    $metaBtc  = (float) ($config->target_btc_pct ?? 0);
+                    $guardPct = (float) ($config->guard_meta_pct ?? 0);
+                    $btcAbaixoMeta = $guardPct > 0 && $metaBtc > 0
+                        && $pctBTC <= $metaBtc * ($guardPct / 100.0);
+                    $fatorCompra = min($fatorCompra, $btcAbaixoMeta ? 0.8 : 0.5);
+                    $motivos[]   = $btcAbaixoMeta
+                        ? sprintf('baixa forte suavizada: BTC %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBTC, $guardPct, $metaBtc)
+                        : 'baixa forte: compras reduzidas';
                     if (!$bloquearVendaNormal) {
                         $fatorVenda = max($fatorVenda, 1.2);
                     }
@@ -1557,6 +1584,21 @@ class BotExecutor
         // isolado (ex.: inicialização).
         $tendencia = $tendencia ?? $this->analisarTendencia($precoAtual);
 
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-TENDENCIA', [
+            'fatorCompraOriginal' => $tendencia['fator_compra'],
+            'fatorVendaOriginal' => $tendencia['fator_venda'],
+            'rsi' => $tendencia['rsi'],
+            'rsi4h' => $tendencia['rsi_4h'],
+            'macd' => $tendencia['macd'],
+            'macdSignal' => $tendencia['macd_signal'],
+            'macdHist' => $tendencia['macd_hist'],
+            'fearGreed' => $tendencia['fear_greed'],
+            'bollPctB' => $tendencia['boll_pct_b'],
+            'trend4h' => $tendencia['trend_4h'],
+            'saltoDinamico' => $tendencia['salto_dinamico']
+        ]);
+
         // Salto sempre baseado nas métricas (ATR + Bollinger width). Não há mais salto fixo.
         // $saltoForcado (M9): a adaptação do grid passa o salto clamped pelo
         // anel — o da análise pode não cercar o preço com o centro mantido.
@@ -1597,6 +1639,22 @@ class BotExecutor
         $allin = $contadorAtual >= $config->allin_threshold
             && ($direcao === 'down' ? $rsi4h <= 40 : $rsi4h >= 60);
 
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-ORDEM-INICIO', [
+            'saldoBRL' => $saldoBRL,
+            'saldoBTC' => $saldoBTC,
+            'direcao' => $direcao,
+            'contadorAtual' => $contadorAtual,
+            'nivel1' => $config->nivel1,
+            'nivel2' => $config->nivel2,
+            'nivel3' => $config->nivel3,
+            'nivel4' => $config->nivel4,
+            'nivel5' => $config->nivel5,
+            'nivel6' => $config->nivel6,
+            'nivel7' => $config->nivel7,
+            'allin' => $allin,
+        ]);
+
         $fatorCompra = $tendencia['fator_compra'];
         $fatorVenda  = $tendencia['fator_venda'];
 
@@ -1609,6 +1667,17 @@ class BotExecutor
         $alocacao = $soCompra
             ? null
             : $this->calcularAlocacao($saldoBRL, $saldoBTC, $precoAtual, $config, $tendencia);
+
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-ALOCACAO', [
+            'pctBTC' => $alocacao['pct_btc'] ?? null,
+            'pctBRL' => $alocacao['pct_brl'] ?? null,
+            'fatorCompraAlocacao' => $alocacao['fator_compra'] ?? null,
+            'fatorVendaAlocacao' => $alocacao['fator_venda'] ?? null,
+            'zona' => $alocacao['zona'] ?? null,
+            'forte' => $alocacao['forte'] ?? null,
+            'motivos' => $alocacao['motivos'] ?? null,
+        ]);
 
         if ($alocacao !== null) {
             $fatorCompra *= $alocacao['fator_compra'];
@@ -1656,6 +1725,15 @@ class BotExecutor
             $vendaBloqueada  = false;
         }
 
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-FATORES-FINAIS', [
+            'modoSubidaAuto' => $state->modo_subida_auto,
+            'fatorCompraFinal' => $fatorCompra,
+            'fatorVendaFinal' => $fatorVenda,
+            'compraBloqueada' => $compraBloqueada ?? false,
+            'vendaBloqueada' => $vendaBloqueada ?? false,
+        ]);
+
         // Zera os ids antes de recriar: um id velho não pode fingir que a perna
         // ainda existe (o guard de "par incompleto" depende disso).
         $state->order_id_compra = null;
@@ -1693,6 +1771,25 @@ class BotExecutor
         if ($valorCompra > 0 && $valorCompra < $minN && $saldoBRL >= $minN) {
             $valorCompra = (float) $minN;
         }
+
+        // Piso de ordem relevante: nível × fatores pode encolher a ordem a
+        // dust mesmo acima do min_notional (R$50 num patrimônio de 13k não
+        // move nada). Se a perna vai entrar, entra com tamanho que mova o
+        // rebalanceamento — no mínimo piso_ordem_pct% do saldo livre.
+        $pisoPct = (float) ($config->piso_ordem_pct ?? 0);
+        if ($pisoPct > 0 && $valorCompra > 0
+            && $valorCompra < $saldoBRL * ($pisoPct / 100.0)) {
+            $valorCompra = $saldoBRL * (min($pisoPct, 99.5) / 100.0);
+        }
+
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-COMPRA', [
+            'saldoBRL' => $saldoBRL,
+            'valorCompraFinal' => $valorCompra,
+            'percentualRealCompra' => $saldoBRL > 0
+                ? round(($valorCompra / $saldoBRL) * 100, 2)
+                : 0,
+        ]);
 
         $criouCompra = false;
         if ($valorCompra >= $minN) {
@@ -1757,6 +1854,29 @@ class BotExecutor
             $valorVenda = $qtyVenda * $precoVenda;
         }
 
+        // Piso de ordem relevante (espelho da compra): a perna SELL que vai
+        // entrar vale no mínimo piso_ordem_pct% do BTC — evita vender 3% do
+        // estoque (R$171 num valBTC de R$5.1k) por pura compressão de nível.
+        $pisoPct = (float) ($config->piso_ordem_pct ?? 0);
+        if ($pisoPct > 0 && $percentualVenda > 0 && $valorVenda > 0
+            && $valorVenda < $saldoBTC * $precoVenda * ($pisoPct / 100.0)) {
+            $percentualVenda = min($pisoPct, self::ALLIN_CAP * 100.0) / 100.0;
+            $qtyVenda        = $saldoBTC * $percentualVenda;
+            $valorVenda      = $qtyVenda * $precoVenda;
+        }
+
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-VENDA', [
+            'saldoBTC' => $saldoBTC,
+            'precoVenda' => $precoVenda,
+            'percentualVendaFinal' => $percentualVenda,
+            'qtyVenda' => $qtyVenda,
+            'valorVendaFinal' => $valorVenda,
+            'percentualRealBTC' => $saldoBTC > 0
+                ? round(($qtyVenda / $saldoBTC) * 100, 2)
+                : 0,
+        ]);
+
         if ($percentualVenda > 0 && $saldoBTC > 0 && $valorVenda >= $minN) {
             $orderVenda            = $this->binance->sellLimit($precoVenda, $qtyVenda);
             $state->order_id_venda = $orderVenda['orderId'] ?? null;
@@ -1769,6 +1889,18 @@ class BotExecutor
                 . " < R$" . number_format($minN, 2) . " · saldoBTC=" . number_format($saldoBTC, 8)
                 . " · dir={$direcao} contador={$contadorAtual} cfg_min=" . var_export($config->min_notional, true));
         }
+
+        // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
+        Log::info('DEBUG-RESUMO', [
+            'COMPRA_BRL' => $valorCompra,
+            'VENDA_BRL' => $valorVenda,
+            'pctCompraDoSaldoBRL' => $saldoBRL > 0
+                ? round(($valorCompra / $saldoBRL) * 100, 2)
+                : 0,
+            'pctVendaDoBTC' => $saldoBTC > 0
+                ? round(($qtyVenda / $saldoBTC) * 100, 2)
+                : 0,
+        ]);
 
         $state->save();
 

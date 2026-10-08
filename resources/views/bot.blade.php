@@ -310,7 +310,7 @@
                     </div>
                 </div>
 
-                {{-- Níveis 1-7 --}}
+                {{-- Níveis 1-7 + nível final --}}
                 <div style="font-size:.8rem;color:#aaa;margin-bottom:.5rem;">Percentual por nível (0.01 – 1.00)</div>
                 <div class="row g-2 mb-3">
                     @foreach(range(1,7) as $n)
@@ -322,6 +322,13 @@
                         </div>
                     </div>
                     @endforeach
+                    <div class="col-6 col-md-3 col-lg-2">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Nível 8+ (final)</label>
+                        <div class="input-group input-group-sm">
+                            <input type="number" id="cfg-nivel-final" class="form-control" min="0.01" max="1" step="0.01" placeholder="0.08">
+                            <span class="input-group-text" style="font-size:.75rem;">%×</span>
+                        </div>
+                    </div>
                 </div>
 
                 {{-- M1: alocação BTC/BRL — targets e zonas de alerta/bloqueio --}}
@@ -362,6 +369,22 @@
                 </div>
                 <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
                     Tendência forte confirmada (EMA·RSI4h·MA21_4h·MACD·trend4h) bloqueia venda abaixo do piso de BTC na alta e compra abaixo do piso de BRL na baixa.
+                </div>
+
+                {{-- Dimensionamento de ordens — piso por ordem e guard de meta --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Dimensionamento de ordens</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Piso por ordem (% do saldo)</label>
+                        <input type="number" id="cfg-piso-ordem" class="form-control form-control-sm" min="0" max="50" step="0.5" placeholder="3">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Guard de meta (% do alvo)</label>
+                        <input type="number" id="cfg-guard-meta" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="80">
+                    </div>
+                </div>
+                <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
+                    Piso: ordem que vai entrar nunca é menor que X% do saldo (0 desliga). Guard: com o lado de risco abaixo de X% do alvo, o freio da tendência forte é suavizado de ×0.5 para ×0.8 (recomprar barato é o que o rebalanceamento pede).
                 </div>
 
                 {{-- M5: spread e taxa · M7: extremos de RSI --}}
@@ -422,7 +445,7 @@
                     <button type="submit" class="btn btn-sm btn-warning px-4">
                         <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
                     </button>
-                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa 1% até atingir o all-in · all-in cap: 95% · salto sempre dinâmico (ATR)</span>
+                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa o Nível 8+ até atingir o all-in · all-in cap: 95% · salto sempre dinâmico (ATR)</span>
                 </div>
 
                 <div id="cfg-msg" class="mt-2" style="font-size:.82rem;"></div>
@@ -1525,6 +1548,9 @@ function carregarConfig() {
             'cfg-adapt-histerese': 'adapt_histerese_pct',
             'cfg-adapt-persist':   'adapt_persistencia_min',
             'cfg-adapt-cooldown':  'adapt_cooldown_min',
+            'cfg-nivel-final':     'nivel_final',
+            'cfg-piso-ordem':      'piso_ordem_pct',
+            'cfg-guard-meta':      'guard_meta_pct',
         };
         Object.entries(mapa).forEach(([id, campo]) => {
             const el = document.getElementById(id);
@@ -1566,6 +1592,9 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         'cfg-adapt-histerese': 'adapt_histerese_pct',
         'cfg-adapt-persist':   'adapt_persistencia_min',
         'cfg-adapt-cooldown':  'adapt_cooldown_min',
+        'cfg-nivel-final':     'nivel_final',
+        'cfg-piso-ordem':      'piso_ordem_pct',
+        'cfg-guard-meta':      'guard_meta_pct',
     };
     Object.entries(campos).forEach(([id, campo]) => {
         const val = document.getElementById(id)?.value;
