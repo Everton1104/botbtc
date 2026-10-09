@@ -30,6 +30,7 @@ import 'package:flutter/services.dart'; // Clipboard (copia-e-cola)
 import 'package:url_launcher/url_launcher.dart'; // abrir link no navegador
 
 import '../modelos/deposito.dart';
+import '../modelos/saque.dart'; // SaqueEmAndamento (banner do bot pausado)
 import '../servicos/api.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
@@ -434,6 +435,47 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
     );
   }
 
+  /// CONCLUIR o saque em andamento (PIX saiu de fato) — mesmo estando na
+  /// aba de depósitos, o banner aparece por ser o estado global do bot.
+  Future<void> _concluirSaque(SaqueEmAndamento s) async {
+    final prosseguir = await _confirmar(
+      titulo: 'Concluir saque',
+      mensagem:
+          'Confirma que o PIX de ${moeda(s.valorLiquido)} para ${s.nome} '
+          'saiu da Binance?\n\nIsso fecha o saque e o bot volta a operar '
+          'no próximo ciclo.',
+      botao: 'Concluir',
+    );
+    if (prosseguir != true) return;
+
+    await _acao(
+      chamada: () => ApiService.concluirSaque(s.id),
+      bloqueado: () => _retomando,
+      ligar: () => setState(() => _retomando = false),
+      desligar: () => setState(() => _retomando = true),
+    );
+  }
+
+  /// CANCELAR o saque em andamento (PIX não saiu — ex.: limite noturno da
+  /// Binance): devolve as cotas ao investidor e libera o bot.
+  Future<void> _cancelarSaque(SaqueEmAndamento s) async {
+    final prosseguir = await _confirmar(
+      titulo: 'Cancelar saque',
+      mensagem:
+          'Cancelar o saque de ${moeda(s.valorLiquido)} de ${s.nome}?\n\n'
+          'As cotas serão DEVOLVIDAS ao investidor e o bot volta a operar.',
+      botao: 'Cancelar saque',
+    );
+    if (prosseguir != true) return;
+
+    await _acao(
+      chamada: () => ApiService.cancelarSaqueAdmin(s.id),
+      bloqueado: () => _retomando,
+      ligar: () => setState(() => _retomando = false),
+      desligar: () => setState(() => _retomando = true),
+    );
+  }
+
   /// REMOVER CONTA sem cotas (admin) — confirmação pesada: é irreversível.
   /// O servidor é a autoridade (recusa se houver qualquer dinheiro).
   Future<void> _removerConta(Investidor i) async {
@@ -601,11 +643,20 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
-        // ── Banner do bot pausado p/ depósito manual (só admin, pausa ativa)
-        if (d.ehAdmin && (d.pausa?.pausado ?? false))
+        // ── Banner do bot pausado p/ depósito manual ou saque em andamento
+        // (só admin; o saque em andamento segura o bot até ser resolvido).
+        if (d.ehAdmin &&
+            d.pausa != null &&
+            ((d.pausa!.pausado) || d.pausa!.saqueEmAndamento != null))
           BannerPausaBot(
             pausa: d.pausa!,
             onRetomar: _retomarBot,
+            onConcluirSaque: d.pausa!.saqueEmAndamento == null
+                ? null
+                : () => _concluirSaque(d.pausa!.saqueEmAndamento!),
+            onCancelarSaque: d.pausa!.saqueEmAndamento == null
+                ? null
+                : () => _cancelarSaque(d.pausa!.saqueEmAndamento!),
             ocupado: _retomando,
           ),
 

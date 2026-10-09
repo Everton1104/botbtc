@@ -216,7 +216,9 @@
     </div>
 
     {{-- Banner: bot pausado aguardando transferência (sem classe de aba: precisa
-         aparecer nas duas, é o feedback imediato do "Iniciar Saque") --}}
+         aparecer nas duas, é o feedback imediato do "Iniciar Saque"). Com saque
+         em andamento, o bot fica seguro até concluir/cancelar (limite noturno
+         da Binance pode segurar o PIX até a manhã seguinte). --}}
     </div>{{-- /sec-inicio Saques Pendentes --}}
     <div id="banner-pausa" class="mb-4" style="display:none;">
         <div style="background:#1a1a2e;border:1px solid #f0b90b;border-radius:10px;padding:16px 20px;">
@@ -224,13 +226,18 @@
                 <div class="d-flex align-items-center gap-3">
                     <i class="fa-solid fa-hourglass-half fa-lg" style="color:#f0b90b;animation:spin 2s linear infinite;"></i>
                     <div>
-                        <div style="color:#f0b90b;font-weight:700;font-size:.95rem;">Bot pausado — aguardando transferência PIX</div>
-                        <div style="color:#aaa;font-size:.82rem;">O bot retoma automaticamente em <span id="pausa-countdown" style="color:#fff;font-weight:700;">—</span></div>
+                        <div id="pausa-titulo" style="color:#f0b90b;font-weight:700;font-size:.95rem;">Bot pausado — aguardando transferência PIX</div>
+                        <div id="pausa-sub" style="color:#aaa;font-size:.82rem;">O bot retoma automaticamente em <span id="pausa-countdown" style="color:#fff;font-weight:700;">—</span></div>
                     </div>
                 </div>
-                <button onclick="liberarBot()" class="btn btn-sm" style="background:#f0b90b;color:#000;font-weight:700;white-space:nowrap;">
-                    <i class="fa-solid fa-circle-check me-1"></i> Transferência concluída — Liberar bot
-                </button>
+                <div class="d-flex gap-2 flex-wrap">
+                    <button id="btn-liberar-bot" onclick="liberarBot()" class="btn btn-sm" style="background:#f0b90b;color:#000;font-weight:700;white-space:nowrap;">
+                        <i class="fa-solid fa-circle-check me-1"></i> Transferência concluída — Liberar bot
+                    </button>
+                    <button id="btn-cancelar-saque" onclick="cancelarSaqueBanner()" class="btn btn-sm btn-danger px-3" style="font-weight:700;white-space:nowrap;display:none;">
+                        <i class="fa-solid fa-xmark me-1"></i> Cancelar saque
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -967,6 +974,11 @@
                         </button>
                     </div>
                 </div>
+                <div class="mt-3" style="background:rgba(240,185,11,.08);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.7rem 1rem;font-size:.8rem;color:#f0b90b;">
+                    <i class="fa-solid fa-moon me-1"></i>
+                    <strong>Saques não são pagos entre 20h e 6h</strong> (limite noturno da Binance).
+                    Pedidos feitos nesse horário são processados <strong>assim que possível</strong>, a partir das 6h.
+                </div>
             </div>
         </div>
     </div>
@@ -1637,10 +1649,25 @@ function carregarSaques() {
         }
         let html = '';
         saques.forEach(s => {
+            const andamento = !!s.em_andamento;
+            const badge = andamento
+                ? ' <span style="background:#f0b90b;color:#000;font-size:.66rem;font-weight:700;padding:2px 7px;border-radius:20px;vertical-align:middle;">EM ANDAMENTO</span>'
+                : '';
+            const acoes = andamento
+                ? `<button class="btn btn-success btn-sm px-3" onclick="concluirSaque(${s.id}, ${JSON.stringify(s.name).replace(/"/g, '&quot;')}, ${s.valor_liquido})">
+                            <i class="fa-solid fa-circle-check me-1"></i>Concluir PIX
+                        </button>
+                        <button class="btn btn-danger btn-sm px-2" title="Cancelar e devolver cotas"
+                            onclick="cancelarSaqueAdmin(${s.id}, ${JSON.stringify(s.name).replace(/"/g, '&quot;')}, ${s.valor_liquido})">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>`
+                : `<button class="btn btn-success btn-sm px-3" onclick="confirmarSaque(${s.id}, ${JSON.stringify(s.name).replace(/"/g, '&quot;')}, ${s.valor_liquido})">
+                            <i class="fa-solid fa-bolt me-1"></i>Iniciar Saque
+                        </button>`;
             html += `
                 <tr>
                     <td>
-                        <div class="fw-600">${s.name}</div>
+                        <div class="fw-600">${s.name}${badge}</div>
                         <div class="text-muted" style="font-size:.78rem;">${s.email}</div>
                         <div class="text-muted" style="font-size:.78rem;">PIX: ${s.chave_pix ?? '—'}</div>
                     </td>
@@ -1648,11 +1675,7 @@ function carregarSaques() {
                     <td>R$ ${fmt(s.valor_bruto)}</td>
                     <td class="text-green fw-600">R$ ${fmt(s.valor_liquido)}</td>
                     <td class="text-muted" style="font-size:.8rem;">${parseFloat(s.cotas).toFixed(4)}</td>
-                    <td>
-                        <button class="btn btn-success btn-sm px-3" onclick="confirmarSaque(${s.id}, ${JSON.stringify(s.name).replace(/"/g, '&quot;')}, ${s.valor_liquido})">
-                            <i class="fa-solid fa-bolt me-1"></i>Iniciar Saque
-                        </button>
-                    </td>
+                    <td>${acoes}</td>
                 </tr>`;
         });
         document.getElementById('tabela-saques').innerHTML = html;
@@ -1794,32 +1817,81 @@ function adicionarFundosDireto() {
 
 function confirmarSaque(id, nome, valorLiquido) {
     const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
-    if (!confirm(`Confirmar saque de R$ ${fmtVal} para ${nome}?\n\nSe necessário, o bot venderá BTC automaticamente para cobrir o valor.\nO bot ficará pausado por 3 minutos para você fazer a transferência.`)) return;
+    if (!confirm(`Confirmar saque de R$ ${fmtVal} para ${nome}?\n\nSe necessário, o bot venderá BTC automaticamente para cobrir o valor.\nO bot fica SEGURO até você concluir ou cancelar o saque (limite noturno da Binance? conclua depois, sem pressa).`)) return;
     axios.post(`/bot/confirmar-saque/${id}`)
         .then(res => { alert(res.data.mensagem); carregarSaques(); carregarTabela(); iniciarPollingPausa(); })
         .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao confirmar saque.'));
 }
 
+// Admin: conclui saque em andamento (PIX saiu de fato) — libera o bot
+function concluirSaque(id, nome, valorLiquido) {
+    const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
+    if (!confirm(`Confirma que o PIX de R$ ${fmtVal} para ${nome} saiu da Binance?\n\nIsso fecha o saque e o bot volta a operar no próximo ciclo.`)) return;
+    axios.post(`/bot/concluir-saque/${id}`)
+        .then(res => { alert(res.data.mensagem); carregarSaques(); carregarTabela(); iniciarPollingPausa(); })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao concluir saque.'));
+}
+
+// Admin: cancela saque (pendente ou em andamento) — devolve cotas e libera o bot
+function cancelarSaqueAdmin(id, nome, valorLiquido) {
+    const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
+    if (!confirm(`Cancelar o saque de R$ ${fmtVal} de ${nome}?\n\nAs cotas serão DEVOLVIDAS ao investidor.\nUse se o PIX não saiu (ex.: limite noturno da Binance).`)) return;
+    axios.post(`/bot/cancelar-saque-admin/${id}`)
+        .then(res => { alert(res.data.mensagem); carregarSaques(); carregarTabela(); iniciarPollingPausa(); })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao cancelar saque.'));
+}
+
 // ── Pausa do bot ──────────────────────────────────────
 let pausaInterval = null;
 let pausaSegundos = 0;
+let saqueEmAndamento = null; // {id, valor_liquido, nome} enquanto PIX não concluído
 
 function iniciarPollingPausa() {
     verificarPausa();
 }
 
+function renderBannerPausa(pausado) {
+    const saque = saqueEmAndamento;
+    const mostrar = pausado || !!saque;
+    document.getElementById('banner-pausa').style.display = mostrar ? 'block' : 'none';
+    if (!mostrar) return;
+
+    const titulo = document.getElementById('pausa-titulo');
+    const sub    = document.getElementById('pausa-sub');
+    const btnLiberar  = document.getElementById('btn-liberar-bot');
+    const btnCancelar = document.getElementById('btn-cancelar-saque');
+
+    if (saque) {
+        titulo.innerHTML = '<i class="fa-solid fa-money-bill-transfer me-1"></i> Saque #' + saque.id + ' em andamento — bot seguro';
+        sub.innerHTML = 'PIX de <strong style="color:#fff;">R$ ' + fmt(saque.valor_liquido) + '</strong> para ' + saque.nome +
+            ' · o bot só volta quando você <strong style="color:#fff;">concluir</strong> ou <strong style="color:#fff;">cancelar</strong>';
+        // O botão "Liberar" vira "Concluir" (concluir já libera o bot)
+        btnLiberar.innerHTML = '<i class="fa-solid fa-circle-check me-1"></i> PIX enviado — Concluir';
+        btnLiberar.onclick = concluirSaqueBanner;
+        btnCancelar.style.display = '';
+    } else {
+        titulo.textContent = 'Bot pausado — aguardando transferência PIX';
+        sub.innerHTML = 'O bot retoma automaticamente em <span id="pausa-countdown" style="color:#fff;font-weight:700;">—</span>';
+        btnLiberar.innerHTML = '<i class="fa-solid fa-circle-check me-1"></i> Transferência concluída — Liberar bot';
+        btnLiberar.onclick = liberarBot;
+        btnCancelar.style.display = 'none';
+    }
+}
+
 function verificarPausa() {
     axios.get('/bot/status-pausa').then(res => {
+        const antes = saqueEmAndamento;
+        saqueEmAndamento = res.data.saque_em_andamento || null;
+
         if (res.data.pausado) {
             pausaSegundos = res.data.segundos;
-            document.getElementById('banner-pausa').style.display = 'block';
             if (!pausaInterval) {
                 pausaInterval = setInterval(() => {
                     pausaSegundos--;
                     if (pausaSegundos <= 0) {
                         clearInterval(pausaInterval);
                         pausaInterval = null;
-                        document.getElementById('banner-pausa').style.display = 'none';
+                        verificarPausa(); // saque em andamento renova a pausa — reconsulta
                     } else {
                         const m = String(Math.floor(pausaSegundos / 60)).padStart(2, '0');
                         const s = String(pausaSegundos % 60).padStart(2, '0');
@@ -1829,12 +1901,28 @@ function verificarPausa() {
             }
             const m = String(Math.floor(pausaSegundos / 60)).padStart(2, '0');
             const s = String(pausaSegundos % 60).padStart(2, '0');
-            document.getElementById('pausa-countdown').textContent = m + ':' + s;
-        } else {
-            document.getElementById('banner-pausa').style.display = 'none';
-            if (pausaInterval) { clearInterval(pausaInterval); pausaInterval = null; }
+            const el = document.getElementById('pausa-countdown');
+            if (el) el.textContent = m + ':' + s;
+        } else if (pausaInterval && !saqueEmAndamento) {
+            clearInterval(pausaInterval);
+            pausaInterval = null;
         }
+
+        renderBannerPausa(res.data.pausado);
+
+        // Saque acabou de ser resolvido (concluído/cancelado) — atualiza listas
+        if (antes && !saqueEmAndamento) { carregarSaques(); carregarTabela(); }
     }).catch(() => {});
+}
+
+function concluirSaqueBanner() {
+    if (!saqueEmAndamento) return;
+    concluirSaque(saqueEmAndamento.id, saqueEmAndamento.nome, saqueEmAndamento.valor_liquido);
+}
+
+function cancelarSaqueBanner() {
+    if (!saqueEmAndamento) return;
+    cancelarSaqueAdmin(saqueEmAndamento.id, saqueEmAndamento.nome, saqueEmAndamento.valor_liquido);
 }
 
 function liberarBot() {

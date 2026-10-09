@@ -606,6 +606,22 @@ Route::get('/bot/saques-pendentes', function () {
 
 })->middleware(['auth', 'whatsapp.verified']);
 
+// Admin: cancelar saque (pendente ou em andamento) — devolve cotas e libera o bot
+Route::post('/bot/cancelar-saque-admin/{id}', function ($id) {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $r = app(\App\Services\SaqueService::class)->cancelarAdmin((int) $id);
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Admin: concluir saque em andamento (PIX saiu de fato) — fecha o ciclo e libera o bot
+Route::post('/bot/concluir-saque/{id}', function ($id) {
+    if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
+
+    $r = app(\App\Services\SaqueService::class)->concluir((int) $id);
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+})->middleware(['auth', 'whatsapp.verified']);
+
 // ── PIX (PagBank) ────────────────────────────────────────────────────────────
 
 // Webhook público — o PagBank chama esta URL após o pagamento (sem CSRF, sem auth)

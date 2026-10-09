@@ -549,7 +549,28 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
             Row(
               children: [
                 Expanded(
-                  child: Text(s.nome, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(s.nome, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                      if (s.emAndamento) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Cores.verde.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text('EM ANDAMENTO',
+                              style: TextStyle(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Cores.verde)),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 Text(s.criadoEm, style: const TextStyle(fontSize: 11, color: Cores.textoSuave)),
               ],

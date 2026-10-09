@@ -160,6 +160,7 @@ class SaquePendente {
   final double valorBruto;
   final double valorLiquido; // líquido após taxa PIX
   final double cotas;
+  final bool emAndamento; // true = PIX iniciado, aguardando concluir/cancelar
   final String criadoEm; // já formatado pelo servidor: "16/09/2026 10:00"
 
   const SaquePendente({
@@ -168,6 +169,7 @@ class SaquePendente {
     required this.valorBruto,
     required this.valorLiquido,
     required this.cotas,
+    this.emAndamento = false,
     required this.criadoEm,
   });
 
@@ -177,6 +179,7 @@ class SaquePendente {
         valorBruto: _num(json['valor_bruto']),
         valorLiquido: _num(json['valor_liquido']),
         cotas: _num(json['cotas']),
+        emAndamento: json['em_andamento'] as bool? ?? false,
         criadoEm: json['criado_em'] as String,
       );
 }

@@ -62,12 +62,14 @@ class SaqueMeu {
   final int id;
   final double valorBruto;
   final double valorLiquido; // bruto − 1% de taxa (admin não paga)
+  final bool emAndamento; // true = admin já iniciou, PIX a caminho
   final String criadoEm; // já formatado: "16/09/2026 10:00"
 
   const SaqueMeu({
     required this.id,
     required this.valorBruto,
     required this.valorLiquido,
+    this.emAndamento = false,
     required this.criadoEm,
   });
 
@@ -75,6 +77,7 @@ class SaqueMeu {
         id: json['id'] as int,
         valorBruto: _num(json['valor_bruto']),
         valorLiquido: _num(json['valor_liquido']),
+        emAndamento: json['em_andamento'] as bool? ?? false,
         criadoEm: json['criado_em'] as String,
       );
 }
@@ -101,6 +104,7 @@ class SaqueAprovacao {
   final double valorBruto;
   final double valorLiquido;
   final double cotas;
+  final bool emAndamento; // true = PIX iniciado, aguardando concluir/cancelar
   final String criadoEm;
 
   const SaqueAprovacao({
@@ -111,6 +115,7 @@ class SaqueAprovacao {
     required this.valorBruto,
     required this.valorLiquido,
     required this.cotas,
+    this.emAndamento = false,
     required this.criadoEm,
   });
 
@@ -122,22 +127,48 @@ class SaqueAprovacao {
         valorBruto: _num(json['valor_bruto']),
         valorLiquido: _num(json['valor_liquido']),
         cotas: _num(json['cotas']),
+        emAndamento: json['em_andamento'] as bool? ?? false,
         criadoEm: json['criado_em'] as String,
+      );
+}
+
+/// Saque em andamento (status 'confirmado'): o PIX pode demorar — ex. limite
+/// noturno da Binance — então o bot fica seguro até o admin concluir/cancelar.
+class SaqueEmAndamento {
+  final int id;
+  final double valorLiquido;
+  final String nome;
+
+  const SaqueEmAndamento({
+    required this.id,
+    required this.valorLiquido,
+    required this.nome,
+  });
+
+  factory SaqueEmAndamento.fromJson(Map<String, dynamic> json) =>
+      SaqueEmAndamento(
+        id: json['id'] as int,
+        valorLiquido: _num(json['valor_liquido']),
+        nome: json['nome'] as String? ?? '—',
       );
 }
 
 /// Situação da pausa do bot (só admin). O motivo diz quem pausou:
 /// 'saque' = confirmação de saque (retoma sozinho em 3 min) |
 /// 'deposito' = depósito manual (fica pausado até o admin liberar).
+/// [saqueEmAndamento] não-null = há um PIX aguardando conclusão: a pausa é
+/// renovada a cada ciclo do bot até o admin concluir ou cancelar o saque.
 class StatusPausa {
   final bool pausado;
   final int segundos; // quanto tempo falta (0 quando não está pausado)
   final String? motivo; // 'saque' | 'deposito' | null
+  final SaqueEmAndamento? saqueEmAndamento;
 
   const StatusPausa({
     required this.pausado,
     required this.segundos,
     this.motivo,
+    this.saqueEmAndamento,
   });
 
   /// Pausa de depósito manual: sem countdown — sai quando o admin libera.
@@ -147,6 +178,10 @@ class StatusPausa {
         pausado: json['pausado'] as bool? ?? false,
         segundos: (json['segundos'] as num?)?.toInt() ?? 0,
         motivo: json['motivo'] as String?,
+        saqueEmAndamento: json['saque_em_andamento'] == null
+            ? null
+            : SaqueEmAndamento.fromJson(
+                json['saque_em_andamento'] as Map<String, dynamic>),
       );
 }
 

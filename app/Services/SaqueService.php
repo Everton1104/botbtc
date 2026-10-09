@@ -156,6 +156,64 @@ class SaqueService
             return ['ok' => false, 'code' => 404, 'mensagem' => 'Saque não encontrado ou já processado.'];
         }
 
+        $this->devolverCotas($saque);
+
+        return ['ok' => true, 'mensagem' => 'Saque cancelado e valor devolvido ao seu saldo.'];
+    }
+
+    /**
+     * Cancela um saque pelo ADMIN — pendente OU em andamento ('confirmado',
+     * PIX iniciado mas não concluído; ex.: limite noturno da Binance barrou
+     * a transferência). Devolve cotas/taxa e libera o bot.
+     */
+    public function cancelarAdmin(int $saqueId): array
+    {
+        $saque = BotWithdrawalRequest::whereIn('status', ['pendente', 'confirmado'])
+            ->find($saqueId);
+
+        if (!$saque) {
+            return ['ok' => false, 'code' => 404, 'mensagem' => 'Saque não encontrado ou já finalizado.'];
+        }
+
+        $emAndamento = $saque->status === 'confirmado';
+        $this->devolverCotas($saque);
+        $this->retomarBot();
+
+        Log::info("Saque [{$saqueId}] cancelado pelo admin" . ($emAndamento ? ' (estava em andamento — PIX não concluído)' : '') . ". Cotas devolvidas a user {$saque->user_id}.");
+
+        return ['ok' => true, 'mensagem' => 'Saque cancelado e cotas devolvidas ao investidor. O bot volta a operar no próximo ciclo.'];
+    }
+
+    /**
+     * Admin confirma que o PIX saiu de fato — fecha o ciclo do saque
+     * ('confirmado' → 'pago') e libera o bot (que fica seguro enquanto
+     * houver saque em andamento).
+     */
+    public function concluir(int $saqueId): array
+    {
+        $saque = BotWithdrawalRequest::where('status', 'confirmado')->find($saqueId);
+
+        if (!$saque) {
+            return ['ok' => false, 'code' => 404, 'mensagem' => 'Saque não está em andamento.'];
+        }
+
+        $saque->status  = 'pago';
+        $saque->pago_at = now();
+        $saque->save();
+        $this->retomarBot();
+
+        Log::info("Saque [{$saqueId}] concluído pelo admin (R$ {$saque->valor_liquido} para user {$saque->user_id}).");
+
+        return ['ok' => true, 'mensagem' => 'Saque concluído! O bot volta a operar no próximo ciclo.'];
+    }
+
+    /**
+     * Devolve cotas (e taxa) de um saque e marca 'cancelado'. Compartilhado
+     * pelo cancelamento do usuário (pendente) e do admin (pendente/em
+     * andamento).
+     */
+    private function devolverCotas(BotWithdrawalRequest $saque): void
+    {
         DB::transaction(function () use ($saque) {
             // Devolver as cotas ao investidor
             $invest = BotInvestment::where('user_id', $saque->user_id)->lockForUpdate()->first();
@@ -184,8 +242,6 @@ class SaqueService
             $saque->status = 'cancelado';
             $saque->save();
         });
-
-        return ['ok' => true, 'mensagem' => 'Saque cancelado e valor devolvido ao seu saldo.'];
     }
 
     /**
@@ -213,24 +269,25 @@ class SaqueService
     public function meus(int $userId): array
     {
         $pendentes = BotWithdrawalRequest::where('user_id', $userId)
-            ->where('status', 'pendente')
+            ->whereIn('status', ['pendente', 'confirmado'])
             ->orderBy('created_at')
             ->get()
             ->map(fn($s) => [
                 'id'            => $s->id,
                 'valor_bruto'   => $s->valor_bruto,
                 'valor_liquido' => $s->valor_liquido,
+                'em_andamento'  => $s->status === 'confirmado',
                 'criado_em'     => $s->created_at->format('d/m/Y H:i'),
             ]);
 
         $historico = BotWithdrawalRequest::where('user_id', $userId)
-            ->where('status', 'confirmado')
-            ->orderByDesc('confirmado_at')
+            ->where('status', 'pago')
+            ->orderByDesc('pago_at')
             ->get()
             ->map(fn($s) => [
                 'valor_liquido' => $s->valor_liquido,
-                'confirmado_em' => $s->confirmado_at
-                    ? \Carbon\Carbon::parse($s->confirmado_at)->format('d/m/Y H:i')
+                'confirmado_em' => $s->pago_at
+                    ? \Carbon\Carbon::parse($s->pago_at)->format('d/m/Y H:i')
                     : '—',
             ]);
 
@@ -274,7 +331,10 @@ class SaqueService
     /** Saques pendentes de TODOS os investidores, aguardando aprovação. */
     public function pendentes(): array
     {
-        return BotWithdrawalRequest::where('status', 'pendente')
+        // Inclui os em andamento ('confirmado'): enquanto o PIX não for
+        // concluído, o admin precisa consultar o valor (pode pagar depois —
+        // ex.: limite noturno da Binance) e pode cancelar devolvendo cotas.
+        return BotWithdrawalRequest::whereIn('status', ['pendente', 'confirmado'])
             ->with('user:id,name,email')
             ->orderBy('created_at')
             ->get()
@@ -287,6 +347,7 @@ class SaqueService
                 'valor_bruto'   => $s->valor_bruto,
                 'valor_liquido' => $s->valor_liquido,
                 'cotas'         => $s->cotas,
+                'em_andamento'  => $s->status === 'confirmado',
                 'criado_em'     => $s->created_at->format('d/m/Y H:i'),
             ])->all();
     }
@@ -339,9 +400,11 @@ class SaqueService
             Log::info("Saque atípico [{$saqueId}]: vendidos {$btcNecessario} BTC a mercado para cobrir R$ {$falta}. BRL disponível era R$ {$saldoBRLLivre}.");
         }
 
-        // Pausar todos os estados do bot por 3 minutos para o admin fazer a transferência
+        // Pausar todos os estados do bot para o admin fazer a transferência.
+        // O guard do BotExecutor renova esta pausa a cada ciclo enquanto o
+        // saque não for concluído/cancelado (dinheiro reservado intacto).
         BotState::query()->update([
-            'pausado_ate'  => now()->addMinutes(3),
+            'pausado_ate'  => now()->addMinutes(5),
             'pausa_motivo' => 'saque',
         ]);
 
@@ -349,23 +412,31 @@ class SaqueService
         $saque->confirmado_at = now();
         $saque->save();
 
-        return ['ok' => true, 'mensagem' => 'PIX confirmado com sucesso!'];
+        return ['ok' => true, 'mensagem' => 'PIX liberado! Conclua o saque quando a transferência sair (ou cancele para devolver as cotas).'];
     }
 
-    /** Situação da pausa (admin) — motivo diz se foi saque (3 min) ou depósito manual. */
+    /** Situação da pausa (admin) — motivo diz se foi saque ou depósito manual.
+     *  Inclui o saque em andamento (se houver): ele segura o bot até ser
+     *  concluído ou cancelado, e o banner do painel mostra o valor. */
     public function statusPausa(): array
     {
+        $saque = BotWithdrawalRequest::where('status', 'confirmado')
+            ->with('user:id,name')
+            ->orderByDesc('confirmado_at')
+            ->first();
+
         $state = BotState::whereNotNull('pausado_ate')->where('pausado_ate', '>', now())->first();
 
-        if (!$state) {
-            return ['pausado' => false, 'segundos' => 0, 'motivo' => null];
-        }
-
         return [
-            'pausado'  => true,
-            'segundos' => (int) now()->diffInSeconds($state->pausado_ate),
+            'pausado'  => $state !== null,
+            'segundos' => $state ? (int) now()->diffInSeconds($state->pausado_ate) : 0,
             // Pausas gravadas antes da coluna existir são de saque (era o único motivo)
-            'motivo'   => $state->pausa_motivo ?? 'saque',
+            'motivo'   => $state ? ($state->pausa_motivo ?? 'saque') : null,
+            'saque_em_andamento' => $saque ? [
+                'id'            => $saque->id,
+                'valor_liquido' => $saque->valor_liquido,
+                'nome'          => $saque->user?->name ?? '—',
+            ] : null,
         ];
     }
 

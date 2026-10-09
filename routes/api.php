@@ -39,7 +39,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // Aprovação do admin — confirmar vende BTC se faltar BRL, cancela as
     // ordens abertas e pausa o bot 3 min (exatamente como no site); retomar
     // libera a pausa antes do tempo se a transferência já terminou.
+    // concluir fecha o saque em andamento (PIX saiu de fato) e cancelar-admin
+    // desfaz pendente/em andamento devolvendo as cotas (ex.: limite noturno
+    // da Binance barrou o PIX) — os dois liberam o bot.
     Route::post('/saque/confirmar/{id}', [SaqueApiController::class, 'confirmar']);
+    Route::post('/saque/concluir/{id}', [SaqueApiController::class, 'concluir']);
+    Route::post('/saque/cancelar-admin/{id}', [SaqueApiController::class, 'cancelarAdmin']);
     Route::post('/saque/retomar', [SaqueApiController::class, 'retomar']);
     // Chave PIX de recebimento — exigida no saque (o admin paga nela).
     Route::post('/saque/chave-pix', [SaqueApiController::class, 'salvarChavePix']);

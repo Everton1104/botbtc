@@ -19,6 +19,7 @@ class BotWithdrawalRequest extends Model
         'patrimonio_bot',
         'status',
         'confirmado_at',
+        'pago_at',
     ];
 
     public function user()

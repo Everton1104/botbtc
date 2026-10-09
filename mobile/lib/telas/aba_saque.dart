@@ -249,14 +249,57 @@ class _AbaSaqueState extends State<AbaSaque> {
       titulo: 'Confirmar saque',
       mensagem: 'Confirmar o PIX de ${moeda(s.valorLiquido)} para ${s.nome}?\n\n'
           'Chave PIX: ${s.chavePix}\n\n'
-          'Se faltar BRL, o bot vende BTC a mercado, cancela as ordens '
-          'abertas e pausa por 3 minutos para a transferência.',
+          'Se faltar BRL, o bot vende BTC a mercado e cancela as ordens '
+          'abertas. Depois ele fica SEGURO até você concluir o saque (PIX '
+          'saiu) ou cancelar — sem pressa com o limite noturno da Binance.',
       botao: 'Confirmar PIX',
     );
     if (prosseguir != true) return;
 
     await _acao(
       chamada: () => ApiService.confirmarSaque(s.id),
+      bloqueado: () => _processandoId != null,
+      ligar: () => setState(() => _processandoId = null),
+      desligar: () => setState(() => _processandoId = s.id),
+    );
+  }
+
+  /// CONCLUIR um saque em andamento como admin (o PIX saiu de fato) —
+  /// fecha o ciclo e libera o bot.
+  Future<void> _concluirSaqueAdmin(SaqueEmAndamento s) async {
+    final prosseguir = await _confirmar(
+      titulo: 'Concluir saque',
+      mensagem:
+          'Confirma que o PIX de ${moeda(s.valorLiquido)} para ${s.nome} '
+          'saiu da Binance?\n\nIsso fecha o saque e o bot volta a operar '
+          'no próximo ciclo.',
+      botao: 'Concluir',
+    );
+    if (prosseguir != true) return;
+
+    await _acao(
+      chamada: () => ApiService.concluirSaque(s.id),
+      bloqueado: () => _processandoId != null,
+      ligar: () => setState(() => _processandoId = null),
+      desligar: () => setState(() => _processandoId = s.id),
+    );
+  }
+
+  /// CANCELAR um saque como admin (pendente OU em andamento — ex.: limite
+  /// noturno da Binance barrou o PIX): devolve as cotas e libera o bot.
+  Future<void> _cancelarSaqueAdmin(SaqueEmAndamento s) async {
+    final prosseguir = await _confirmar(
+      titulo: 'Cancelar saque',
+      mensagem:
+          'Cancelar o saque de ${moeda(s.valorLiquido)} de ${s.nome}?\n\n'
+          'As cotas serão DEVOLVIDAS ao investidor e o bot volta a operar. '
+          'Use se o PIX não saiu (ex.: limite noturno da Binance).',
+      botao: 'Cancelar saque',
+    );
+    if (prosseguir != true) return;
+
+    await _acao(
+      chamada: () => ApiService.cancelarSaqueAdmin(s.id),
       bloqueado: () => _processandoId != null,
       ligar: () => setState(() => _processandoId = null),
       desligar: () => setState(() => _processandoId = s.id),
@@ -347,11 +390,21 @@ class _AbaSaqueState extends State<AbaSaque> {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
-        // ── Banner do bot pausado (só aparece pro admin com pausa ativa) ──
-        if (d.ehAdmin && (d.pausa?.pausado ?? false))
+        // ── Banner do bot pausado / saque em andamento (só admin). Com
+        // saque em andamento aparece MESMO sem pausa ativa: o guard do bot
+        // renova a pausa a cada ciclo até concluir ou cancelar. ──
+        if (d.ehAdmin &&
+            d.pausa != null &&
+            ((d.pausa!.pausado) || d.pausa!.saqueEmAndamento != null))
           BannerPausaBot(
             pausa: d.pausa!,
             onRetomar: _retomarBot,
+            onConcluirSaque: d.pausa!.saqueEmAndamento == null
+                ? null
+                : () => _concluirSaqueAdmin(d.pausa!.saqueEmAndamento!),
+            onCancelarSaque: d.pausa!.saqueEmAndamento == null
+                ? null
+                : () => _cancelarSaqueAdmin(d.pausa!.saqueEmAndamento!),
             ocupado: _processandoId != null,
           ),
 
@@ -483,32 +536,63 @@ class _AbaSaqueState extends State<AbaSaque> {
                 label: Text(_solicitando ? 'Solicitando...' : 'Solicitar saque'),
               ),
             ),
+            const SizedBox(height: 10),
+            // Janela noturna: a Binance limita saques de madrugada — o pedido
+            // entra na fila e é pago assim que possível (após as 6h).
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Cores.dourado.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Cores.dourado.withValues(alpha: 0.25)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.dark_mode_outlined, size: 16, color: Cores.dourado),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Saques não são pagos entre 20h e 6h (limite noturno da '
+                      'Binance). Pedidos feitos nesse horário são processados '
+                      'assim que possível, a partir das 6h.',
+                      style: TextStyle(fontSize: 11.5, color: Cores.dourado),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// Card de um saque MEU pendente, com botão de cancelar.
+  /// Card de um saque MEU pendente, com botão de cancelar. Em andamento
+  /// (PIX iniciado) o cancelamento some — só o admin resolve de lá.
   Widget _cardPendente(SaqueMeu s) {
+    final emAndamento = s.emAndamento;
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            // Badge dourado "Pendente" — aguardando o admin.
+            // Badge dourado "Pendente" (aguardando o admin) ou azul-esverdeado
+            // "Em andamento" (PIX a caminho — pode demorar até o dia seguinte).
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Cores.dourado.withValues(alpha: 0.14),
+                color: (emAndamento ? Cores.verde : Cores.dourado)
+                    .withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: const Text('Pendente',
+              child: Text(emAndamento ? 'Em andamento' : 'Pendente',
                   style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w700,
-                      color: Cores.dourado)),
+                      color: emAndamento ? Cores.verde : Cores.dourado)),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -518,25 +602,31 @@ class _AbaSaqueState extends State<AbaSaque> {
                   Text(moeda(s.valorBruto),
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                   Text(
-                    'Líquido: ${moeda(s.valorLiquido)} · ${s.criadoEm}',
+                    emAndamento
+                        ? 'Líquido: ${moeda(s.valorLiquido)} · PIX em processamento'
+                        : 'Líquido: ${moeda(s.valorLiquido)} · ${s.criadoEm}',
                     style:
                         const TextStyle(fontSize: 11, color: Cores.textoSuave),
                   ),
                 ],
               ),
             ),
-            // Cancelar é recuperável (devolve as cotas): sem diálogo.
-            _processandoId == s.id
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : TextButton(
-                    onPressed: _processandoId != null ? null : () => _cancelar(s),
-                    style: TextButton.styleFrom(foregroundColor: Cores.vermelho),
-                    child: const Text('Cancelar'),
-                  ),
+            // Cancelar é recuperável (devolve as cotas): sem diálogo. Só
+            // existe enquanto o saque ainda é "pendente".
+            if (!emAndamento)
+              _processandoId == s.id
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : TextButton(
+                      onPressed:
+                          _processandoId != null ? null : () => _cancelar(s),
+                      style:
+                          TextButton.styleFrom(foregroundColor: Cores.vermelho),
+                      child: const Text('Cancelar'),
+                    ),
           ],
         ),
       ),
@@ -582,8 +672,31 @@ class _AbaSaqueState extends State<AbaSaque> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.nome,
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(s.nome,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          if (s.emAndamento) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Cores.verde.withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text('EM ANDAMENTO',
+                                  style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Cores.verde)),
+                            ),
+                          ],
+                        ],
+                      ),
                       Text(s.email,
                           style: const TextStyle(
                               fontSize: 11, color: Cores.textoSuave)),
@@ -647,23 +760,66 @@ class _AbaSaqueState extends State<AbaSaque> {
               ],
             ),
             const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _processandoId != null
-                    ? null
-                    : () => _confirmarSaqueAdmin(s),
-                icon: _processandoId == s.id
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.task_alt_outlined),
-                label: Text(
-                    _processandoId == s.id ? 'Confirmando...' : 'Confirmar PIX'),
+            if (s.emAndamento) ...[
+              // Em andamento: o PIX foi liberado mas ainda não saiu. O valor
+              // fica visível (o admin pode consultar mais de uma vez) e as
+              // ações são concluir (saiu) ou cancelar (devolve as cotas).
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _processandoId != null
+                          ? null
+                          : () => _concluirSaqueAdmin(SaqueEmAndamento(
+                                id: s.id,
+                                valorLiquido: s.valorLiquido,
+                                nome: s.nome,
+                              )),
+                      icon: _processandoId == s.id
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.task_alt_outlined),
+                      label: Text(_processandoId == s.id
+                          ? 'Concluindo...'
+                          : 'Concluir PIX'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: _processandoId != null
+                        ? null
+                        : () => _cancelarSaqueAdmin(SaqueEmAndamento(
+                              id: s.id,
+                              valorLiquido: s.valorLiquido,
+                              nome: s.nome,
+                            )),
+                    style:
+                        TextButton.styleFrom(foregroundColor: Cores.vermelho),
+                    child: const Text('Cancelar'),
+                  ),
+                ],
               ),
-            ),
+            ] else
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _processandoId != null
+                      ? null
+                      : () => _confirmarSaqueAdmin(s),
+                  icon: _processandoId == s.id
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.task_alt_outlined),
+                  label: Text(
+                      _processandoId == s.id ? 'Confirmando...' : 'Confirmar PIX'),
+                ),
+              ),
           ],
         ),
       ),

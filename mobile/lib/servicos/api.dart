@@ -298,6 +298,21 @@ class ApiService {
     return _mensagemDe(resposta);
   }
 
+  /// CONCLUI um saque em andamento como admin (PIX saiu de fato) — fecha
+  /// o ciclo e libera o bot.
+  static Future<String> concluirSaque(int id) async {
+    final resposta = await _requisicaoAcao('POST', '/api/saque/concluir/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// CANCELA um saque como admin (pendente OU em andamento — ex.: limite
+  /// noturno da Binance barrou o PIX): devolve as cotas e libera o bot.
+  static Future<String> cancelarSaqueAdmin(int id) async {
+    final resposta =
+        await _requisicaoAcao('POST', '/api/saque/cancelar-admin/$id');
+    return _mensagemDe(resposta);
+  }
+
   /// Libera o bot da pausa pós-confirmação (admin).
   static Future<String> retomarBot() async {
     final resposta = await _requisicaoAcao('POST', '/api/saque/retomar');

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BotState;
 use App\Models\BotConfig;
 use App\Models\BotTrade;
+use App\Models\BotWithdrawalRequest;
 use App\Http\Controllers\BinanceController;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -172,6 +173,23 @@ class BotExecutor
             $restam = now()->diffInSeconds($state->pausado_ate);
             Log::info("BotExecutor [{$userId}]: pausado por saque. Retoma em {$restam}s.");
             return "Bot pausado. Retoma em {$restam}s.";
+        }
+
+        // ============================================================
+        // SAQUE EM ANDAMENTO — PIX iniciado mas ainda não concluído.
+        // O admin pode ficar horas sem transferir (ex.: limite noturno
+        // da Binance barra o saque até a manhã seguinte). Se o bot
+        // voltasse a operar, poderia gastar em compras o BRL reservado
+        // ao saque — e faltaria caixa na hora do PIX. A pausa se renova
+        // a cada ciclo até o admin concluir ('pago') ou cancelar o
+        // saque (ambos liberam o bot via SaqueService).
+        // ============================================================
+        if (BotWithdrawalRequest::where('status', 'confirmado')->exists()) {
+            $state->pausado_ate  = now()->addMinutes(5);
+            $state->pausa_motivo = 'saque';
+            $state->save();
+            Log::info("BotExecutor [{$userId}]: saque em andamento aguardando PIX — bot seguro (pausa renovada +5 min).");
+            return "Saque em andamento: bot seguro até concluir ou cancelar.";
         }
 
         // Buscar ordens abertas

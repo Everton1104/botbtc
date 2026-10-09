@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\BinanceController;
 use App\Http\Controllers\Controller;
 use App\Models\BotInvestment;
-use App\Models\BotWithdrawalRequest;
 use App\Services\BotExecutor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -186,22 +185,12 @@ class PainelApiController extends Controller
     }
 
     /**
-     * Réplica do /bot/saques-pendentes (web.php).
+     * Saques aguardando ação do admin — delegado ao SaqueService (a MESMA
+     * lista do /bot/saques-pendentes): pendentes + em andamento, com o flag
+     * em_andamento que o card da Home usa pro selo "EM ANDAMENTO".
      */
     private function saquesPendentes(): array
     {
-        return BotWithdrawalRequest::where('status', 'pendente')
-            ->with('user:id,name,email')
-            ->orderBy('created_at')
-            ->get()
-            ->map(fn($s) => [
-                'id'            => $s->id,
-                'name'          => $s->user?->name ?? 'Desconhecido',
-                'email'         => $s->user?->email ?? '—',
-                'valor_bruto'   => $s->valor_bruto,
-                'valor_liquido' => $s->valor_liquido,
-                'cotas'         => $s->cotas,
-                'criado_em'     => $s->created_at->format('d/m/Y H:i'),
-            ])->all();
+        return app(\App\Services\SaqueService::class)->pendentes();
     }
 }

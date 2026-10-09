@@ -91,6 +91,37 @@ class SaqueApiController extends Controller
     }
 
     /**
+     * POST /api/saque/cancelar-admin/{id} — SÓ ADMIN. Cancela saque pendente
+     * OU em andamento (PIX não saiu — ex.: limite noturno da Binance barrou),
+     * devolve as cotas ao investidor e libera o bot.
+     */
+    public function cancelarAdmin(Request $request, int $id): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $r = $this->saques->cancelarAdmin($id);
+
+        return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+    }
+
+    /**
+     * POST /api/saque/concluir/{id} — SÓ ADMIN. Fecha o ciclo do saque em
+     * andamento ('confirmado' → 'pago': o PIX saiu de fato) e libera o bot.
+     */
+    public function concluir(Request $request, int $id): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $r = $this->saques->concluir($id);
+
+        return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+    }
+
+    /**
      * POST /api/saque/chave-pix — salva a chave PIX de recebimento do
      * usuário (exigida para solicitar saque; o admin paga o PIX nela).
      * Validação fica no service para manter a resposta em {"mensagem": ...}.
