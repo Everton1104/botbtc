@@ -367,14 +367,13 @@ Route::post('/bot/config', function (Request $req) {
 
     // ── Otimização M1-M9 — mesmos campos/defaults da migration, com clamps ──
     $floats = [
-        // M1 — alocação: targets e zonas de alerta/bloqueio (0-100%)
-        'target_btc_pct'            => [0.0, 100.0],
-        'target_brl_pct'            => [0.0, 100.0],
-        'limite_alerta_pct'         => [50.0, 100.0],
-        'limite_bloqueio_pct'       => [50.0, 100.0],
-        // M2/M3 — pisos por tendência forte (0-100%)
-        'btc_minimo_tendencia_alta' => [0.0, 100.0],
-        'brl_minimo_tendencia_baixa'=> [0.0, 100.0],
+        // M1 — alocação: zonas/pisos RELATIVOS ao alvo (pts de distância).
+        // target_btc_pct é tratado abaixo (BRL derivado, nunca divergem).
+        'delta_alerta_pct'     => [10.0, 45.0],
+        'delta_bloqueio_pct'   => [15.0, 50.0],
+        // M2/M3 — pisos por tendência forte (pts abaixo do alvo)
+        'piso_alta_delta_pct'  => [5.0, 30.0],
+        'piso_baixa_delta_pct' => [5.0, 30.0],
         // Dimensionamento de ordens — piso por ordem (% do saldo) e guard de
         // meta do rebalanceamento (% do alvo; 0 desliga cada um)
         'piso_ordem_pct'            => [0.0, 50.0],
@@ -402,6 +401,23 @@ Route::post('/bot/config', function (Request $req) {
         if ($req->has($campo)) {
             $cfg->$campo = max($min, min($max, (int) $req->input($campo)));
         }
+    }
+
+    // ── M1 — alvo de alocação: BTC é a única fonte (5–95; 0% de um lado mata
+    // o grid — a perna nasce abaixo do min_notional e nunca é criada) e BRL é
+    // sempre derivado (100−BTC), os dois lados nunca divergem no banco.
+    if ($req->has('target_btc_pct') || $req->has('target_brl_pct')) {
+        $btc = $req->has('target_btc_pct')
+            ? (float) $req->input('target_btc_pct')
+            : 100.0 - (float) $req->input('target_brl_pct');
+        $btc = max(5.0, min(95.0, $btc));
+        $cfg->target_btc_pct = $btc;
+        $cfg->target_brl_pct = 100.0 - $btc;
+    }
+
+    // Bloqueio precisa ser mais largo que o alerta (senão a zona morta some).
+    if ($cfg->delta_bloqueio_pct <= $cfg->delta_alerta_pct) {
+        $cfg->delta_bloqueio_pct = min(50.0, $cfg->delta_alerta_pct + 5.0);
     }
 
     foreach (['modo_subida_auto_habilitado', 'camadas_atr_habilitado'] as $campo) {

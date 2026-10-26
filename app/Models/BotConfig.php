@@ -14,9 +14,11 @@ class BotConfig extends Model
         'nivel_final',
         'allin_threshold',
         'min_notional', 'piso_ordem_pct',
-        // Otimização M1-M9 (defaults nas migrations)
-        'target_btc_pct', 'target_brl_pct', 'limite_alerta_pct', 'limite_bloqueio_pct',
-        'btc_minimo_tendencia_alta', 'brl_minimo_tendencia_baixa', 'guard_meta_pct',
+        // Otimização M1-M9 (defaults nas migrations). Zonas/pisos de alocação
+        // são relativos ao alvo (target_btc_pct); target_brl_pct é derivado
+        // (100−BTC) e gravado só por conveniência de leitura.
+        'target_btc_pct', 'target_brl_pct', 'delta_alerta_pct', 'delta_bloqueio_pct',
+        'piso_alta_delta_pct', 'piso_baixa_delta_pct', 'guard_meta_pct',
         'modo_subida_auto_habilitado', 'spread_minimo_pct', 'taxa_total_pct',
         'camadas_atr_habilitado', 'rsi_maximo_compra', 'rsi_minimo_venda',
         'adapt_histerese_pct', 'adapt_cooldown_min', 'adapt_persistencia_min',
@@ -29,8 +31,8 @@ class BotConfig extends Model
         'nivel7' => 'float', 'nivel_final' => 'float', 'allin_threshold' => 'integer',
         'min_notional' => 'float', 'piso_ordem_pct' => 'float',
         'target_btc_pct' => 'float', 'target_brl_pct' => 'float',
-        'limite_alerta_pct' => 'float', 'limite_bloqueio_pct' => 'float',
-        'btc_minimo_tendencia_alta' => 'float', 'brl_minimo_tendencia_baixa' => 'float',
+        'delta_alerta_pct' => 'float', 'delta_bloqueio_pct' => 'float',
+        'piso_alta_delta_pct' => 'float', 'piso_baixa_delta_pct' => 'float',
         'guard_meta_pct' => 'float',
         'modo_subida_auto_habilitado' => 'boolean',
         'spread_minimo_pct' => 'float', 'taxa_total_pct' => 'float',
@@ -63,11 +65,11 @@ class BotConfig extends Model
                 // M1-M9 — mesmos defaults da migration
                 'target_btc_pct'  => 50.0,
                 'target_brl_pct'  => 50.0,
-                'limite_alerta_pct'    => 70.0,
-                'limite_bloqueio_pct'  => 80.0,
-                'btc_minimo_tendencia_alta'  => 40.0,
-                'brl_minimo_tendencia_baixa' => 40.0,
-                'guard_meta_pct'             => 80.0,
+                'delta_alerta_pct'     => 20.0,
+                'delta_bloqueio_pct'   => 30.0,
+                'piso_alta_delta_pct'  => 10.0,
+                'piso_baixa_delta_pct' => 10.0,
+                'guard_meta_pct'       => 80.0,
                 'modo_subida_auto_habilitado' => true,
                 'spread_minimo_pct' => 0.90,
                 'taxa_total_pct'    => 0.15,

@@ -338,44 +338,42 @@
                     </div>
                 </div>
 
-                {{-- M1: alocação BTC/BRL — targets e zonas de alerta/bloqueio --}}
-                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Alocação patrimonial BTC/BRL (%)</div>
-                <div class="row g-2 mb-2">
-                    <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alvo BTC</label>
-                        <input type="number" id="cfg-target-btc" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="50">
+                {{-- M1: alocação BTC/BRL — alvo editável e zonas relativas ao alvo --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Alocação patrimonial — alvo BTC/BRL</div>
+                <div class="row g-3 align-items-center mb-2">
+                    <div class="col-12 col-md-6">
+                        <div class="d-flex align-items-center gap-2">
+                            <input type="range" id="cfg-target-btc-range" class="form-range" min="5" max="95" step="5" value="50">
+                            <span id="cfg-target-label" class="fw-600 text-nowrap" style="min-width:9.5rem;">50% BTC · 50% BRL</span>
+                        </div>
+                        <div style="font-size:.7rem;color:#777;">Mais BTC = mais agressivo (50/50 equilibrado · 95/5 exposição máxima ao preço)</div>
                     </div>
                     <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alvo BRL</label>
-                        <input type="number" id="cfg-target-brl" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="50">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alerta a ±X pts do alvo</label>
+                        <input type="number" id="cfg-delta-alerta" class="form-control form-control-sm" min="10" max="45" step="1" placeholder="20">
                     </div>
                     <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Zona de alerta ≥</label>
-                        <input type="number" id="cfg-alerta" class="form-control form-control-sm" min="50" max="100" step="1" placeholder="70">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Zona de bloqueio ≥</label>
-                        <input type="number" id="cfg-bloqueio" class="form-control form-control-sm" min="50" max="100" step="1" placeholder="80">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Bloqueio a ±Y pts do alvo</label>
+                        <input type="number" id="cfg-delta-bloqueio" class="form-control form-control-sm" min="15" max="50" step="1" placeholder="30">
                     </div>
                 </div>
-                <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
-                    Acima do alerta o lado majoritário é reduzido e o contrário ampliado; acima do bloqueio ordens normais do lado majoritário param (só excepcionais).
-                </div>
+                <div id="aloc-resumo" style="font-size:.72rem;color:#777;margin-bottom:.6rem;">—</div>
 
-                {{-- M2/M3: pisos em tendência forte --}}
-                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Proteção de tendência forte — pisos (%)</div>
+                {{-- M2/M3: pisos em tendência forte (relativos ao alvo) --}}
+                <div style="font-size:.8rem;color:#aaa;margin:.9rem 0 .3rem;">Proteção de tendência forte — pisos (pts abaixo do alvo)</div>
                 <div class="row g-2 mb-2">
                     <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">BTC mínimo na alta forte</label>
-                        <input type="number" id="cfg-btc-piso-alta" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="40">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Alta forte: piso BTC = alvo −</label>
+                        <input type="number" id="cfg-piso-alta-delta" class="form-control form-control-sm" min="5" max="30" step="1" placeholder="10">
                     </div>
                     <div class="col-6 col-md-3">
-                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">BRL mínimo na baixa forte</label>
-                        <input type="number" id="cfg-brl-piso-baixa" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="40">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Baixa forte: piso BRL = alvo −</label>
+                        <input type="number" id="cfg-piso-baixa-delta" class="form-control form-control-sm" min="5" max="30" step="1" placeholder="10">
                     </div>
                 </div>
+                <div id="piso-resumo" style="font-size:.72rem;color:#777;margin-bottom:.4rem;">—</div>
                 <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
-                    Tendência forte confirmada (EMA·RSI4h·MA21_4h·MACD·trend4h) bloqueia venda abaixo do piso de BTC na alta e compra abaixo do piso de BRL na baixa.
+                    Tendência forte confirmada (EMA·RSI4h·MA21_4h·MACD·trend4h) bloqueia venda abaixo do piso de BTC na alta e compra abaixo do piso de BRL na baixa (piso efetivo nunca desce de 5% — o grid sempre tem os dois lados).
                 </div>
 
                 {{-- Dimensionamento de ordens — piso por ordem e guard de meta --}}
@@ -548,11 +546,12 @@
             <div class="stat-tile">
                 <div class="label">Alocação</div>
                 <div class="value"><span class="text-gold" id="perf-pct-btc">—</span> <span style="font-size:.7rem;color:var(--muted);">BTC</span></div>
-                <div class="mt-1" style="height:8px;border-radius:6px;overflow:hidden;display:flex;background:var(--surface2);">
+                <div class="mt-1" style="height:8px;border-radius:6px;overflow:hidden;display:flex;position:relative;background:var(--surface2);">
                     <div id="perf-barra-btc" style="background:#f0b90b;height:100%;width:50%;transition:width .4s;"></div>
                     <div id="perf-barra-brl" style="background:#0ecb81;height:100%;width:50%;transition:width .4s;"></div>
+                    <span id="perf-marcador-alvo" style="position:absolute;top:0;height:100%;width:2px;background:#fff;opacity:.85;left:50%;transition:left .4s;" title="alvo configurado"></span>
                 </div>
-                <div class="sub"><span id="perf-pct-brl">—</span> BRL <span style="color:#0ecb81;">■</span></div>
+                <div class="sub"><span id="perf-pct-brl">—</span> BRL <span style="color:#0ecb81;">■</span> <span id="perf-alvo-txt" style="color:var(--muted);"></span></div>
             </div>
         </div>
         <div class="col-6 col-md-3">
@@ -1547,12 +1546,10 @@ function carregarConfig() {
         }
         // M1-M9 — mesmos nomes do backend; vazio deixa o placeholder falar
         const mapa = {
-            'cfg-target-btc':      'target_btc_pct',
-            'cfg-target-brl':      'target_brl_pct',
-            'cfg-alerta':          'limite_alerta_pct',
-            'cfg-bloqueio':        'limite_bloqueio_pct',
-            'cfg-btc-piso-alta':   'btc_minimo_tendencia_alta',
-            'cfg-brl-piso-baixa':  'brl_minimo_tendencia_baixa',
+            'cfg-delta-alerta':    'delta_alerta_pct',
+            'cfg-delta-bloqueio':  'delta_bloqueio_pct',
+            'cfg-piso-alta-delta': 'piso_alta_delta_pct',
+            'cfg-piso-baixa-delta':'piso_baixa_delta_pct',
             'cfg-spread-min':      'spread_minimo_pct',
             'cfg-taxa-total':      'taxa_total_pct',
             'cfg-rsi-max-compra':  'rsi_maximo_compra',
@@ -1568,6 +1565,18 @@ function carregarConfig() {
             const el = document.getElementById(id);
             if (el && d[campo] !== null && d[campo] !== undefined) el.value = d[campo];
         });
+        // Alvo de alocação: slider é a fonte; BRL sempre 100−BTC
+        const alvoBtc = Math.round(parseFloat(d.target_btc_pct ?? 50));
+        document.getElementById('cfg-target-btc-range').value = alvoBtc;
+        atualizarResumoAlocacao();
+        // Marcador do alvo na barra de alocação do painel de performance
+        const marcador = document.getElementById('perf-marcador-alvo');
+        if (marcador) {
+            marcador.style.left = alvoBtc + '%';
+            marcador.title = 'alvo configurado: ' + alvoBtc + '% BTC';
+        }
+        const alvoTxt = document.getElementById('perf-alvo-txt');
+        if (alvoTxt) alvoTxt.textContent = '· alvo ' + alvoBtc + '%';
         const subidaAuto = document.getElementById('cfg-subida-auto');
         if (subidaAuto) subidaAuto.checked = !!d.modo_subida_auto_habilitado;
         const camadasAtr = document.getElementById('cfg-camadas-atr');
@@ -1575,6 +1584,30 @@ function carregarConfig() {
     }).catch(() => {});
 }
 carregarConfig();
+
+// ── Resumo da alocação: mostra em tempo real o efeito de alvo + deltas ──
+function atualizarResumoAlocacao() {
+    const range  = document.getElementById('cfg-target-btc-range');
+    const alvo   = range ? parseInt(range.value) : 50;
+    const dA     = parseInt(document.getElementById('cfg-delta-alerta').value)    || 20;
+    const dB     = Math.max(dA + 5, parseInt(document.getElementById('cfg-delta-bloqueio').value) || 30);
+    const pAlta  = parseInt(document.getElementById('cfg-piso-alta-delta').value)  || 10;
+    const pBaixa = parseInt(document.getElementById('cfg-piso-baixa-delta').value) || 10;
+
+    document.getElementById('cfg-target-label').textContent = alvo + '% BTC · ' + (100 - alvo) + '% BRL';
+
+    const neutroLo = Math.max(0, alvo - dA), neutroHi = Math.min(100, alvo + dA);
+    const bloqLo = Math.max(0, alvo - dB),   bloqHi = Math.min(100, alvo + dB);
+    document.getElementById('aloc-resumo').textContent =
+        'Neutro entre ' + neutroLo + '% e ' + neutroHi + '% BTC · fora disso reduz o lado majoritário'
+        + ' · abaixo de ' + bloqLo + '% ou acima de ' + bloqHi + '% bloqueia ordens normais do lado gordo';
+
+    const pisoBtc = Math.max(5, alvo - pAlta), pisoBrl = Math.max(5, (100 - alvo) - pBaixa);
+    document.getElementById('piso-resumo').textContent =
+        'Piso efetivo: alta forte segura BTC ≥ ' + pisoBtc + '% · baixa forte segura BRL ≥ ' + pisoBrl + '%';
+}
+['cfg-target-btc-range', 'cfg-delta-alerta', 'cfg-delta-bloqueio', 'cfg-piso-alta-delta', 'cfg-piso-baixa-delta']
+    .forEach(id => document.getElementById(id)?.addEventListener('input', atualizarResumoAlocacao));
 
 document.getElementById('form-config-bot').addEventListener('submit', function(e) {
     e.preventDefault();
@@ -1591,12 +1624,10 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
 
     // M1-M9 — floats do painel de otimização (backend clampa)
     const campos = {
-        'cfg-target-btc':      'target_btc_pct',
-        'cfg-target-brl':      'target_brl_pct',
-        'cfg-alerta':          'limite_alerta_pct',
-        'cfg-bloqueio':        'limite_bloqueio_pct',
-        'cfg-btc-piso-alta':   'btc_minimo_tendencia_alta',
-        'cfg-brl-piso-baixa':  'brl_minimo_tendencia_baixa',
+        'cfg-delta-alerta':    'delta_alerta_pct',
+        'cfg-delta-bloqueio':  'delta_bloqueio_pct',
+        'cfg-piso-alta-delta': 'piso_alta_delta_pct',
+        'cfg-piso-baixa-delta':'piso_baixa_delta_pct',
         'cfg-spread-min':      'spread_minimo_pct',
         'cfg-taxa-total':      'taxa_total_pct',
         'cfg-rsi-max-compra':  'rsi_maximo_compra',
@@ -1612,6 +1643,9 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         const val = document.getElementById(id)?.value;
         if (val) payload[campo] = parseFloat(val);
     });
+
+    // Alvo de alocação: o slider sempre envia (BRL é derivado no backend)
+    payload.target_btc_pct = parseInt(document.getElementById('cfg-target-btc-range').value);
 
     // Switches sempre enviam o estado (checkbox sem "vazio")
     const subidaAuto = document.getElementById('cfg-subida-auto');

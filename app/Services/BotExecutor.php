@@ -1053,13 +1053,17 @@ class BotExecutor
     // M1/M2/M3 — CONTROLE PATRIMONIAL BTC/BRL
     // ============================================================
     // valorBTC = saldoBTC × preço; patrimônio = valorBTC + saldoBRL;
-    // percentuais contra os targets (50/50 default). Zonas de desvio:
-    //   > alerta (70%)  → reduz o lado majoritário e amplia o contrário;
-    //   > bloqueio (80%) → bloqueia ordens NORMAIS do lado majoritário
-    //                      (all-in de exaustão é a ordem excepcional e passa).
-    // Em tendência FORTE, os pisos btc/brl_minimo_tendencia (40%) travam o
-    // lado que interessa com bloqueio TOTAL (nem all-in passa — piso é piso):
-    // alta forte não deixa o %BTC cair do piso; baixa forte, o %BRL.
+    // percentuais contra o ALVO EDITÁVEL (target_btc_pct, saneado em 5–95;
+    // BRL é sempre 100−BTC). Zonas RELATIVAS ao alvo:
+    //   fora de alvo±delta_alerta   → reduz o lado majoritário e amplia o contrário;
+    //   fora de alvo±delta_bloqueio → bloqueia ordens NORMAIS do lado majoritário
+    //                                  (all-in de exaustão é a ordem excepcional e passa).
+    // Com alvo 50 e deltas 20/30 isso reproduz os limites absolutos antigos
+    // (alerta 70 / bloqueio 80) — o default não muda nada. Em tendência FORTE,
+    // pisos a X pts ABAIXO do alvo travam o lado que interessa com bloqueio
+    // TOTAL (nem all-in passa — piso é piso): alta forte não deixa o %BTC
+    // cair do piso; baixa forte, o %BRL. O piso escala com o alvo: num alvo
+    // 95/5 o all-in de venda no topo realiza até ~85%, não até 5%.
     // Precedência: zonas de alerta/bloqueio do M1 não são desfazíveis pelas
     // modulações do M2/M3 — vender em força extrema (BTC alto) é realizar no
     // melhor momento; o piso do M2 protege o lado de BAIXO, não o de cima.
@@ -1069,6 +1073,23 @@ class BotExecutor
         $patrimonio = $valorBTC + $saldoBRL;
         $pctBTC     = $patrimonio > 0 ? ($valorBTC / $patrimonio) * 100 : 50.0;
         $pctBRL     = 100.0 - $pctBTC;
+
+        // Alvo efetivo: saneado em [5,95] (0% de um lado mata o grid — a perna
+        // nasce abaixo do min_notional e nunca é criada); BRL sempre derivado.
+        $tgtBTC = max(5.0, min(95.0, (float) ($config->target_btc_pct ?: 50)));
+        $tgtBRL = 100.0 - $tgtBTC;
+
+        // Deltas das zonas, saneados; bloqueio sempre mais largo que o alerta.
+        $deltaAlerta   = max(10.0, min(45.0, (float) ($config->delta_alerta_pct ?: 20)));
+        $deltaBloqueio = min(50.0, max($deltaAlerta + 5.0, (float) ($config->delta_bloqueio_pct ?: 30)));
+
+        // Limites efetivos sobre %BTC (clamp nas bordas = zona desarmada):
+        // alvo 95 + delta 30 → bloqueio 125→100: %BTC nunca ultrapassa, a zona
+        // de BTC alto deixa de existir — correto, alvo agressivo tolera BTC alto.
+        $alertaBtcAcima    = min(100.0, $tgtBTC + $deltaAlerta);
+        $bloqueioBtcAcima  = min(100.0, $tgtBTC + $deltaBloqueio);
+        $alertaBtcAbaixo   = max(0.0, $tgtBTC - $deltaAlerta);   // %BTC abaixo disto = BRL majoritário
+        $bloqueioBtcAbaixo = max(0.0, $tgtBTC - $deltaBloqueio);
 
         $fatorCompra = 1.0;
         $fatorVenda  = 1.0;
@@ -1087,32 +1108,29 @@ class BotExecutor
         }
 
         if ($patrimonio > 0) {
-            $alerta   = (float) $config->limite_alerta_pct;
-            $bloqueio = (float) $config->limite_bloqueio_pct;
-
-            // ── M1: desvios contra o target ─────────────────────────────
-            if ($pctBTC > $bloqueio) {
+            // ── M1: desvios contra o alvo (zonas relativas) ─────────────
+            if ($pctBTC > $bloqueioBtcAcima) {
                 $zona = 'bloqueio_btc_alto';
                 $fatorCompra = 0.0;
                 $fatorVenda  = 1.5;
                 $bloquearCompraNormal = true;
-                $motivos[] = sprintf('BTC %.1f%% > limite %.0f%%: compra normal bloqueada, venda ampliada', $pctBTC, $bloqueio);
-            } elseif ($pctBTC > $alerta) {
+                $motivos[] = sprintf('BTC %.1f%% > alvo %.0f%% + %.0f pts (%.0f%%): compra normal bloqueada, venda ampliada', $pctBTC, $tgtBTC, $deltaBloqueio, $bloqueioBtcAcima);
+            } elseif ($pctBTC > $alertaBtcAcima) {
                 $zona = 'alerta_btc_alto';
                 $fatorCompra = 0.5;
                 $fatorVenda  = 1.5;
-                $motivos[] = sprintf('BTC %.1f%% > alerta %.0f%%: compra reduzida, venda ampliada', $pctBTC, $alerta);
-            } elseif ($pctBRL > $bloqueio) {
+                $motivos[] = sprintf('BTC %.1f%% > alvo %.0f%% + %.0f pts (%.0f%%): compra reduzida, venda ampliada', $pctBTC, $tgtBTC, $deltaAlerta, $alertaBtcAcima);
+            } elseif ($pctBTC < $bloqueioBtcAbaixo) {
                 $zona = 'bloqueio_brl_alto';
                 $fatorVenda  = 0.0;
                 $fatorCompra = 1.5;
                 $bloquearVendaNormal = true;
-                $motivos[] = sprintf('BRL %.1f%% > limite %.0f%%: venda normal bloqueada, compra ampliada', $pctBRL, $bloqueio);
-            } elseif ($pctBRL > $alerta) {
+                $motivos[] = sprintf('BRL %.1f%% alto: BTC %.1f%% < alvo %.0f%% − %.0f pts (%.0f%%): venda normal bloqueada, compra ampliada', $pctBRL, $pctBTC, $tgtBTC, $deltaBloqueio, $bloqueioBtcAbaixo);
+            } elseif ($pctBTC < $alertaBtcAbaixo) {
                 $zona = 'alerta_brl_alto';
                 $fatorVenda  = 0.5;
                 $fatorCompra = 1.5;
-                $motivos[] = sprintf('BRL %.1f%% > alerta %.0f%%: venda reduzida, compra ampliada', $pctBRL, $alerta);
+                $motivos[] = sprintf('BRL %.1f%% alto: BTC %.1f%% < alvo %.0f%% − %.0f pts (%.0f%%): venda reduzida, compra ampliada', $pctBRL, $pctBTC, $tgtBTC, $deltaAlerta, $alertaBtcAbaixo);
             }
 
             // ── M2/M3: tendência forte protege o lado vencedor ──────────
@@ -1120,19 +1138,18 @@ class BotExecutor
             $brlAlto = in_array($zona, ['alerta_brl_alto', 'bloqueio_brl_alto'], true);
 
             if ($forte === 'alta') {
-                $pisoBTC = (float) $config->btc_minimo_tendencia_alta;
+                $pisoBTC = max(5.0, $tgtBTC - max(5.0, min(30.0, (float) ($config->piso_alta_delta_pct ?: 10))));
                 if (!$btcAlto) {
                     // Guard de meta (espelho da baixa forte): BRL bem abaixo do
                     // alvo → freio de venda suavizado (0.8) — o rebalanceamento
                     // pede é segurar caixa pra recomprar; freio forte × nível
                     // baixo gerava perna SELL dust.
-                    $metaBrl  = (float) ($config->target_brl_pct ?? 0);
                     $guardPct = (float) ($config->guard_meta_pct ?? 0);
-                    $brlAbaixoMeta = $guardPct > 0 && $metaBrl > 0
-                        && $pctBRL <= $metaBrl * ($guardPct / 100.0);
+                    $brlAbaixoMeta = $guardPct > 0
+                        && $pctBRL <= $tgtBRL * ($guardPct / 100.0);
                     $fatorVenda = min($fatorVenda, $brlAbaixoMeta ? 0.8 : 0.5);
                     $motivos[]  = $brlAbaixoMeta
-                        ? sprintf('alta forte suavizada: BRL %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBRL, $guardPct, $metaBrl)
+                        ? sprintf('alta forte suavizada: BRL %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBRL, $guardPct, $tgtBRL)
                         : 'alta forte: vendas reduzidas';
                     if (!$bloquearCompraNormal) {
                         $fatorCompra = max($fatorCompra, 1.2);
@@ -1141,10 +1158,10 @@ class BotExecutor
                 if ($pctBTC <= $pisoBTC) {
                     $bloquearVendaTotal = true;
                     $fatorVenda = 0.0;
-                    $motivos[]  = sprintf('alta forte com BTC %.1f%% ≤ piso %.0f%%: venda bloqueada (acumular)', $pctBTC, $pisoBTC);
+                    $motivos[]  = sprintf('alta forte com BTC %.1f%% ≤ piso %.0f%% (alvo %.0f%%): venda bloqueada (acumular)', $pctBTC, $pisoBTC, $tgtBTC);
                 }
             } elseif ($forte === 'baixa') {
-                $pisoBRL = (float) $config->brl_minimo_tendencia_baixa;
+                $pisoBRL = max(5.0, $tgtBRL - max(5.0, min(30.0, (float) ($config->piso_baixa_delta_pct ?: 10))));
                 if (!$brlAlto) {
                     // Guard de meta: BTC bem abaixo do alvo (default ≤80% da
                     // meta, i.e. ≤40% com alvo 50) → freio de compra suavizado
@@ -1152,13 +1169,12 @@ class BotExecutor
                     // metade exatamente quando o rebalanceamento pedia recomprar
                     // barato — e o freio ×0.5 multiplicado com níveis 6-8%
                     // produzia ordens de R$39-R$110 (dust).
-                    $metaBtc  = (float) ($config->target_btc_pct ?? 0);
                     $guardPct = (float) ($config->guard_meta_pct ?? 0);
-                    $btcAbaixoMeta = $guardPct > 0 && $metaBtc > 0
-                        && $pctBTC <= $metaBtc * ($guardPct / 100.0);
+                    $btcAbaixoMeta = $guardPct > 0
+                        && $pctBTC <= $tgtBTC * ($guardPct / 100.0);
                     $fatorCompra = min($fatorCompra, $btcAbaixoMeta ? 0.8 : 0.5);
                     $motivos[]   = $btcAbaixoMeta
-                        ? sprintf('baixa forte suavizada: BTC %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBTC, $guardPct, $metaBtc)
+                        ? sprintf('baixa forte suavizada: BTC %.1f%% ≤ %.0f%% da meta %.0f%% (freio 0.8)', $pctBTC, $guardPct, $tgtBTC)
                         : 'baixa forte: compras reduzidas';
                     if (!$bloquearVendaNormal) {
                         $fatorVenda = max($fatorVenda, 1.2);
@@ -1167,7 +1183,7 @@ class BotExecutor
                 if ($pctBRL <= $pisoBRL) {
                     $bloquearCompraTotal = true;
                     $fatorCompra = 0.0;
-                    $motivos[]   = sprintf('baixa forte com BRL %.1f%% ≤ piso %.0f%%: compra bloqueada (segurar caixa)', $pctBRL, $pisoBRL);
+                    $motivos[]   = sprintf('baixa forte com BRL %.1f%% ≤ piso %.0f%% (alvo %.0f%%): compra bloqueada (segurar caixa)', $pctBRL, $pisoBRL, $tgtBRL);
                 }
             }
         }
@@ -1177,8 +1193,10 @@ class BotExecutor
             'pct_brl'     => round($pctBRL, 2),
             'valor_btc'   => round($valorBTC, 2),
             'patrimonio'  => round($patrimonio, 2),
-            'target_btc'  => (float) $config->target_btc_pct,
-            'desvio_btc'  => round($pctBTC - (float) $config->target_btc_pct, 2),
+            'target_btc'  => $tgtBTC,
+            'target_brl'  => $tgtBRL,
+            'faixa_equilibrio' => [round($alertaBtcAbaixo, 1), round($alertaBtcAcima, 1)],
+            'desvio_btc'  => round($pctBTC - $tgtBTC, 2),
             'fator_compra' => round($fatorCompra, 3),
             'fator_venda'  => round($fatorVenda, 3),
             'bloquear_compra_normal' => $bloquearCompraNormal,
