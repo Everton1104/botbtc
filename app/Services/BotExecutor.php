@@ -63,10 +63,12 @@ class BotExecutor
     // grid proporcional ao regime: baixa volatilidade → grid apertado (mais
     // ciclos), alta volatilidade → grid largo (ciclos com folga).
     // [atr_maximo_da_camada, salto_min_da_faixa, salto_max_da_faixa]
+    // 2026-10-26: faixas 20% menores (sweep 190d/60d em /root/sim-botbtc —
+    // +25% FIFO no contínuo, +46% alpha no chop; regula o mesmo, cicla mais).
     private const CAMADAS_ATR = [
-        [4000.0, 3000, 4000],
-        [8000.0, 4000, 6000],
-        [PHP_FLOAT_MAX, 6000, 8000],
+        [3200.0, 2400, 3200],
+        [6400.0, 3200, 4800],
+        [PHP_FLOAT_MAX, 4800, 6400],
     ];
 
     // ── M7: extremos de Bollinger/F&G (redução) — RSI é configurável ───────
