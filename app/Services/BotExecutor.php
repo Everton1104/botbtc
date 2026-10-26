@@ -368,6 +368,40 @@ class BotExecutor
                     Log::info("BotExecutor [{$userId}]: só perna SELL, mas BRL insuficiente (< min_notional) pra comprar — posição unilateral mantida (sem churn). BRL={$saldoBRLChk}.");
                     return "Posição unilateral (só SELL): sem BRL pra comprar. Perna mantida.";
                 }
+
+                // ── Posição unilateral por BLOQUEIO (não churnar) ─────────
+                // A perna oposta pode faltar mesmo com saldo: com desvio grande
+                // contra o alvo (ex.: 37% BTC vs alvo 70) a venda nasce bloqueada
+                // pela alocação (zona/piso de tendência forte) e o par vem só
+                // com a perna BUY. Cancelar/recriar a cada ciclo recentra a
+                // perna viva no preço atual e ela se torna inalcançável num
+                // recuo gradual (loop observado em 2026-10-25 com o slider de
+                // alvo 70). Se o lado oposto está bloqueado AGORA pelos mesmos
+                // critérios de criarOrdensNovas, é posição unilateral legítima:
+                // manter a perna até ela executar ou o bloqueio ceder.
+                $dirChk = $state->direcao_atual;
+                $contChk = $dirChk === 'up' ? (int) $state->contador_subidas : (int) $state->contador_quedas;
+                $allinChk = $contChk >= (int) $configChk->allin_threshold
+                    && ($dirChk === 'down' ? ($tendencia['rsi_4h'] ?? 50) <= 40 : ($tendencia['rsi_4h'] ?? 50) >= 60);
+                $alocChk = $this->calcularAlocacao($saldoBRLChk, $saldoBTCChk, $precoAtual, $configChk, $tendencia);
+
+                if ($side === 'BUY') {
+                    $vendaBloqueada = $alocChk['bloquear_venda_total']
+                        || (($alocChk['bloquear_venda_normal'] || ($tendencia['rsi'] ?? 50) <= (float) $configChk->rsi_minimo_venda)
+                            && !($allinChk && $dirChk === 'up'));
+                    if ($vendaBloqueada) {
+                        Log::info("BotExecutor [{$userId}]: só perna BUY, venda bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
+                        return "Posição unilateral (só BUY): venda bloqueada. Perna mantida.";
+                    }
+                } elseif ($side === 'SELL') {
+                    $compraBloqueada = $alocChk['bloquear_compra_total']
+                        || (($alocChk['bloquear_compra_normal'] || ($tendencia['rsi'] ?? 50) >= (float) $configChk->rsi_maximo_compra)
+                            && !($allinChk && $dirChk === 'down'));
+                    if ($compraBloqueada) {
+                        Log::info("BotExecutor [{$userId}]: só perna SELL, compra bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
+                        return "Posição unilateral (só SELL): compra bloqueada. Perna mantida.";
+                    }
+                }
             }
 
             if (!$this->limparTodasOrdensEAguardar(self::SYMBOL)) {
