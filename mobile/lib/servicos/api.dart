@@ -19,6 +19,7 @@ import 'dart:convert'; // jsonEncode / jsonDecode: converte objetos Dart ↔ JSO
 import 'package:http/http.dart' as http; // pacote para fazer requisições HTTP
 import 'package:shared_preferences/shared_preferences.dart'; // "caderninho" que salva dados no aparelho
 
+import '../modelos/admin.dart';
 import '../modelos/deposito.dart';
 import '../modelos/painel.dart';
 import '../modelos/saque.dart';
@@ -32,6 +33,26 @@ import '../modelos/saque.dart';
 /// Se um dia quiser testar contra o servidor local do Termux, troque
 /// temporariamente por: http://127.0.0.1:8000
 const String kBaseUrl = 'https://botbtc.com.br';
+
+/// Versão DESTE app — precisa bater com o `version:` do pubspec.yaml
+/// (é atualizada junto no mesmo bump). O servidor devolve a versão
+/// mínima aceita em GET /api/versao-app; se esta aqui for menor,
+/// o app só abre a tela de atualização obrigatória.
+const String kAppVersao = '1.3.0';
+
+/// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
+/// componente — comparar como String daria erro ("10" < "9").
+bool versaoMaiorOuIgual(String instalada, String minima) {
+  final a = instalada.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+  final b = minima.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+  final tam = a.length > b.length ? a.length : b.length;
+  for (var i = 0; i < tam; i++) {
+    final x = i < a.length ? a[i] : 0;
+    final y = i < b.length ? b[i] : 0;
+    if (x != y) return x > y;
+  }
+  return true; // iguais → está em dia
+}
 
 /// Chave usada para guardar/ler o token no armazenamento local.
 /// Centralizada aqui para não espalhar a string 'token_api' pelo código
@@ -105,6 +126,25 @@ class ApiService {
   static Future<bool> temTokenSalvo() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_chaveToken) != null;
+  }
+
+  /// Atualização obrigatória: pergunta ao servidor qual a versão mínima
+  /// aceita e a URL do APK novo. Chamada no boot, ANTES do login — por
+  /// isso é pública (sem token).
+  ///
+  /// Devolve null quando o servidor não responde (offline, fora do ar):
+  /// sem resposta NÃO significa desatualizado, e bloquear o app por causa
+  /// de um erro de rede o transformaria em tijolo — então segue normal.
+  static Future<Map<String, dynamic>?> verificarVersaoApp() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$kBaseUrl/api/versao-app'))
+          .timeout(const Duration(seconds: 6));
+      if (resp.statusCode != 200) return null;
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null; // timeout, sem internet, JSON inválido... → abre o app
+    }
   }
 
   /// Lê o token salvo no aparelho e guarda na memória. `??=` significa
@@ -378,6 +418,15 @@ class ApiService {
     );
   }
 
+  /// CANCELA a cobrança pendente (desistiu antes de pagar) — o mesmo
+  /// endpoint do site. Nada foi cobrado; se o pagamento cair depois, o
+  /// servidor reconhece e o depósito entra normalmente. Devolve a
+  /// mensagem pronta do servidor pro SnackBar.
+  static Future<String> cancelarDeposito(String txid) async {
+    final resposta = await _requisicaoAcao('POST', '/api/deposito/cancelar/$txid');
+    return _mensagemDe(resposta);
+  }
+
   /// REGISTRA um depósito no bot como admin (credita cotas + marca
   /// registrado, numa única transaction no servidor).
   static Future<String> registrarDeposito(int id) async {
@@ -413,12 +462,124 @@ class ApiService {
     return _mensagemDe(resposta);
   }
 
+  // ── ADMIN DO BOT: os controles da aba "Mais Informações" do site ─────────
+
+  /// Controles do bot (GET /api/admin/controles): form da config + estado
+  /// (pausa manual, modo subida). Só banco — abre instantâneo.
+  static Future<ControlesAdmin> controlesAdmin() async {
+    final resposta = await _requisicaoAcao('GET', '/api/admin/controles');
+    return ControlesAdmin.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// SALVA a configuração do bot (POST /api/admin/config) — o servidor
+  /// aplica os mesmos clamps do site. Devolve a mensagem pro SnackBar.
+  static Future<String> salvarConfigBot(ConfigBot config) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/admin/config',
+      corpo: config.paraBody(),
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// PAUSA/DESPAUSA o bot manualmente (POST /api/admin/pausar). Pausar
+  /// cancela TODAS as ordens abertas na hora e congela o bot até despausar.
+  static Future<String> pausarBot(bool ativo) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/admin/pausar',
+      corpo: {'ativo': ativo},
+    );
+    final dados = jsonDecode(resposta.body);
+    if (dados is Map && dados['pausado_manual'] == true) {
+      return 'Bot pausado — ${dados['canceladas'] ?? 0} ordem(ns) cancelada(s). '
+          'Ele só volta a operar quando você despausar.';
+    }
+    return 'Bot despausado — o próximo ciclo recria o par no preço atual.';
+  }
+
+  /// LIGA/DESLIGA o modo "preparar subida" (POST /api/admin/modo-subida):
+  /// inibe vendas (só compra) pra segurar alta.
+  static Future<String> alternarModoSubida(bool ativo) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/admin/modo-subida',
+      corpo: {'ativo': ativo},
+    );
+    return jsonDecode(resposta.body)['modo_subida'] == true
+        ? 'Modo "preparar subida" ATIVADO — vendas inibidas até você desligar.'
+        : 'Modo "preparar subida" desligado — o fluxo normal volta no próximo ciclo.';
+  }
+
+  /// ZERA a base de performance (POST /api/admin/performance/reset-base) —
+  /// o próximo ciclo do bot fotografia a base nova com os saldos atuais.
+  static Future<String> resetarPerformance() async {
+    final resposta =
+        await _requisicaoAcao('POST', '/api/admin/performance/reset-base');
+    return _mensagemDe(resposta);
+  }
+
+  /// LIXEIRA (DELETE /api/admin/investimento/{id}): transfere as cotas do
+  /// investidor 1:1 pro admin e remove o registro.
+  static Future<String> esvaziarCotas(int userId) async {
+    final resposta =
+        await _requisicaoAcao('DELETE', '/api/admin/investimento/$userId');
+    return _mensagemDe(resposta);
+  }
+
+  /// Números do bot (GET /api/admin/numeros): lucro 1/7/30d, performance M8,
+  /// transferências diretas e tendência. Pesado (Binance + FIFO) — timeout
+  /// maior que o padrão.
+  static Future<NumerosAdmin> numerosAdmin() async {
+    final resposta = await _requisicaoAcao(
+      'GET',
+      '/api/admin/numeros',
+      timeout: const Duration(seconds: 45),
+    );
+    return NumerosAdmin.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// SIMULAÇÃO (GET /api/admin/simulacao) — o backtest fiel ao bot, igual à
+  /// página /simulacao do site. Busca klines públicas em série: timeout largo.
+  static Future<Simulacao> simulacao({required int dias, required double patrimonio}) async {
+    final resposta = await _requisicaoAcao(
+      'GET',
+      '/api/admin/simulacao?dias=$dias&patrimonio=$patrimonio',
+      timeout: const Duration(seconds: 75),
+    );
+    return Simulacao.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// RELATÓRIO mensal (GET /api/admin/relatorio) — P&L realizado FIFO do
+  /// mês escolhido. [mes]/[ano] null = mês corrente.
+  static Future<RelatorioMensal> relatorioMensal({int? ano, int? mes}) async {
+    final query = (ano == null || mes == null)
+        ? ''
+        : '?ano=$ano&mes=$mes';
+    final resposta = await _requisicaoAcao(
+      'GET',
+      '/api/admin/relatorio$query',
+      timeout: const Duration(seconds: 45),
+    );
+    return RelatorioMensal.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
   /// Executor comum das ações de dinheiro (saques e depósitos): montar a
   /// chamada, anexar o token, aplicar timeout e traduzir erros em ApiException.
+  /// [timeout] estende a espera nas chamadas pesadas (Binance/FIFO/backtest).
   static Future<http.Response> _requisicaoAcao(
     String metodo,
     String caminho, {
     Map<String, dynamic>? corpo,
+    Duration? timeout,
   }) async {
     try {
       await carregarTokenSalvo();
@@ -434,7 +595,7 @@ class ApiService {
 
       final resposta = await http
           .Response.fromStream(await http.Client().send(req))
-          .timeout(kTimeoutApi);
+          .timeout(timeout ?? kTimeoutApi);
 
       if (resposta.statusCode != 200) {
         _lancaErro(resposta);

@@ -20,13 +20,16 @@
 
 import 'dart:async'; // Timer: o "relógio" que dispara a atualização de 1 em 1 min
 
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import '../modelos/painel.dart';
 import '../servicos/api.dart';
+import '../servicos/notificacoes.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_acoes.dart';
+import 'tela_admin.dart';
 import 'tela_login.dart';
 
 class TelaHome extends StatefulWidget {
@@ -40,6 +43,9 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
   // ── Estado dos dados ─────────────────────────────────────────────────────
   // Painel em tela (null = ainda não carregou nada nesta sessão).
   Painel? _painel;
+  // Quem está logado — usado só pro nome no topo (AppBar). null enquanto
+  // não chega (o título mostra "BotBTC" nesse meio-tempo).
+  Usuario? _usuario;
   // true apenas na PRIMEIRA carga (tela ainda vazia → loader central no lugar).
   bool _carregando = true;
   // Último erro (só vira tela de erro se NÃO houver dados antigos para mostrar).
@@ -47,6 +53,11 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
 
   // ── Relógio da atualização automática ────────────────────────────────────
   Timer? _timerAuto;
+
+  // Permissão de push: null = ainda não consultou. Se o usuário NEGOU na
+  // instalação, a Home mostra o lembrete (sem ele, quem nega fica pra
+  // sempre sem os avisos de depósito/saque/liberação).
+  AuthorizationStatus? _permissaoPush;
 
   /// Intervalo entre atualizações automáticas (o site usa 30s; 1 min basta
   /// pra um painel e pesa menos no servidor e na bateria).
@@ -59,7 +70,23 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     // É com isso que o relógio pausa (bateria) e retoma (dados frescos).
     WidgetsBinding.instance.addObserver(this);
     _carregar(); // primeira carga (com loader)
+    _carregarUsuario(); // nome do topo (sem await — não segura o painel)
+    _checarPermissaoPush(); // lembrete pra quem negou as notificações
     _iniciarTimer(); // liga o relógio de 1 minuto
+  }
+
+  /// Consulta a permissão de push UMA vez por sessão — só pra decidir se
+  /// o lembrete aparece. Silencioso por natureza.
+  Future<void> _checarPermissaoPush() async {
+    final status = await statusPermissaoPush();
+    if (mounted) setState(() => _permissaoPush = status);
+  }
+
+  /// Toque em "Ativar agora": re-pede a permissão (o Android mostra o
+  /// diálogo de novo enquanto não estiver "não perguntar de novo").
+  Future<void> _pedirPermissaoPush() async {
+    final status = await pedirPermissaoPush();
+    if (mounted) setState(() => _permissaoPush = status);
   }
 
   @override
@@ -99,6 +126,15 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
   void _pararTimer() {
     _timerAuto?.cancel();
     _timerAuto = null;
+  }
+
+  /// Busca o usuário logado UMA vez por sessão — só pra saudar no topo.
+  /// Se falhar (rede etc.), o título segue "BotBTC": nada crítico aqui.
+  Future<void> _carregarUsuario() async {
+    try {
+      final u = await ApiService.me();
+      if (mounted) setState(() => _usuario = u);
+    } catch (_) {}
   }
 
   /// Busca o painel no servidor.
@@ -174,11 +210,104 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
   /// Abre a tela "Ações" (saques e depósitos em abas). O `await` espera
   /// ela fechar para então atualizar a Home em silêncio — solicitar saque,
   /// registrar depósito, aprovar... tudo isso muda os números daqui embaixo.
-  Future<void> _abrirAcoes() async {
+  /// [aba] leva direto à pendência (0 = saques, 1 = depósitos).
+  Future<void> _abrirAcoes({int aba = 0}) async {
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const TelaAcoes()),
+      MaterialPageRoute(builder: (_) => TelaAcoes(abaInicial: aba)),
     );
     if (mounted) _carregar(silencioso: true);
+  }
+
+  /// Abre a tela "Admin do Bot" (config, pausa, simulação, relatório) —
+  /// só o admin vê o botão. Ao voltar, atualiza: lixeira de cotas e
+  /// exclusão de conta mudam a lista de investidores daqui de baixo.
+  Future<void> _abrirAdmin() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TelaAdmin()),
+    );
+    if (mounted) _carregar(silencioso: true);
+  }
+
+  /// LIXEIRA do investidor (admin): transfere as cotas dele 1:1 pro admin
+  /// e remove o registro — a mesma ação do site na tabela de investidores.
+  Future<void> _esvaziarCotas(Investidor i) async {
+    final prosseguir = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Esvaziar cotas'),
+        content: Text(
+          i.cotas > 0
+              ? 'Transferir ${i.cotas.toStringAsFixed(2)} cotas de ${i.nome} '
+                  '(${moeda(i.valorAtual)}) para a SUA conta e remover o registro?\n\n'
+                  'A fatia dele no bot passa a ser sua. O aporte histórico '
+                  'dele não soma no seu — aparece direto no seu lucro.'
+              : 'Remover o registro de investimento de ${i.nome}?\n\n'
+                  'Ele não possui cotas (registro zerado).',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Voltar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Cores.vermelho),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Esvaziar'),
+          ),
+        ],
+      ),
+    );
+    if (prosseguir != true) return;
+
+    try {
+      final msg = await ApiService.esvaziarCotas(i.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Cores.verde),
+      );
+      _carregar(silencioso: true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.mensagem), backgroundColor: Cores.vermelho),
+      );
+    }
+  }
+
+  /// EXCLUIR a conta de um investidor sem cotas/histórico (admin) — o
+  /// servidor é a autoridade e recusa se houver qualquer dinheiro.
+  Future<void> _excluirConta(Investidor i) async {
+    final prosseguir = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Excluir conta'),
+        content: Text(
+          'Excluir a CONTA de ${i.nome} (${i.email})?\n\n'
+          'Esta ação é irreversível. Só é possível sem cotas, sem depósitos '
+          'no histórico e sem saque pendente.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Voltar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Cores.vermelho),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (prosseguir != true) return;
+
+    try {
+      final msg = await ApiService.removerUsuario(i.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Cores.verde),
+      );
+      _carregar(silencioso: true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.mensagem), backgroundColor: Cores.vermelho),
+      );
+    }
   }
 
   @override
@@ -211,7 +340,11 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('BotBTC'),
+        // Saudação com o primeiro nome de quem logou ("Olá, Everton");
+        // enquanto o me() não responde, o topo segue com a marca.
+        title: Text(_usuario == null
+            ? 'BotBTC'
+            : 'Olá, ${_usuario!.nome.split(' ').first}'),
         actions: [
           // Ações de dinheiro: saques (solicitar/cancelar/aprovar) e
           // depósitos PIX moram na TelaAcoes, em duas abas.
@@ -220,6 +353,14 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
             tooltip: 'Ações',
             onPressed: _abrirAcoes,
           ),
+          // Admin do bot: config, pausa, modo subida, simulação, relatório
+          // (a engrenagem só aparece pro admin — o servidor barra o resto).
+          if (_painel?.ehAdmin ?? false)
+            IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Admin do bot',
+              onPressed: _abrirAdmin,
+            ),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Sair', onPressed: _sair),
         ],
       ),
@@ -240,6 +381,65 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
       // não encostar na borda/gesture bar do aparelho.
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
+        // ── Push desligado: aviso de depósito/saque/liberação não chega.
+        // O pedido original acontece na instalação; este lembrete é o
+        // resgate pra quem negou (ou pro usuário novo do Android 13+).
+        if (_permissaoPush == AuthorizationStatus.denied)
+          Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            color: Cores.dourado.withValues(alpha: 0.10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.notifications_off_outlined,
+                          color: Cores.dourado, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Notificações desligadas',
+                          style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              color: Cores.dourado),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Ative pra receber avisos de depósitos, saques e liberação '
+                    'de ativos.',
+                    style: TextStyle(
+                        fontSize: 12, color: Cores.textoSuave, height: 1.4),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: _pedirPermissaoPush,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Cores.superficie2,
+                      ),
+                      icon: const Icon(Icons.notifications_active_outlined,
+                          size: 16),
+                      label: const Text('Ativar agora', style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // ── ADMIN: pendências no TOPO — só o admin dá continuidade a
+        // saques e depósitos, então eles ficam grudados aqui até resolver.
+        if (painel.ehAdmin &&
+            (painel.saques.isNotEmpty || painel.depositosPendentes.isNotEmpty))
+          _cardAguardandoVoce(painel),
+
         // Aviso quando a Binance não respondeu (tiles zerados).
         if (!painel.tiles.binanceOk)
           const Card(
@@ -260,11 +460,67 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
             ),
           ),
 
-        _tituloSecao('Painel do Bot', Icons.speed),
-        _gridTiles(painel.tiles),
+        _tituloSecao(painel.ehAdmin ? 'Painel do Bot' : 'Meu Investimento', Icons.speed),
+        _gridTiles(painel),
+
+        // ── CLIENTE: card do disponível via PIX (valor atual menos a taxa
+        // de 1% do saque — o mesmo "Disponível via Pix" do site) ─────────
+        if (!painel.ehAdmin)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.currency_exchange, size: 22, color: Cores.verde),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Disponível via PIX',
+                              style: TextStyle(fontSize: 11.5, color: Cores.textoSuave)),
+                          const SizedBox(height: 4),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              moeda((painel.meu?.valorAtual ?? 0) * 0.99),
+                              style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: Cores.verde),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Taxa de 1%\njá descontada',
+                      textAlign: TextAlign.right,
+                      style: TextStyle(fontSize: 10.5, color: Cores.textoSuave, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        // ── CLIENTE: histórico dos próprios saques e depósitos (até 30,
+        // a mesma lista do site via /bot/historico) ──────────────────────
+        if (!painel.ehAdmin) ...[
+          _tituloSecao('Histórico', Icons.history),
+          if (painel.historico.isEmpty)
+            const _CardVazio(texto: 'Nenhum saque ou depósito ainda.')
+          else
+            ...painel.historico.map(_cardLancamento),
+        ],
 
         // Oscilação do grid — o mesmo "salto · ATR dinâmico" do site,
-        // em badge dourado logo abaixo dos tiles.
+        // em badge dourado logo abaixo dos tiles (parâmetro do bot: admin).
+        if (painel.ehAdmin)
         Padding(
           padding: const EdgeInsets.only(top: 2),
           child: Align(
@@ -290,26 +546,116 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
           ),
         ),
 
-        _tituloSecao('Ordens Abertas', Icons.checklist),
-        if (painel.ordens.isEmpty)
-          const _CardVazio(texto: 'Nenhuma ordem aberta.')
-        else
-          ...painel.ordens.map(_cardOrdem),
+        // Ordens abertas, investidores e saques pendentes são visão do
+        // ADMIN (o servidor já manda as listas vazias pro cliente — o if
+        // aqui só evita os títulos/sections "Nenhum..." na tela dele).
+        if (painel.ehAdmin) ...[
+          _tituloSecao('Ordens Abertas', Icons.checklist),
+          if (painel.ordens.isEmpty)
+            const _CardVazio(texto: 'Nenhuma ordem aberta.')
+          else
+            ...painel.ordens.map(_cardOrdem),
 
-        _tituloSecao('Investidores', Icons.group),
-        if (painel.investidores.isEmpty)
-          const _CardVazio(texto: 'Nenhum investidor cadastrado.')
-        else
-          ...painel.investidores.map(_cardInvestidor),
+          _tituloSecao('Investidores', Icons.group),
+          if (painel.investidores.isEmpty)
+            const _CardVazio(texto: 'Nenhum investidor cadastrado.')
+          else
+            ...painel.investidores.map(_cardInvestidor),
 
-        _tituloSecao('Saques Pendentes', Icons.currency_exchange),
-        if (painel.saques.isEmpty)
-          const _CardVazio(texto: 'Nenhum saque pendente.')
-        else
-          ...painel.saques.map(_cardSaque),
+          _tituloSecao('Saques Pendentes', Icons.currency_exchange),
+          if (painel.saques.isEmpty)
+            const _CardVazio(texto: 'Nenhum saque pendente.')
+          else
+            ...painel.saques.map(_cardSaque),
+        ],
 
         const SizedBox(height: 48),
       ],
+    );
+  }
+
+  /// O bloco "Aguardando você" — pendências que só o admin resolve, no
+  /// topo da Home: saques aguardando aprovação e depósitos pagos esperando
+  /// transferência pra Binance + registro. Cada linha já leva à aba certa.
+  Widget _cardAguardandoVoce(Painel painel) {
+    final saques = painel.saques;
+    final depositos = painel.depositosPendentes;
+    final totalSaques =
+        saques.fold(0.0, (s, x) => s + x.valorBruto);
+    final totalDepositos =
+        depositos.fold(0.0, (s, x) => s + x.liquido);
+
+    return Card(
+      margin: EdgeInsets.zero,
+      color: Cores.vermelho.withValues(alpha: 0.08),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.notification_important,
+                    color: Cores.vermelho, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Aguardando você',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Cores.vermelho),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (saques.isNotEmpty)
+              _linhaPendencia(
+                icone: Icons.currency_exchange,
+                texto: saques.length == 1
+                    ? '1 saque aguardando aprovação — ${moeda(totalSaques)}'
+                    : '${saques.length} saques aguardando aprovação — ${moeda(totalSaques)}',
+                aoTocar: () => _abrirAcoes(aba: 0),
+              ),
+            if (depositos.isNotEmpty) ...[
+              if (saques.isNotEmpty) const SizedBox(height: 6),
+              _linhaPendencia(
+                icone: Icons.south_west,
+                texto: depositos.length == 1
+                    ? '1 depósito p/ registrar — ${moeda(totalDepositos)}'
+                    : '${depositos.length} depósitos p/ registrar — ${moeda(totalDepositos)}',
+                aoTocar: () => _abrirAcoes(aba: 1),
+              ),
+            ],
+            const SizedBox(height: 4),
+            const Text(
+              'Só você dá continuidade: depósito = transferir p/ Binance e '
+              'registrar; saque = pagar o PIX e concluir.',
+              style: TextStyle(fontSize: 10.5, color: Cores.textoSuave, height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Uma pendência do bloco "Aguardando você" — botão integral que abre
+  /// a aba correspondente na tela Ações.
+  Widget _linhaPendencia({
+    required IconData icone,
+    required String texto,
+    required VoidCallback aoTocar,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.tonalIcon(
+        onPressed: aoTocar,
+        style: FilledButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          backgroundColor: Cores.superficie2,
+        ),
+        icon: Icon(icone, size: 16, color: Cores.dourado),
+        label: Text(texto, style: const TextStyle(fontSize: 12.5)),
+      ),
     );
   }
 
@@ -327,12 +673,61 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     );
   }
 
-  /// Os 4 tiles em grade 2×2.
+  /// Os tiles do topo.
+  ///
+  /// ADMIN: grade 2×2 — Preço BTC, Saldo BRL, Saldo BTC, Total Geral.
+  /// CLIENTE: também 2×2, mas só com o que é DELE — cotação, valor
+  /// investido, total aportado e lucro. Os saldos do bot nem chegam no
+  /// JSON de não-admin (zerados no controller).
   ///
   /// GridView dentro de ListView precisa de shrinkWrap (calcula a altura
   /// própria em vez de tentar ser infinito) e NeverScrollableScrollPhysics
   /// (o gesto de rolar pertence à lista de fora).
-  Widget _gridTiles(Tiles t) {
+  Widget _gridTiles(Painel painel) {
+    final t = painel.tiles;
+
+    if (!painel.ehAdmin) {
+      final meu = painel.meu;
+      final (seta, positivo) = setaLucro(meu?.lucro ?? 0);
+
+      return GridView.count(
+        crossAxisCount: 2,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 1.45,
+        children: [
+          _tile(
+            rotulo: 'Preço BTC',
+            valor: moeda(t.precoBtc),
+            valorCor: Cores.dourado,
+            icone: Icons.currency_bitcoin,
+            iconeCor: Cores.dourado,
+          ),
+          _tile(
+            rotulo: 'Valor Investido',
+            valor: moeda(meu?.valorAtual ?? 0),
+            valorCor: Cores.verde,
+            icone: Icons.savings_outlined,
+            iconeCor: Cores.verde,
+          ),
+          _tile(
+            rotulo: 'Total Aportado',
+            valor: moeda(meu?.investimentoInicial ?? 0),
+            icone: Icons.payments_outlined,
+          ),
+          _tile(
+            rotulo: 'Lucro',
+            valor: '$seta ${moeda((meu?.lucro ?? 0).abs())}',
+            valorCor: positivo ? Cores.verde : Cores.vermelho,
+            icone: positivo ? Icons.trending_up : Icons.trending_down,
+            iconeCor: positivo ? Cores.verde : Cores.vermelho,
+          ),
+        ],
+      );
+    }
+
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,
@@ -465,7 +860,8 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     );
   }
 
-  /// Card de um investidor: identidade em cima, números embaixo.
+  /// Card de um investidor: identidade em cima, números embaixo — e o menu
+  /// do admin (lixeira de cotas e exclusão de conta) na ponta direita.
   Widget _cardInvestidor(Investidor i) {
     final (seta, positivo) = setaLucro(i.lucro);
     final corLucro = positivo ? Cores.verde : Cores.vermelho;
@@ -496,6 +892,38 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
                   ),
                   child: Text('${i.percentual.toStringAsFixed(2)}%',
                       style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Cores.dourado)),
+                ),
+                // Menu do admin: as ações da tabela de investidores do site.
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, size: 20, color: Cores.textoSuave),
+                  tooltip: 'Ações do investidor',
+                  onSelected: (acao) {
+                    if (acao == 'esvaziar') _esvaziarCotas(i);
+                    if (acao == 'excluir') _excluirConta(i);
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'esvaziar',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.delete_outline, size: 20, color: Cores.vermelho),
+                        title: Text('Esvaziar cotas', style: TextStyle(fontSize: 13)),
+                        subtitle: Text('Transfere p/ você e remove o registro',
+                            style: TextStyle(fontSize: 10.5)),
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'excluir',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.person_remove_outlined, size: 20, color: Cores.vermelho),
+                        title: Text('Excluir conta', style: TextStyle(fontSize: 13)),
+                        subtitle: Text('Só sem cotas nem histórico', style: TextStyle(fontSize: 10.5)),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -582,6 +1010,42 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
                 Expanded(child: _miniInfo('Líquido (Pix)', moeda(s.valorLiquido))),
                 Expanded(child: _miniInfo('Cotas', s.cotas.toStringAsFixed(2))),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Linha do histórico do cliente: depósito (verde, entra) ou saque
+  /// (vermelho, sai), com a data e o status andando (Pendente → Em
+  /// andamento → Pago) — a mesma tabela do site.
+  Widget _cardLancamento(Lancamento h) {
+    final dep = h.ehDeposito;
+    final cor = dep ? Cores.verde : Cores.vermelho;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(dep ? Icons.south_west : Icons.north_east, size: 18, color: cor),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(dep ? 'Depósito' : 'Saque',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text('${h.data} · ${h.statusLabel}',
+                      style: const TextStyle(fontSize: 11, color: Cores.textoSuave)),
+                ],
+              ),
+            ),
+            Text(
+              '${dep ? '+' : '−'} ${moeda(h.valor)}',
+              style: TextStyle(fontWeight: FontWeight.w600, color: cor),
             ),
           ],
         ),

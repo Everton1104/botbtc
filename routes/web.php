@@ -20,7 +20,11 @@ Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name
 
 // Download do app Android — página pública (o APK em /app-botbtc.apk
 // baixa direto); o navbar dos clientes logados aponta pra cá.
-Route::view('/download', 'download')->name('download');
+// Download do app atrás de auth + whatsapp.verified: só cliente com conta
+// (e WhatsApp verificado) baixa o APK — o app usa as mesmas credenciais.
+Route::view('/download', 'download')
+    ->name('download')
+    ->middleware(['auth', 'whatsapp.verified']);
 
 // ── Verificação de WhatsApp ───────────────────────────────────────────────────
 
@@ -110,10 +114,26 @@ Route::get('/bot', function () {
     return view('bot');
 })->middleware(['auth', 'whatsapp.verified']);
 
-Route::get('/binance/getConf', [\App\Http\Controllers\BinanceController::class, 'getConf'])->middleware(['auth', 'whatsapp.verified']);
-Route::get('/binance/getSaldos', [\App\Http\Controllers\BinanceController::class, 'getSaldos'])->middleware(['auth', 'whatsapp.verified']);
+// Dados operacionais da conta Binance (config, saldos, ordens) são do ADMIN —
+// o investidor só vê cotação (getPrecos, público) e o próprio investimento
+// (/bot/valor-atual, calculado por usuário). Guard aqui, além do @if da view,
+// pra nada vazar chamando a URL direto.
+Route::get('/binance/getConf', function (\App\Http\Controllers\BinanceController $b) {
+    if (Auth::id() !== 1) abort(403);
+    return $b->getConf();
+})->middleware(['auth', 'whatsapp.verified']);
+
+Route::get('/binance/getSaldos', function (\App\Http\Controllers\BinanceController $b) {
+    if (Auth::id() !== 1) abort(403);
+    return $b->getSaldos();
+})->middleware(['auth', 'whatsapp.verified']);
+
 Route::get('/binance/getPrecos', [\App\Http\Controllers\BinanceController::class, 'getPrecos'])->middleware(['auth', 'whatsapp.verified']);
-Route::get('/binance/getOrdens', [\App\Http\Controllers\BinanceController::class, 'getOpenOrders'])->middleware(['auth', 'whatsapp.verified']);
+
+Route::get('/binance/getOrdens', function (\App\Http\Controllers\BinanceController $b) {
+    if (Auth::id() !== 1) abort(403);
+    return $b->getOpenOrders();
+})->middleware(['auth', 'whatsapp.verified']);
 Route::post('/binance/buy', [\App\Http\Controllers\BinanceController::class, 'buy'])->middleware(['auth', 'whatsapp.verified']);
 Route::post('/binance/sell', [\App\Http\Controllers\BinanceController::class, 'sell'])->middleware(['auth', 'whatsapp.verified']);
 
@@ -179,11 +199,21 @@ Route::get('/bot/valor-atual', function (BinanceController $binance) {
     $invest = BotInvestment::where('user_id', $userId)->first();
 
     if (!$invest || $invest->cotas <= 0) {
+        // Sem investimento ainda assim o cliente merece ver a COTAÇÃO (é o
+        // único tile do topo dele) — busca o preço mesmo no retorno curto.
+        $precoSemInvest = 0.0;
+        try {
+            $precoSemInvest = (float) $binance->getPrecoBTC();
+        } catch (\Throwable) {
+            // Binance fora: cotação fica 0 e o tile mostra "—", sem quebrar
+        }
+
         return [
             'mensagem'             => 'Nenhum investimento encontrado.',
             'investimento_inicial' => 0,
             'cotas'                => 0,
             'percentual'           => 0,
+            'preco_btc'            => $precoSemInvest,
             'valor_atual'          => 0,
             'lucro'                => 0,
         ];
@@ -217,22 +247,41 @@ Route::get('/bot/valor-atual', function (BinanceController $binance) {
     ];
 })->middleware(['auth', 'whatsapp.verified']);
 
+// Histórico financeiro do próprio usuário (até 30 lançamentos): depósitos
+// pagos + saques com estado real. Mesma fonte do app (historicoDe do
+// PainelApiController) — uma lógica só servindo site e mobile.
+Route::get('/bot/historico', function () {
+    return response()->json(
+        app(\App\Http\Controllers\Api\PainelApiController::class)->historicoDe((int) Auth::id())
+    );
+})->middleware(['auth', 'whatsapp.verified']);
 
+
+// Lixeira da tabela de investidores: TRANSFERE as cotas do usuário para a
+// conta do admin (1:1) e remove o registro — a regra vive no BotAdminService
+// (o app mobile chama o mesmo método pela Api/AdminApiController).
 Route::delete('/bot/remover-investimento/{userId}', function ($userId) {
 
     if (Auth::id() !== 1) {
         return ['mensagem' => 'Apenas o administrador pode remover investimentos.'];
     }
 
-    $invest = BotInvestment::where('user_id', $userId)->first();
+    $r = app(\App\Services\BotAdminService::class)->esvaziarCotas((int) $userId, (int) Auth::id());
 
-    if (!$invest) {
-        return ['mensagem' => 'Nenhum investimento encontrado para este usuário.'];
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+})->middleware(['auth', 'whatsapp.verified']);
+
+// Excluir a CONTA (login) — a mesma regra/transaction do app mobile
+// (UsuarioService): só contas sem cotas, sem depósitos no histórico e sem
+// saque pendente; nunca a própria conta do admin.
+Route::delete('/bot/remover-conta/{userId}', function ($userId, \App\Services\UsuarioService $usuarios) {
+    if (Auth::id() !== 1) {
+        return response()->json(['mensagem' => 'Apenas o administrador pode excluir contas.'], 403);
     }
 
-    $invest->delete();
+    $r = $usuarios->remover((int) $userId, (int) Auth::id());
 
-    return ['mensagem' => 'Investimento removido com sucesso!'];
+    return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
 })->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/binance/historico', function (Request $req) {
@@ -341,94 +390,14 @@ Route::get('/bot/config', function () {
     return BotConfig::atual();
 })->middleware(['auth', 'whatsapp.verified']);
 
+// Configuração do bot — clamps e regras no BotAdminService (o app mobile
+// salva pela MESMA lógica em POST /api/admin/config).
 Route::post('/bot/config', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
 
-    $cfg = BotConfig::atual();
+    $r = app(\App\Services\BotAdminService::class)->salvarConfig($req->all());
 
-    // Salto não é mais configurável — sempre dinâmico (ATR). Mantém forçado em 0.
-    $cfg->salto = 0;
-
-    foreach (['nivel1','nivel2','nivel3','nivel4','nivel5','nivel6','nivel7','nivel_final'] as $n) {
-        if ($req->has($n)) {
-            $cfg->$n = max(0.01, min(1.0, (float) $req->input($n)));
-        }
-    }
-
-    if ($req->has('allin_threshold')) {
-        $cfg->allin_threshold = max(5, min(50, (int) $req->input('allin_threshold')));
-    }
-
-    if ($req->has('min_notional')) {
-        // Valor mínimo por ordem (BRL) — evita dust trades. Piso de 10 pra não
-        // ferir o mínimo operacional da Binance; teto de 500 pra não travar o bot.
-        $cfg->min_notional = max(10.0, min(500.0, (float) $req->input('min_notional')));
-    }
-
-    // ── Otimização M1-M9 — mesmos campos/defaults da migration, com clamps ──
-    $floats = [
-        // M1 — alocação: zonas/pisos RELATIVOS ao alvo (pts de distância).
-        // target_btc_pct é tratado abaixo (BRL derivado, nunca divergem).
-        'delta_alerta_pct'     => [10.0, 45.0],
-        'delta_bloqueio_pct'   => [15.0, 50.0],
-        // M2/M3 — pisos por tendência forte (pts abaixo do alvo)
-        'piso_alta_delta_pct'  => [5.0, 30.0],
-        'piso_baixa_delta_pct' => [5.0, 30.0],
-        // Dimensionamento de ordens — piso por ordem (% do saldo) e guard de
-        // meta do rebalanceamento (% do alvo; 0 desliga cada um)
-        'piso_ordem_pct'            => [0.0, 50.0],
-        'guard_meta_pct'            => [0.0, 100.0],
-        // M5 — spread mínimo do grid (0,1% a 5%) e taxa total (0 a 2%)
-        'spread_minimo_pct'         => [0.1, 5.0],
-        'taxa_total_pct'            => [0.0, 2.0],
-        // M7 — extremos de RSI 1h
-        'rsi_maximo_compra'         => [50.0, 100.0],
-        'rsi_minimo_venda'          => [0.0, 50.0],
-        // M9 — histerese da adaptação do grid
-        'adapt_histerese_pct'       => [5.0, 90.0],
-    ];
-    foreach ($floats as $campo => [$min, $max]) {
-        if ($req->has($campo)) {
-            $cfg->$campo = max($min, min($max, (float) $req->input($campo)));
-        }
-    }
-
-    $ints = [
-        'adapt_cooldown_min'     => [0, 1440],
-        'adapt_persistencia_min' => [0, 720],
-    ];
-    foreach ($ints as $campo => [$min, $max]) {
-        if ($req->has($campo)) {
-            $cfg->$campo = max($min, min($max, (int) $req->input($campo)));
-        }
-    }
-
-    // ── M1 — alvo de alocação: BTC é a única fonte (5–95; 0% de um lado mata
-    // o grid — a perna nasce abaixo do min_notional e nunca é criada) e BRL é
-    // sempre derivado (100−BTC), os dois lados nunca divergem no banco.
-    if ($req->has('target_btc_pct') || $req->has('target_brl_pct')) {
-        $btc = $req->has('target_btc_pct')
-            ? (float) $req->input('target_btc_pct')
-            : 100.0 - (float) $req->input('target_brl_pct');
-        $btc = max(5.0, min(95.0, $btc));
-        $cfg->target_btc_pct = $btc;
-        $cfg->target_brl_pct = 100.0 - $btc;
-    }
-
-    // Bloqueio precisa ser mais largo que o alerta (senão a zona morta some).
-    if ($cfg->delta_bloqueio_pct <= $cfg->delta_alerta_pct) {
-        $cfg->delta_bloqueio_pct = min(50.0, $cfg->delta_alerta_pct + 5.0);
-    }
-
-    foreach (['modo_subida_auto_habilitado', 'camadas_atr_habilitado'] as $campo) {
-        if ($req->has($campo)) {
-            $cfg->$campo = (bool) $req->input($campo);
-        }
-    }
-
-    $cfg->save();
-
-    return ['mensagem' => 'Configuração salva com sucesso!'];
+    return ['mensagem' => $r['mensagem']];
 })->middleware(['auth', 'whatsapp.verified']);
 
 // M8 — painel de performance persistido: base fotografada vs. agora, série
@@ -449,20 +418,12 @@ Route::get('/bot/performance', function (BinanceController $binance) {
     return response()->json(app(\App\Services\PnlService::class)->performance($brl, $btc, $preco));
 })->middleware(['auth', 'whatsapp.verified']);
 
-// M8 — zera a base de performance; o próximo ciclo do bot fotografia de novo
-// (útil após saque/depósito grande que distorce a variação desde a base).
+// M8 — zera a base de performance (regra no BotAdminService; o app chama o
+// mesmo método em POST /api/admin/performance/reset-base).
 Route::post('/bot/performance/reset-base', function () {
     if (Auth::id() !== 1) return response()->json(['mensagem' => 'Acesso negado.'], 403);
 
-    $cfg = BotConfig::atual();
-    $cfg->patrimonio_inicial = null;
-    $cfg->btc_inicial        = null;
-    $cfg->brl_inicial        = null;
-    $cfg->base_iniciada_em   = null;
-    $cfg->save();
-
-    \Illuminate\Support\Facades\Log::info('BotConfig: base de performance resetada pelo admin — será re-fotografada no próximo ciclo.');
-    return ['mensagem' => 'Base resetada. O próximo ciclo do bot fotografia a nova base.'];
+    return response()->json(['mensagem' => app(\App\Services\BotAdminService::class)->resetarBasePerformance()['mensagem']]);
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Gatilho manual do admin: modo "preparar subida" (inibe vendas, só compra).
@@ -471,44 +432,24 @@ Route::post('/bot/performance/reset-base', function () {
 Route::post('/bot/modo-subida', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
     $req->validate(['ativo' => 'required|boolean']);
-    $state = \App\Models\BotState::where('id_user', Auth::id())->first();
-    if (!$state) return response()->json(['erro' => 'Estado não encontrado'], 404);
-    $state->modo_subida = (bool) $req->input('ativo');
-    $state->save();
-    \Log::info('BotExecutor: modo "preparar subida" ' . ($state->modo_subida ? 'ATIVADO' : 'DESATIVADO') . ' pelo admin.');
-    return ['modo_subida' => $state->modo_subida];
+
+    $r = app(\App\Services\BotAdminService::class)->alternarModoSubida((int) Auth::id(), (bool) $req->input('ativo'));
+
+    if (!$r['ok']) return response()->json(['erro' => $r['erro']], $r['code'] ?? 500);
+    return ['modo_subida' => $r['modo_subida']];
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Pausa manual do admin: cancela TODAS as ordens abertas na hora e congela o
-// bot — não recria o par até o admin despausar. Sem isso, cancelar ordens na
-// mão pra operar seria desfeito pelo próximo ciclo (que vê 0 ordens e recria).
-// O guard no BotExecutor::executar repete o cancelamento como defesa (rate
-// limit aqui não pode deixar ordem órfã rodando durante a pausa).
+// bot — não recria o par até o admin despausar. A regra vive no
+// BotAdminService (o app chama o mesmo método em POST /api/admin/pausar).
 Route::post('/bot/pausar', function (Request $req, \App\Http\Controllers\BinanceController $binance) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
     $req->validate(['ativo' => 'required|boolean']);
-    $state = \App\Models\BotState::where('id_user', Auth::id())->first();
-    if (!$state) return response()->json(['erro' => 'Estado não encontrado'], 404);
 
-    $pausando = (bool) $req->input('ativo');
-    $state->pausado_manual = $pausando;
-    $state->save();
+    $r = app(\App\Services\BotAdminService::class)->pausarManual((int) Auth::id(), (bool) $req->input('ativo'), $binance);
 
-    // Cancela na hora (feedback imediato pro painel); ao despausar NÃO cria
-    // nada aqui — o próximo ciclo do bot recria o par no preço atual.
-    $canceladas = 0;
-    if ($pausando) {
-        $open = $binance->getOpenOrders('BTCBRL');
-        if (is_array($open)) {
-            foreach ($open as $ordem) {
-                $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
-                $canceladas++;
-            }
-        }
-    }
-
-    \Log::info('BotExecutor: pausa manual ' . ($pausando ? 'ATIVADA' : 'DESATIVADA') . " pelo admin. {$canceladas} ordem(ns) cancelada(s) na hora.");
-    return ['pausado_manual' => $pausando, 'canceladas' => $canceladas];
+    if (!$r['ok']) return response()->json(['erro' => $r['erro']], $r['code'] ?? 500);
+    return ['pausado_manual' => $r['pausado_manual'], 'canceladas' => $r['canceladas']];
 })->middleware(['auth', 'whatsapp.verified']);
 
 Route::get('/admin/usuarios', function () {
@@ -657,6 +598,8 @@ Route::get('/pix/retorno/{pagamento}', [\App\Http\Controllers\PixController::cla
 Route::middleware(['auth', 'whatsapp.verified'])->group(function () {
     Route::post('/pix/criar', [\App\Http\Controllers\PixController::class, 'criar']);
     Route::get('/pix/status/{txid}', [\App\Http\Controllers\PixController::class, 'status']);
+    // Desistir da cobrança antes de pagar (o mesmo endpoint serve o app)
+    Route::post('/pix/cancelar/{txid}', [\App\Http\Controllers\PixController::class, 'cancelar']);
 });
 
 // Admin: listar depósitos PIX confirmados (pagos + estornados)

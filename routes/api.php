@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AdminApiController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DepositoApiController;
 use App\Http\Controllers\Api\PainelApiController;
@@ -16,6 +17,19 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,
 // Recuperação de senha: o MESMO e-mail do site (link abre a página de troca
 // no navegador). Pública — quem pede é justamente quem não consegue logar.
 Route::post('/esqueci-senha', [AuthController::class, 'esqueciSenha'])->middleware('throttle:5,1');
+
+// ── Atualização obrigatória do app Android ────────────────────────────────────
+// Chamada no boot do app (sem token): versão instalada < versao_minima → o app
+// só abre a tela de atualização. Se o servidor não responder, o app abre
+// normalmente (bloquear por falta de resposta travaria o app offline).
+Route::get('/versao-app', function () {
+    return response()->json([
+        'versao_minima' => (string) config('app.versao_minima_app', '1.0.0'),
+        // APP_URL fixo (não o host da requisição): o app recebe sempre o
+        // endereço certo do APK, de qualquer forma que a rota seja chamada.
+        'url_apk'       => rtrim((string) config('app.url'), '/') . '/app-botbtc.apk',
+    ]);
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
@@ -56,6 +70,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // admin (registrar/estornar) seguem no DepositoService.
     Route::post('/deposito/criar', [PixController::class, 'criar']);
     Route::get('/deposito/status/{txid}', [PixController::class, 'status']);
+    // Desistir da cobrança antes de pagar — o mesmo método do site
+    Route::post('/deposito/cancelar/{txid}', [PixController::class, 'cancelar']);
     Route::get('/deposito/tela', [DepositoApiController::class, 'tela']);
     // Aprovação do admin — registrar credita cotas + marca registrado
     // numa única transaction; estornar devolve via MercadoPago.
@@ -66,4 +82,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ── Contas: remoção de conta sem cotas — só admin ───────────────────
     Route::post('/usuario/{id}/remover', [UsuarioApiController::class, 'remover']);
+
+    // ── Admin do bot: os controles da aba "Mais Informações" do site ────
+    // A regra vive no BotAdminService/PnlService/BacktestService — os MESMOS
+    // métodos que as rotas do web.php usam; só muda a autenticação (token
+    // Sanctum em vez de sessão). Todos os métodos guardam admin (id 1).
+    Route::get('/admin/controles', [AdminApiController::class, 'controles']);
+    Route::post('/admin/config', [AdminApiController::class, 'salvarConfig']);
+    Route::post('/admin/pausar', [AdminApiController::class, 'pausar']);
+    Route::post('/admin/modo-subida', [AdminApiController::class, 'modoSubida']);
+    Route::post('/admin/performance/reset-base', [AdminApiController::class, 'resetarPerformance']);
+    // Lixeira da tabela de investidores: cotas → admin, registro removido
+    Route::delete('/admin/investimento/{userId}', [AdminApiController::class, 'esvaziarCotas']);
+    // Números: lucro 1/7/30d, performance M8, transferências e tendência
+    Route::get('/admin/numeros', [AdminApiController::class, 'numeros']);
+    // Backtest fiel ao BotExecutor (o mesmo /simulacao/run do site)
+    Route::get('/admin/simulacao', [AdminApiController::class, 'simulacao']);
+    // P&L realizado mensal (FIFO) — o mesmo /bot/relatorio/mensal
+    Route::get('/admin/relatorio', [AdminApiController::class, 'relatorio']);
 });
