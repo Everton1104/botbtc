@@ -45,6 +45,10 @@ class InfinitePayService
                     'description' => mb_substr((string) $pagamento->descricao, 0, 100) ?: 'Depósito BotBTC',
                 ],
             ],
+            // Somente PIX (sem cartão). A API aceita o campo sem reclamar, mas
+            // não o valida (engole valores inválidos) — se um dia passar a
+            // honrar, os links já nascem restritos; hoje é pedido de boa-fé.
+            'payment_methods' => ['pix'],
             // order_nsu ancora o webhook + payment_check ao pagamento (usa o txid).
             'order_nsu' => (string) $pagamento->txid,
             // redirect_url valida pelo `ref` (= txid): a InfinitePay ADICIONA query

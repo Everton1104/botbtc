@@ -301,6 +301,27 @@ class WhatsappController extends Controller
     // (App\Services\FcmService), após verificação ponta a ponta. O WhatsApp
     // continua responsável pela verificação de número e códigos de usuário.
 
+    /**
+     * AVISO AO ADMIN — btc_saque / btc_deposito DE VOLTA (2026-10-30): só o
+     * admin dá continuidade a saques e depósitos, então ele volta a receber
+     * WhatsApp no número cadastrado (users.whatsapp do id 1) ALÉM do push —
+     * o app pode estar sem internet/desinstalado; o WhatsApp é o plano B.
+     * Silencioso por natureza: falha aqui nunca derruba o evento principal.
+     */
+    public static function avisarAdmin(string $msg): void
+    {
+        try {
+            $admin = \App\Models\User::find(\App\Services\FcmService::ADMIN_ID);
+            if (!$admin?->whatsapp) {
+                return; // sem número cadastrado — o push FCM segue sozinho
+            }
+
+            self::enviarMsg(config('services.whatsapp.phone_id'), $admin->whatsapp, $msg);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('WhatsApp aviso admin falhou: ' . $e->getMessage());
+        }
+    }
+
     public static function enviarModelo($business_phone_number_id, $numero, $templateName, $language = 'pt_BR')
     {
         try {

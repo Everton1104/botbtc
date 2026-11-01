@@ -133,9 +133,16 @@ class SaqueService
             return ['ok' => false, 'code' => 422, 'mensagem' => $e->getMessage()];
         }
 
-        // Push pro app (o WhatsApp de btc_saque foi aposentado — ver FcmService).
-        // A chave vai no corpo: o admin paga o PIX lendo a notificação.
+        // O admin é o único que dá continuidade a um saque — aviso em DOIS
+        // canais: push no app (chave PIX no corpo, ele paga lendo a notificação)
+        // e WhatsApp (plano B: o app pode estar offline/desinstalado).
         FcmService::notificarSaque($valorBruto, $user->name, $user->chave_pix);
+        \App\Http\Controllers\WhatsappController::avisarAdmin(
+            "💸 *Saque solicitado*\n"
+            . 'R$ ' . number_format($valorBruto, 2, ',', '.') . " por {$user->name}\n"
+            . "Abra o app para aprovar.\n"
+            . ($user->chave_pix ? "PIX: {$user->chave_pix}" : '')
+        );
 
         return [
             'ok'          => true,

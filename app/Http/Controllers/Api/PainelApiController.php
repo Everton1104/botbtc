@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\BinanceController;
 use App\Http\Controllers\Controller;
 use App\Models\BotInvestment;
+use App\Models\BotWithdrawalRequest;
+use App\Models\PixPayment;
 use App\Services\BotExecutor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -119,19 +121,126 @@ class PainelApiController extends Controller
         // ── Seções do admin ───────────────────────────────────────────────
         $investidores = [];
         $saques = [];
+        $depositosPendentes = [];
+        $meu = null;
+        $ehAdmin = $user->id === 1;
 
-        if ($user->id === 1) {
+        if ($ehAdmin) {
             // Saldos e preço já buscados lá em cima — nada de segunda viagem.
             $investidores = $this->investidores($saldos, $btcbrl);
             $saques = $this->saquesPendentes();
+            // Depósitos pagos aguardando REGISTRO no bot — alimentam o bloco
+            // "Aguardando você" no topo do app (só o admin dá continuidade).
+            // Reuso da lista do admin (adminDepositos) sem nova query de
+            // apoio: o que importa aqui é quem não foi registrado ainda.
+            $depositosPendentes = collect(app(\App\Services\DepositoService::class)->adminDepositos())
+                ->filter(fn($d) => !$d['registrado'] && !$d['estornado'])
+                ->values()->all();
+        } else {
+            // Saldos da Binance, ordens e total do bot são do ADMIN — o
+            // cliente não vê nem no app nem no payload da API. Ele recebe
+            // a cotação (preco_btc) e o próprio investimento ("meu").
+            $tiles['brl']             = ['total' => 0.0, 'livre' => 0.0, 'bloqueado' => 0.0];
+            $tiles['btc_brl']         = ['total' => 0.0, 'livre' => 0.0, 'bloqueado' => 0.0];
+            $tiles['bnb_brl']         = 0.0;
+            $tiles['total_geral_brl'] = 0.0;
+            $ordens = [];
+            $meu = $this->meuInvestimento($user->id, $saldos, $btcbrl);
         }
 
         return response()->json([
+            'eh_admin'     => $ehAdmin,
             'tiles'        => $tiles,
             'ordens'       => $ordens,
             'investidores' => $investidores,
             'saques'       => $saques,
+            'depositos_pendentes' => $depositosPendentes,
+            'meu'          => $meu,
+            'historico'    => $this->historicoDe($user->id),
         ]);
+    }
+
+    /**
+     * Histórico financeiro do PRÓPRIO usuário — app (via /api/painel) e
+     * site do cliente (via GET /bot/historico, que chama este método):
+     * depósitos confirmados + saques com estado real, mesclados do mais
+     * recente pro mais antigo, no máximo 30 lançamentos. Depósito mostra o
+     * LÍQUIDO (o que entrou de fato no bot); saque mostra o valor bruto do
+     * pedido com o status andando (pendente → em andamento → pago).
+     */
+    public function historicoDe(int $userId): array
+    {
+        $dep = PixPayment::where('user_id', $userId)
+            ->where('status', 'pago')
+            ->orderByDesc('pago_em')
+            ->limit(30)
+            ->get(['valor', 'valor_liquido', 'pago_em']);
+
+        $saq = BotWithdrawalRequest::where('user_id', $userId)
+            ->whereIn('status', ['pendente', 'em_andamento', 'pago'])
+            ->orderByDesc('created_at')
+            ->limit(30)
+            ->get(['valor_bruto', 'status', 'created_at']);
+
+        $itens = $dep->map(fn($d) => [
+            'tipo'   => 'deposito',
+            'valor'  => (float) ($d->valor_liquido ?? $d->valor),
+            'data'   => $d->pago_em?->format('d/m/Y H:i') ?? '—',
+            '_ordem' => $d->pago_em?->getTimestamp() ?? 0,
+            'status' => 'pago',
+        ])->merge(
+            $saq->map(fn($s) => [
+                'tipo'   => 'saque',
+                'valor'  => (float) $s->valor_bruto,
+                'data'   => $s->created_at?->format('d/m/Y H:i') ?? '—',
+                '_ordem' => $s->created_at?->getTimestamp() ?? 0,
+                'status' => (string) $s->status,
+            ])
+        );
+
+        return $itens->sortByDesc('_ordem')->take(30)->values()
+            ->map(fn($i) => [
+                'tipo'   => $i['tipo'],
+                'valor'  => round($i['valor'], 2),
+                'data'   => $i['data'],
+                'status' => $i['status'],
+            ])
+            ->all();
+    }
+
+    /**
+     * O investimento do PRÓPRIO usuário que pediu o painel (não-admin):
+     * a mesma conta de investidores() — cotas × preço da cota do patrimônio
+     * atual (BRL + BTC) — mas só a linha dele.
+     */
+    private function meuInvestimento(int $userId, ?array $saldos, float $preco): array
+    {
+        $saldos = $saldos ?? [];
+
+        // ?? []: a Binance pode devolver corpo sem "balances" (erro/limite),
+        // e o painel do cliente não pode quebrar por causa disso.
+        $brl = collect($saldos['balances'] ?? [])->firstWhere('asset', 'BRL') ?? ['free' => 0, 'locked' => 0];
+        $btc = collect($saldos['balances'] ?? [])->firstWhere('asset', 'BTC') ?? ['free' => 0, 'locked' => 0];
+
+        $patrimonioAtual = ((float) $brl['free'] + (float) $brl['locked'])
+                         + (((float) $btc['free'] + (float) $btc['locked']) * $preco);
+
+        $totalCotas   = (float) BotInvestment::sum('cotas');
+        $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
+
+        $inv = BotInvestment::where('user_id', $userId)->first();
+        if (!$inv || $inv->cotas <= 0) {
+            return ['investimento_inicial' => 0, 'cotas' => 0, 'valor_atual' => 0, 'lucro' => 0];
+        }
+
+        $valorAtual = $inv->cotas * $precoPorCota;
+
+        return [
+            'investimento_inicial' => $inv->investimento_inicial,
+            'cotas'                => round((float) $inv->cotas, 4),
+            'valor_atual'          => $valorAtual,
+            'lucro'                => $valorAtual - $inv->investimento_inicial,
+        ];
     }
 
     /**

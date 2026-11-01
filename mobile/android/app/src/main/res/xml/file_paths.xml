@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Roots que o FileProvider expõe: o cache interno do app é onde o APK
+     de atualização é salvo (ver servicos/atualizacao.dart). -->
+<paths>
+    <cache-path name="atualizacao" path="." />
+</paths>

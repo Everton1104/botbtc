@@ -15,11 +15,16 @@ import 'aba_deposito.dart';
 import 'aba_saque.dart';
 
 class TelaAcoes extends StatelessWidget {
-  const TelaAcoes({super.key});
+  /// Aba que abre primeiro (0 = Saques, 1 = Depósitos). O bloco "Aguardando
+  /// você" da Home usa pra levar o admin DIRETO à pendência dele.
+  final int abaInicial;
+
+  const TelaAcoes({super.key, this.abaInicial = 0});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
+      initialIndex: abaInicial,
       length: 2,
       child: Scaffold(
         appBar: AppBar(

@@ -6,6 +6,8 @@
 //   • Acompanhar o pagamento: polling de 5s no status + countdown na tela
 //     (o webhook do gateway confirma lá e o push "💰 Depósito confirmado"
 //     chega junto); reabrir o app retoma a cobrança em aberto (pendente_atual)
+//   • CANCELAR a cobrança antes de pagar — descarta o QR/link e volta ao
+//     card de gerar (se o pagamento cair depois, o servidor reconhece)
 //   • Histórico de depósitos pagos (com selo "aguardando registro")
 //
 // Para o admin (id 1):
@@ -62,6 +64,7 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
   bool _fazendoManual = false;
 
   bool _criando = false; // gerando cobrança
+  bool _cancelando = false; // cancelando a cobrança em exibição
   int? _processandoId; // depósito admin com ação em curso (registrar/estornar)
   int? _removendoId; // conta com remoção em curso (seção "Contas")
   bool _retomando = false; // liberando o bot da pausa do depósito manual
@@ -305,7 +308,12 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
               backgroundColor: Cores.verde),
         );
         await _carregar(); // histórico e fila do admin atualizam
-      } else if (st.status == 'expirado' || st.status == 'cancelado') {
+      } else if (st.status == 'cancelado') {
+        // Cancelou no outro canal (site) — descarta e volta a oferecer
+        // o card de gerar; nada foi cobrado.
+        _pararTimerPix();
+        setState(() => _cobranca = null);
+      } else if (st.status == 'expirado') {
         _expirar();
       }
     } on ApiException catch (e) {
@@ -326,6 +334,56 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
     _pararTimerPix();
     if (!mounted) return;
     setState(() => _estado = _EstadoPix.expirado);
+  }
+
+  /// CANCELAR o depósito (desistiu antes de pagar) — descarta a cobrança
+  /// e volta pro card de gerar. Nada foi cobrado; se o pagamento cair
+  /// depois (o link segue vivo no gateway), o servidor reconhece e o
+  /// depósito entra normalmente.
+  Future<void> _cancelarPix() async {
+    final c = _cobranca;
+    if (c == null || _cancelando) return;
+
+    final prosseguir = await _confirmar(
+      titulo: 'Cancelar depósito',
+      mensagem: 'Cancelar a cobrança de ${moeda(c.valor)}?\n\n'
+          'Nada foi cobrado — a cobrança é descartada e você pode gerar '
+          'outra quando quiser.\n\nSe você já pagou, não cancele: o '
+          'pagamento é reconhecido automaticamente.',
+      botao: 'Cancelar depósito',
+    );
+    if (prosseguir != true) return;
+
+    setState(() => _cancelando = true);
+    try {
+      final mensagem = await ApiService.cancelarDeposito(c.txid);
+      if (!mounted) return;
+      _pararTimerPix();
+      setState(() => _cobranca = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagem), backgroundColor: Cores.verde),
+      );
+    } on ApiException catch (e) {
+      if (e.status == 401) {
+        _tokenInvalido();
+        return;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.mensagem), backgroundColor: Cores.vermelho),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Não foi possível cancelar. Tente novamente.'),
+              backgroundColor: Cores.vermelho),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _cancelando = false);
+    }
   }
 
   /// Botão "Gerar novo PIX" do card de expirado.
@@ -516,11 +574,21 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
   }
 
   /// REGISTRAR depósito no bot (admin) — crédito de cotas.
+  ///
+  /// O diálogo é o passo a passo: o cálculo das cotas assume que o valor
+  /// do PIX JÁ foi transferido da InfinitePay para a Binance (subtrai o
+  /// valor do patrimônio lido). Registrar antes da transferência emite
+  /// cotas a mais e dilui o preço da cota de todos.
   Future<void> _registrar(DepositoAdmin d) async {
     final prosseguir = await _confirmar(
       titulo: 'Registrar depósito no Bot',
       mensagem: 'Registrar ${moeda(d.liquido)} de ${d.userName}?\n\n'
-          'As cotas serão creditadas proporcionalmente ao patrimônio atual.',
+          'Passo a passo antes de confirmar:\n'
+          '1. Transferir ${moeda(d.liquido)} da InfinitePay para a '
+          'Binance (depósito BRL);\n'
+          '2. Conferir que o valor já está no saldo da Binance;\n'
+          '3. Confirmar — as cotas são creditadas pelo patrimônio atual.\n\n'
+          'O valor já está na Binance?',
       botao: 'Registrar',
     );
     if (prosseguir != true) return;
@@ -768,6 +836,14 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
               'O valor entra no bot após o registro do administrador.',
               style: TextStyle(fontSize: 11, color: Cores.textoSuave),
             ),
+            const SizedBox(height: 4),
+            // Quem processa o pagamento (nome vem do servidor): o cliente
+            // sabe ANTES de gerar que sai do app/site pra um checkout externo.
+            Text(
+              'O pagamento é feito no site da ${_dados?.gatewayNome ?? 'operadora de PIX'} '
+              '— um site externo e seguro.',
+              style: const TextStyle(fontSize: 11, color: Cores.textoSuave),
+            ),
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
@@ -926,6 +1002,27 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
                   style: TextStyle(fontSize: 10.5, color: Cores.textoSuave),
                 ),
               ],
+              const SizedBox(height: 10),
+              // Desistir antes de pagar — descarta a cobrança (nada foi
+              // cobrado) e volta ao card de gerar.
+              SizedBox(
+                width: double.infinity,
+                child: _cancelando
+                    ? const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : TextButton.icon(
+                        onPressed: _cancelarPix,
+                        style:
+                            TextButton.styleFrom(foregroundColor: Cores.vermelho),
+                        icon: const Icon(Icons.cancel_outlined, size: 18),
+                        label: const Text('Cancelar depósito'),
+                      ),
+              ),
             ] else if (_estado == _EstadoPix.pago) ...[
               const SizedBox(height: 12),
               Row(
@@ -1179,6 +1276,13 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
                 Expanded(child: _miniInfo('Líquido (cotas)', moeda(d.liquido))),
                 Expanded(child: _miniInfo('Método', d.metodo)),
               ],
+            ),
+            const SizedBox(height: 6),
+            // Lembrete fixo do ritual (o diálogo ao registrar detalha os
+            // passos): cotas só depois do valor estar na Binance.
+            const Text(
+              'Registre só DEPOIS de transferir o valor para a Binance.',
+              style: TextStyle(fontSize: 10.5, color: Cores.dourado),
             ),
             const SizedBox(height: 10),
             Row(

@@ -122,6 +122,30 @@ Future<void> sincronizarToken() async {
   }
 }
 
+/// Status ATUAL da permissão (a Home consulta pra decidir se mostra o
+/// lembrete "ative as notificações" pra quem negou na instalação).
+Future<AuthorizationStatus> statusPermissaoPush() async {
+  try {
+    final s = await FirebaseMessaging.instance.getNotificationSettings();
+    return s.authorizationStatus;
+  } catch (_) {
+    // Firebase indisponível: não incomoda o usuário com lembrete
+    return AuthorizationStatus.authorized;
+  }
+}
+
+/// Re-pede a permissão (toque no lembrete da Home). Enquanto o usuário não
+/// tiver marcado "não perguntar de novo", o Android mostra o diálogo de novo.
+/// Depois disso, só ativando manualmente nas configurações do aparelho.
+Future<AuthorizationStatus> pedirPermissaoPush() async {
+  try {
+    final s = await FirebaseMessaging.instance.requestPermission();
+    return s.authorizationStatus;
+  } catch (_) {
+    return AuthorizationStatus.denied;
+  }
+}
+
 /// Pega o token FCM e envia ao Laravel.
 Future<void> _registrarToken(FirebaseMessaging mensageiro) async {
   final token = await mensageiro.getToken();

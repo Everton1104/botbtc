@@ -1,111 +1,82 @@
 @extends('layouts.app')
 
 @section('content')
-<div class="container">
-    <div class="row justify-content-center">
-        <div class="col-md-8">
-            <div class="card">
-                <div class="card-header">{{ __('Register') }}</div>
+<div class="container" style="max-width: 420px; margin-top: 60px;">
 
-                <div class="card-body">
-                    <form method="POST" action="{{ route('register') }}" id="register-form">
-                        @csrf
+    <div class="text-center mb-4">
+        <div style="font-size: 2.5rem; color: var(--gold); margin-bottom: 10px;">
+            <i class="fa-brands fa-bitcoin"></i>
+        </div>
+        <h5 class="fw-bold mb-1">BotBTC</h5>
+        <p class="text-muted" style="font-size: .82rem;">Crie sua conta para começar a investir</p>
+    </div>
 
-                        {{-- token gerado pelo reCAPTCHA Enterprise --}}
-                        <input type="hidden" name="g-recaptcha-response" id="g-recaptcha-response-field">
+    <div class="card">
+        <div class="card-body p-4">
+            <form method="POST" action="{{ route('register') }}">
+                @csrf
 
-                        <div class="row mb-3">
-                            <label for="name" class="col-md-4 col-form-label text-md-end">{{ __('Name') }}</label>
-
-                            <div class="col-md-6">
-                                <input id="name" type="text" class="form-control @error('name') is-invalid @enderror" name="name" value="{{ old('name') }}" required autocomplete="name" autofocus>
-
-                                @error('name')
-                                    <span class="invalid-feedback" role="alert">
-                                        <strong>{{ $message }}</strong>
-                                    </span>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <div class="row mb-3">
-                            <label for="whatsapp" class="col-md-4 col-form-label text-md-end">WhatsApp</label>
-
-                            <div class="col-md-6">
-                                <input id="whatsapp" type="tel" class="form-control @error('whatsapp') is-invalid @enderror" name="whatsapp" value="{{ old('whatsapp') }}" placeholder="Ex: 11987654321 (sem código do país)" required autocomplete="tel">
-
-                                @error('whatsapp')
-                                    <span class="invalid-feedback" role="alert">
-                                        <strong>{{ $message }}</strong>
-                                    </span>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <div class="row mb-3">
-                            <label for="email" class="col-md-4 col-form-label text-md-end">{{ __('Email Address') }}</label>
-
-                            <div class="col-md-6">
-                                <input id="email" type="email" class="form-control @error('email') is-invalid @enderror" name="email" value="{{ old('email') }}" required autocomplete="email">
-
-                                @error('email')
-                                    <span class="invalid-feedback" role="alert">
-                                        <strong>{{ $message }}</strong>
-                                    </span>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <div class="row mb-3">
-                            <label for="password" class="col-md-4 col-form-label text-md-end">{{ __('Password') }}</label>
-
-                            <div class="col-md-6">
-                                <input id="password" type="password" class="form-control @error('password') is-invalid @enderror" name="password" required autocomplete="new-password">
-
-                                @error('password')
-                                    <span class="invalid-feedback" role="alert">
-                                        <strong>{{ $message }}</strong>
-                                    </span>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <div class="row mb-3">
-                            <label for="password-confirm" class="col-md-4 col-form-label text-md-end">{{ __('Confirm Password') }}</label>
-
-                            <div class="col-md-6">
-                                <input id="password-confirm" type="password" class="form-control" name="password_confirmation" required autocomplete="new-password">
-                            </div>
-                        </div>
-
-                        <div class="row mb-0">
-                            <div class="col-md-6 offset-md-4">
-                                <button class="g-recaptcha btn btn-primary"
-                                    data-sitekey="{{ env('RECAPTCHA_SITE_KEY') }}"
-                                    data-callback="onRecaptchaSubmit"
-                                    data-action="submit">
-                                    {{ __('Register') }}
-                                </button>
-
-                                @error('g-recaptcha-response')
-                                    <span class="text-danger d-block mt-2">
-                                        <strong>{{ $message }}</strong>
-                                    </span>
-                                @enderror
-                            </div>
-                        </div>
-                    </form>
+                <div class="mb-3">
+                    <label for="name" class="form-label">Nome completo</label>
+                    <input id="name" type="text"
+                           class="form-control @error('name') is-invalid @enderror"
+                           name="name" value="{{ old('name') }}"
+                           placeholder="Seu nome" required autofocus autocomplete="name">
+                    @error('name')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
                 </div>
+
+                <div class="mb-3">
+                    <label for="whatsapp" class="form-label">WhatsApp</label>
+                    <input id="whatsapp" type="tel"
+                           class="form-control @error('whatsapp') is-invalid @enderror"
+                           name="whatsapp" value="{{ old('whatsapp') }}"
+                           placeholder="(11) 98765-4321" required autocomplete="tel">
+                    <div class="form-text" style="color:#fff;">Enviaremos um código de 6 dígitos para verificar seu número.</div>
+                    @error('whatsapp')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
+                </div>
+
+                <div class="mb-3">
+                    <label for="email" class="form-label">E-mail</label>
+                    <input id="email" type="email"
+                           class="form-control @error('email') is-invalid @enderror"
+                           name="email" value="{{ old('email') }}"
+                           placeholder="seu@email.com" required autocomplete="email">
+                    @error('email')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
+                </div>
+
+                <div class="mb-3">
+                    <label for="password" class="form-label">Senha</label>
+                    <input id="password" type="password"
+                           class="form-control @error('password') is-invalid @enderror"
+                           name="password" placeholder="Mínimo de 8 caracteres" required autocomplete="new-password">
+                    @error('password')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
+                </div>
+
+                <div class="mb-4">
+                    <label for="password-confirm" class="form-label">Confirmar senha</label>
+                    <input id="password-confirm" type="password"
+                           class="form-control @error('password') is-invalid @enderror"
+                           name="password_confirmation" placeholder="Repita a senha" required autocomplete="new-password">
+                </div>
+
+                <button type="submit" class="btn btn-gold w-100">
+                    <i class="fa-solid fa-user-plus me-2"></i>Criar conta
+                </button>
+            </form>
+
+            <div class="text-center mt-3" style="font-size: .85rem;">
+                Já tem uma conta? <a href="{{ route('login') }}">Entrar</a>
             </div>
         </div>
     </div>
-</div>
 
-<script src="https://www.google.com/recaptcha/enterprise.js?render={{ env('RECAPTCHA_SITE_KEY') }}" async defer></script>
-<script>
-    function onRecaptchaSubmit(token) {
-        document.getElementById('g-recaptcha-response-field').value = token;
-        document.getElementById('register-form').submit();
-    }
-</script>
+</div>
 @endsection

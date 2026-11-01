@@ -19,8 +19,13 @@ void main() {
     // inicializamos com valores fake para simular o "caderninho" vazio.
     SharedPreferences.setMockInitialValues({});
 
-    // Monta o app inteiro.
-    await tester.pumpWidget(const BotbtcApp(iniciaLogado: false));
+    // Monta o app inteiro (em dia de versão → login direto).
+    await tester.pumpWidget(const BotbtcApp(
+      iniciaLogado: false,
+      precisaAtualizar: false,
+      versaoMinima: '',
+      urlApk: '',
+    ));
 
     // Um frame normal; o segundo com duração extra dá tempo de animações
     // iniciais terminarem (pumpAndSettle esperaria a rede — não queremos).

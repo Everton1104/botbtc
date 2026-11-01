@@ -1,6 +1,7 @@
-{{-- Página pública de download do app Android. --}}
-{{-- O link do navbar (logados) aponta pra cá, mas /download abre pra    --}}
-{{-- qualquer um — e o APK (/app-botbtc.apk) baixa direto também.        --}}
+{{-- Página de download do app Android — exige login e WhatsApp          --}}
+{{-- verificado (middleware da rota): só cliente com conta baixa o APK.  --}}
+{{-- O arquivo em si (/app-botbtc.apk) continua público como estático;   --}}
+{{-- a barreira do negócio está no botão, não no arquivo.                --}}
 @extends('layouts.app')
 
 @section('content')
@@ -82,8 +83,12 @@
             com notificações em tempo real das operações.
         </p>
 
+        {{-- Sem aviso de "crie sua conta": esta página agora exige login (e --}}
+        {{-- WhatsApp verificado) no middleware da rota — quem chega aqui já  --}}
+        {{-- tem conta.                                                       --}}
+
         @if(file_exists($apk))
-            <a class="dl-btn" href="/app-botbtc.apk" download>
+            <a class="dl-btn" href="/app-botbtc.apk?v={{ filemtime($apk) }}" download>
                 <i class="fa-solid fa-download me-2"></i>Baixar APK
             </a>
 

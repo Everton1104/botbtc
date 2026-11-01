@@ -17,6 +17,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Versão mínima do app Android
+    |--------------------------------------------------------------------------
+    |
+    | O app consulta GET /api/versao-app ao abrir: se a versão instalada
+    | for menor que esta, ele só libera depois de baixar o APK novo
+    | (atualização por cima — login e dados ficam mantidos). Subir o
+    | valor no .env (VERSAO_MINIMA_APP) força todos os aparelhos.
+    |
+    */
+
+    'versao_minima_app' => env('VERSAO_MINIMA_APP', '1.0.0'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Environment
     |--------------------------------------------------------------------------
     |

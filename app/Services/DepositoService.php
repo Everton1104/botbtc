@@ -196,6 +196,9 @@ class DepositoService
             $pix->update($updates);
         });
 
+        // Cliente fica sabendo na hora que as cotas entraram ("liberei").
+        \App\Services\FcmService::notificarAtivosLiberados($pix->user_id, $valor);
+
         return ['ok' => true, 'mensagem' => 'Depósito registrado no bot — cotas creditadas!'];
     }
 
@@ -243,6 +246,9 @@ class DepositoService
 
             $this->creditarCotasNaTransacao($userId, $valor, $patrimonio, valorJaNoPatrimonio: false);
         });
+
+        // Cliente fica sabendo na hora que as cotas entraram ("liberei").
+        \App\Services\FcmService::notificarAtivosLiberados($userId, $valor);
 
         // Bot parado enquanto o dinheiro não chega na Binance (o cálculo de
         // posição ficaria inconsistente com as cotas novas). Teto de 7 dias
@@ -299,6 +305,10 @@ class DepositoService
         }
 
         DB::transaction(fn () => $this->creditarCotasNaTransacao($userId, $valor, $patrimonio));
+
+        // Cliente fica sabendo na hora que as cotas entraram ("liberei") —
+        // é aqui que o fluxo do SITE credita (investir-manual + flag depois).
+        \App\Services\FcmService::notificarAtivosLiberados($userId, $valor);
 
         return ['ok' => true, 'mensagem' => 'Investimento realizado com sucesso!'];
     }

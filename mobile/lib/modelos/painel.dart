@@ -21,20 +21,38 @@
 
 /// Painel completo: uma resposta = um objeto deste.
 class Painel {
+  final bool ehAdmin; // false = cliente: sem saldos/ordens do bot (vem zerado)
   final Tiles tiles;
   final List<Ordem> ordens;
   final List<Investidor> investidores;
   final List<SaquePendente> saques;
 
+  /// Investimento do PRÓPRIO usuário quando ele não é admin (null pro
+  /// admin) — é o que o cliente vê no lugar dos saldos do bot.
+  final MeuInvestimento? meu;
+
+  /// Últimos saques + depósitos do próprio usuário (até 30) — a mesma
+  /// lista que o site busca em /bot/historico.
+  final List<Lancamento> historico;
+
+  /// Depósitos pagos aguardando REGISTRO no bot (só admin) — o bloco
+  /// "Aguardando você" no topo da Home.
+  final List<DepositoARegistrar> depositosPendentes;
+
   const Painel({
+    required this.ehAdmin,
     required this.tiles,
     required this.ordens,
     required this.investidores,
     required this.saques,
+    this.meu,
+    this.historico = const [],
+    this.depositosPendentes = const [],
   });
 
   factory Painel.fromJson(Map<String, dynamic> json) {
     return Painel(
+      ehAdmin: json['eh_admin'] as bool? ?? false,
       tiles: Tiles.fromJson(json['tiles'] as Map<String, dynamic>),
       ordens: (json['ordens'] as List? ?? [])
           .map((o) => Ordem.fromJson(o as Map<String, dynamic>))
@@ -45,8 +63,41 @@ class Painel {
       saques: (json['saques'] as List? ?? [])
           .map((s) => SaquePendente.fromJson(s as Map<String, dynamic>))
           .toList(),
+      meu: json['meu'] == null
+          ? null
+          : MeuInvestimento.fromJson(json['meu'] as Map<String, dynamic>),
+      historico: (json['historico'] as List? ?? [])
+          .map((h) => Lancamento.fromJson(h as Map<String, dynamic>))
+          .toList(),
+      depositosPendentes: (json['depositos_pendentes'] as List? ?? [])
+          .map((d) => DepositoARegistrar.fromJson(d as Map<String, dynamic>))
+          .toList(),
     );
   }
+}
+
+/// O investimento de quem está vendo o painel (não-admin): a cotação do
+/// BTC + isto é TUDO que o cliente vê — saldos do bot são do admin.
+class MeuInvestimento {
+  final double investimentoInicial;
+  final double cotas;
+  final double valorAtual; // cotas × preço da cota (patrimônio atual)
+  final double lucro; // valorAtual − aportado
+
+  const MeuInvestimento({
+    required this.investimentoInicial,
+    required this.cotas,
+    required this.valorAtual,
+    required this.lucro,
+  });
+
+  factory MeuInvestimento.fromJson(Map<String, dynamic> json) =>
+      MeuInvestimento(
+        investimentoInicial: _num(json['investimento_inicial']),
+        cotas: _num(json['cotas']),
+        valorAtual: _num(json['valor_atual']),
+        lucro: _num(json['lucro']),
+      );
 }
 
 /// Os quatro "stat tiles" do topo (preço, saldos, total).
@@ -181,6 +232,64 @@ class SaquePendente {
         cotas: _num(json['cotas']),
         emAndamento: json['em_andamento'] as bool? ?? false,
         criadoEm: json['criado_em'] as String,
+      );
+}
+
+/// Um depósito pago aguardando o REGISTRO do admin no bot — linha do
+/// bloco "Aguardando você" no topo da Home (o mesmo registro que na aba
+/// Depósitos, resumido).
+class DepositoARegistrar {
+  final int id;
+  final String userName;
+  final double liquido; // valor que virará cotas (líquido do gateway)
+  final String pagoEm; // "30/10/2026 15:36"
+
+  const DepositoARegistrar({
+    required this.id,
+    required this.userName,
+    required this.liquido,
+    required this.pagoEm,
+  });
+
+  factory DepositoARegistrar.fromJson(Map<String, dynamic> json) =>
+      DepositoARegistrar(
+        id: json['id'] as int,
+        userName: json['user_name'] as String? ?? '—',
+        liquido: _num(json['liquido']),
+        pagoEm: json['pago_em'] as String? ?? '—',
+      );
+}
+
+/// Uma linha do histórico do próprio usuário: depósito pago ou saque
+/// (com o estado real andando: pendente → em andamento → pago).
+class Lancamento {
+  final String tipo; // "deposito" | "saque"
+  final double valor; // depósito: líquido creditado; saque: valor do pedido
+  final String data; // já formatado pelo servidor: "30/10/2026 14:05"
+  final String status; // "pago" | "pendente" | "em_andamento"
+
+  const Lancamento({
+    required this.tipo,
+    required this.valor,
+    required this.data,
+    required this.status,
+  });
+
+  bool get ehDeposito => tipo == 'deposito';
+
+  /// Rótulo do status — o raw ("em_andamento") nunca aparece pro usuário.
+  String get statusLabel => switch (status) {
+        'pago' => 'Pago',
+        'pendente' => 'Pendente',
+        'em_andamento' => 'Em andamento',
+        _ => status,
+      };
+
+  factory Lancamento.fromJson(Map<String, dynamic> json) => Lancamento(
+        tipo: json['tipo'] as String,
+        valor: _num(json['valor']),
+        data: json['data'] as String,
+        status: json['status'] as String,
       );
 }
 

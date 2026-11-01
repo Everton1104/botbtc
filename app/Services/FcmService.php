@@ -29,15 +29,26 @@ class FcmService
     private const CANAL = 'botbtc_aviso';
 
     /**
-     * Envia uma notificação para TODOS os celulares cadastrados.
+     * O admin (id 1): único que dá continuidade a saques e depósitos, e o
+     * único que deveria ver trades do bot e movimentações de investidores.
+     */
+    public const ADMIN_ID = 1;
+
+    /**
+     * Envia uma notificação: $userId null = todos; com id, só os aparelhos do usuário.
      * (App de uso pessoal: na prática há um aparelho — o do Everton.)
      *
      * @return bool true se ao menos um envio foi aceito pelo Firebase
      */
-    public static function enviar(string $titulo, string $corpo, array $dados = []): bool
+    public static function enviar(string $titulo, string $corpo, array $dados = [], ?int $userId = null): bool
     {
         try {
-            $tokens = FcmToken::pluck('token');
+            // $userId com dono = SÓ os aparelhos dele. Trades, saques e
+            // depósitos são visão do admin: com clientes usando o app,
+            // mandar pra todos vaza nome e valor de investidores.
+            $tokens = $userId === null
+                ? FcmToken::pluck('token')
+                : FcmToken::where('user_id', $userId)->pluck('token');
             if ($tokens->isEmpty()) {
                 return false; // ninguém instalhou o app ainda — silêncio
             }
@@ -130,7 +141,7 @@ class FcmService
             $corpo .= " · {$execucoes} execuções";
         }
 
-        self::enviar($titulo, $corpo, ['tipo' => 'trade', 'lado' => $lado]);
+        self::enviar($titulo, $corpo, ['tipo' => 'trade', 'lado' => $lado], self::ADMIN_ID);
     }
 
     /**
@@ -144,7 +155,7 @@ class FcmService
             $corpo .= " · PIX: {$chavePix}";
         }
 
-        self::enviar('💸 Saque solicitado', $corpo, ['tipo' => 'saque']);
+        self::enviar('💸 Saque solicitado', $corpo, ['tipo' => 'saque'], self::ADMIN_ID);
     }
 
     /**
@@ -155,8 +166,38 @@ class FcmService
     {
         self::enviar(
             '💰 Depósito confirmado',
-            'R$ ' . number_format($valor, 2, ',', '.') . " por {$nome}",
+            'R$ ' . number_format($valor, 2, ',', '.') . " por {$nome} — transfira para a Binance e registre",
             ['tipo' => 'deposito'],
+            self::ADMIN_ID,
+        );
+    }
+
+    /**
+     * Push pro PRÓPRIO cliente: PIX confirmado. Ele fica sabendo na hora e
+     * entende que o próximo passo é do admin (liberar os ativos) — menos
+     * "cadê meu dinheiro?" no WhatsApp do admin.
+     */
+    public static function notificarDepositoCliente(int $userId, float $valor): void
+    {
+        self::enviar(
+            '🪙 Depósito confirmado',
+            'R$ ' . number_format($valor, 2, ',', '.') . ' recebido! Em breve o administrador vai liberar os ativos na sua conta.',
+            ['tipo' => 'deposito_cliente'],
+            $userId,
+        );
+    }
+
+    /**
+     * Push pro cliente quando o admin REGISTRA o depósito: as cotas já estão
+     * na conta dele — é o "liberei" chegando sem o admin precisar avisar.
+     */
+    public static function notificarAtivosLiberados(int $userId, float $valor): void
+    {
+        self::enviar(
+            '✅ Ativos liberados',
+            'Seu depósito de R$ ' . number_format($valor, 2, ',', '.') . ' virou cotas no bot — já está no seu painel.',
+            ['tipo' => 'ativos_liberados'],
+            $userId,
         );
     }
 

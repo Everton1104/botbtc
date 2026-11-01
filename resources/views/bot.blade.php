@@ -84,6 +84,9 @@
             </div>
         </div>
 
+        {{-- Saldos do bot: SÓ ADMIN. O investidor vê apenas a cotação e o    --}}
+        {{-- próprio painel (mais abaixo, preenchido pelo /bot/valor-atual).  --}}
+        @if(auth()->user()->id == 1)
         <div class="col-6 col-md-3">
             <div class="stat-tile">
                 <div class="d-flex justify-content-between align-items-start">
@@ -124,11 +127,13 @@
                 </div>
             </div>
         </div>
+        @endif
 
     </div>
 
-    {{-- Ordens abertas --}}
+    {{-- Ordens abertas: do bot — só admin --}}
     </div>{{-- /sec-inicio Painel do Bot --}}
+    @if(auth()->user()->id == 1)
     <div class="sec-inicio">
     <div class="section-title mt-2"><i class="fa-solid fa-list-check me-2"></i>Ordens Abertas</div>
     <div class="card mb-4">
@@ -154,6 +159,7 @@
 
     {{-- Oscilação --}}
     </div>{{-- /sec-inicio Ordens Abertas --}}
+    @endif
     <div class="sec-maisinfo">
     <div class="d-flex align-items-center gap-2 flex-wrap mb-4">
         <span class="text-muted" style="font-size:.82rem;">Oscilação (salto · ATR dinâmico):</span>
@@ -278,6 +284,16 @@
     <div class="section-title mt-2">
         <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
         <span id="badge-depositos-pix" class="ms-2" style="display:none;background:#32bcad;color:#000;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;"></span>
+    </div>
+    {{-- Passo a passo do registro: o cálculo das cotas assume que o valor
+         do PIX JÁ foi transferido da InfinitePay para a Binance — registrar
+         antes emite cotas a mais (dilui o preço da cota de todos). --}}
+    <div class="mb-2" style="background:rgba(240,185,11,.07);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.6rem 1rem;font-size:.76rem;color:#f0b90b;line-height:1.6;">
+        <i class="fa-solid fa-list-check me-1"></i>
+        <strong>Passo a passo do registro:</strong>
+        1) Transfira o valor do PIX da InfinitePay para a <strong>Binance</strong> (depósito BRL).
+        2) Com o valor já no saldo da Binance, clique <strong>Registrar</strong> — as cotas do cliente são liberadas na hora.
+        <span style="opacity:.85;">Registrar antes da transferência emite cotas a mais e dilui o preço da cota de todos.</span>
     </div>
     <div class="card mb-4">
         <div class="card-body p-0">
@@ -781,8 +797,32 @@
 
     </div>
 
-    {{-- Preço BTC atual --}}
+    {{-- Histórico do próprio usuário: últimos saques e depósitos --}}
     </div>{{-- /Meu Investimento --}}
+    <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
+    <div class="section-title mt-2"><i class="fa-solid fa-clock-rotate-left me-2"></i>Histórico — Saques e Depósitos</div>
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Data</th>
+                            <th class="text-end">Valor</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-historico-cliente">
+                        <tr><td colspan="4" class="text-center text-muted py-4">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    </div>{{-- /Histórico --}}
+
+    {{-- Preço BTC atual --}}
     <div class="@if(auth()->user()->id == 1)sec-maisinfo @endif">
     <div class="row g-3 mb-5">
 
@@ -924,7 +964,11 @@
                         </div>
                         <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
                             O bot receberá: <strong id="deposito-liquido-preview" class="text-green">—</strong>
-                            <span style="color:var(--muted);"> (após 1% de taxa do Mercado Pago)</span>
+                            @if(config('services.infinitepay.gateway_padrao', 'mercadopago') === 'infinitepay')
+                                <span style="color:var(--muted);"> (PIX pela InfinitePay — sem taxa, o valor entra integral)</span>
+                            @else
+                                <span style="color:var(--muted);"> (após 1% de taxa do Mercado Pago)</span>
+                            @endif
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
@@ -933,6 +977,13 @@
                         </button>
                     </div>
                 </div>
+                @if(config('services.infinitepay.gateway_padrao', 'mercadopago') === 'infinitepay')
+                    <div class="mt-3" style="background:rgba(108,92,231,.08);border:1px solid rgba(108,92,231,.25);border-radius:10px;padding:.65rem 1rem;font-size:.78rem;color:#a29bfe;line-height:1.6;">
+                        <i class="fa-solid fa-shield-halved me-1"></i>
+                        O pagamento é feito através do <strong>site da InfinitePay</strong> — um site
+                        externo e seguro. Ao gerar a cobrança você será redirecionado para concluir o PIX.
+                    </div>
+                @endif
             </div>
         </div>
     </div>
@@ -1067,7 +1118,7 @@
                         <span id="pix-timer" style="font-size:.95rem;font-weight:600;color:#f0b90b;letter-spacing:.04em;">30:00</span>
                     </div>
 
-                    {{-- QR Code (Mercado Pago) --}}
+                    {{-- QR Code (gateways com PIX direto: Mercado Pago/PagBank) --}}
                     <div id="pix-qr-block" class="text-center mb-3">
                         <img id="pix-qr-img" src="" alt="QR Code PIX"
                              style="width:220px;height:220px;border-radius:12px;border:3px solid #32bcad;background:#fff;padding:6px;">
@@ -1080,8 +1131,11 @@
                            style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);color:#fff;font-weight:700;border:none;padding:.9rem;">
                             <i class="fa-solid fa-lock me-2"></i>Pagar na InfinitePay
                         </a>
-                        <div class="mt-2" style="font-size:.75rem;color:var(--muted);">
-                            Após pagar, esta janela confirma automaticamente.
+                        <div class="mt-2" style="font-size:.75rem;color:var(--muted);line-height:1.6;">
+                            <i class="fa-solid fa-shield-halved me-1" style="color:#00d68f;"></i>
+                            O pagamento é feito no <strong>site da InfinitePay</strong>, um site
+                            externo e seguro. Você será redirecionado para concluir o PIX.
+                            <br>Após pagar, esta janela confirma automaticamente.
                         </div>
                     </div>
 
@@ -1113,11 +1167,23 @@
                         <br>A confirmação é <strong>automática</strong>.
                     </div>
 
-                    {{-- Aviso de não reembolso da taxa --}}
+                    {{-- Aviso de não reembolso da taxa (texto conforme gateway ativo) --}}
                     <div class="mt-2" style="background:rgba(255,71,87,.06);border:1px solid rgba(255,71,87,.2);border-radius:10px;padding:.65rem 1rem;font-size:.76rem;color:#ff4757;line-height:1.5;">
                         <i class="fa-solid fa-triangle-exclamation me-1"></i>
                         <strong>Arrependimento:</strong> em caso de cancelamento, o estorno pode ser solicitado ao administrador.
-                        O valor integral será devolvido, porém a <strong>taxa de 1% do Mercado Pago não é reembolsável</strong>.
+                        @if(config('services.infinitepay.gateway_padrao', 'mercadopago') === 'infinitepay')
+                            O valor integral será devolvido <strong>(PIX não tem taxa de gateway)</strong>.
+                        @else
+                            O valor integral será devolvido, porém a <strong>taxa de 1% do Mercado Pago não é reembolsável</strong>.
+                        @endif
+                    </div>
+
+                    {{-- Cancelar a cobrança (antes de pagar) --}}
+                    <div class="text-center mt-3">
+                        <a href="#" onclick="cancelarPix(); return false;"
+                           style="font-size:.8rem;color:#ff4757;text-decoration:none;">
+                            <i class="fa-solid fa-ban me-1"></i>Cancelar este depósito
+                        </a>
                     </div>
                 </div>
 
@@ -1153,6 +1219,23 @@
                     </div>
                     <div class="mt-2 fw-600" style="color:var(--text);">Cobrança expirada</div>
                     <div class="mt-1" style="font-size:.85rem;color:var(--muted);">Gere um novo QR code para tentar novamente.</div>
+                    <button class="btn btn-sm mt-3 px-4" data-bs-dismiss="modal"
+                            style="background:var(--surface2);border:1px solid var(--border);color:var(--text);">
+                        Fechar
+                    </button>
+                </div>
+
+                {{-- Estado: cancelado pelo cliente --}}
+                <div id="pix-cancelado" style="display:none;" class="text-center py-3">
+                    <div style="font-size:3rem;color:#ff4757;">
+                        <i class="fa-solid fa-ban"></i>
+                    </div>
+                    <div class="mt-2 fw-600" style="color:var(--text);">Depósito cancelado</div>
+                    <div class="mt-1" style="font-size:.85rem;color:var(--muted);">Nada foi cobrado. Você pode gerar um novo depósito quando quiser.</div>
+                    <div class="mt-2" style="font-size:.78rem;color:var(--muted);line-height:1.5;">
+                        <i class="fa-solid fa-circle-info me-1"></i>
+                        Se você já tinha pago, não se preocupe: o pagamento é reconhecido automaticamente.
+                    </div>
                     <button class="btn btn-sm mt-3 px-4" data-bs-dismiss="modal"
                             style="background:var(--surface2);border:1px solid var(--border);color:var(--text);">
                         Fechar
@@ -1444,9 +1527,12 @@ function carregarTabela() {
                     <td><span class="badge-gold">${u.percentual}%</span></td>
                     <td class="fw-600">R$ ${fmt(u.valor_atual)}</td>
                     <td class="${lucroClass} fw-600">${lucroIcon} R$ ${fmt(u.lucro)}</td>
-                    <td>
-                        <button class="btn btn-danger btn-sm px-3" onclick="remover(${u.id})" title="Remover investimento">
+                    <td class="text-nowrap">
+                        <button class="btn btn-danger btn-sm px-3 me-1" onclick="removerInvestimento(${u.id}, ${u.cotas}, '${(u.name ?? '').replace(/'/g, "\\'")}')" title="Transferir cotas para o admin e remover o registro">
                             <i class="fa-solid fa-trash"></i>
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm px-3" onclick="removerConta(${u.id}, '${(u.name ?? '').replace(/'/g, "\\'")}')" title="Excluir conta (apaga o login — só sem cotas/histórico)">
+                            <i class="fa-solid fa-user-slash"></i>
                         </button>
                     </td>
                 </tr>
@@ -1532,8 +1618,10 @@ function carregarOrdens() {    axios.get('/binance/getOrdens').then(res => {
             '<tr><td colspan="5" class="text-center text-muted py-3">Erro ao carregar ordens.</td></tr>';
     });
 }
+@if(auth()->user()->id == 1)
 carregarOrdens();
 setInterval(carregarOrdens, 10000);
+@endif
 
 // ── Config do bot ──────────────────────────────────────
 function carregarConfig() {
@@ -1665,11 +1753,27 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         });
 });
 
-function remover(userId) {
-    if (!confirm("⚠️ ATENÇÃO: Isso remove o registro do banco sem calcular cotas.\nUse apenas para corrigir cadastros errados.\n\nConfirma a remoção?")) return;
+// Lixeira: com cotas, TRANSFERE a fatia do investidor pro admin e remove o
+// registro; sem cotas, é a correção de cadastro de sempre (só apaga).
+function removerInvestimento(userId, cotas, nome) {
+    const temCotas = parseFloat(cotas) > 0;
+    const msg = temCotas
+        ? `TRANSFERIR COTAS DE ${nome.toUpperCase()} PARA VOCÊ (admin)?\n\nAs ${cotas} cotas dele passam para a sua conta e o registro dele é removido.\nO valor correspondente passa a fazer parte da sua participação no bot.`
+        : `⚠️ ATENÇÃO: remove o registro de ${nome} (não há cotas para transferir).\nUse apenas para corrigir cadastros errados.`;
+    if (!confirm(`${msg}\n\nConfirma?`)) return;
     axios.delete(`/bot/remover-investimento/${userId}`)
         .then(res => { alert(res.data.mensagem); carregarTabela(); })
-        .catch(() => alert("Erro ao remover investimento."));
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao remover investimento.'));
+}
+
+// Excluir a CONTA (login) — botão user-slash da tabela. Os guards ficam no
+// servidor (UsuarioService): sem cotas, sem depósitos, sem saque pendente e
+// nunca a conta do próprio admin — os motivos voltam prontos pra exibir.
+function removerConta(userId, nome) {
+    if (!confirm(`Excluir a CONTA de ${nome}?\n\nIsso apaga o login e o acesso ao site/app (o investidor sai da lista).\nSó é permitido para contas SEM cotas, SEM depósitos no histórico e SEM saque pendente.\n\nConfirma?`)) return;
+    axios.delete(`/bot/remover-conta/${userId}`)
+        .then(res => { alert(res.data.mensagem); carregarTabela(); })
+        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao excluir a conta.'));
 }
 
 // ── Saques pendentes (admin) ───────────────────────────
@@ -1804,9 +1908,14 @@ carregarDepositosPix();
 setInterval(carregarDepositosPix, 15000);
 
 function estornarDeposito(pixId, txid, valor, nome) {
-    const fmtVal = fmt(valor);
-    const taxa   = fmt(valor * 0.01);
-    if (!confirm(`Estornar R$ ${fmtVal} para ${nome}?\n\n⚠️ O cliente recebe 100% de volta.\nA taxa de R$ ${taxa} (1% do Mercado Pago) NÃO será recuperada.\n\nConfirmar estorno?`)) return;
+    const fmtVal  = fmt(valor);
+    const taxa    = fmt(valor * 0.01);
+    // Depósitos InfinitePay já têm valor_liquido computado por método (PIX
+    // sem taxa); o aviso de taxa fixa só faz sentido no legado Mercado Pago.
+    const msgTaxa = ehInfinitePay
+        ? 'A taxa do gateway (se houver) NÃO será recuperada.'
+        : `A taxa de R$ ${taxa} (1% do Mercado Pago) NÃO será recuperada.`;
+    if (!confirm(`Estornar R$ ${fmtVal} para ${nome}?\n\n⚠️ O cliente recebe 100% de volta.\n${msgTaxa}\n\nConfirmar estorno?`)) return;
 
     axios.post(`/admin/depositos-pix/${pixId}/estornar`)
         .then(res => { alert(res.data.mensagem); carregarDepositosPix(); })
@@ -1815,7 +1924,14 @@ function estornarDeposito(pixId, txid, valor, nome) {
 
 function registrarDepositoNoBot(pixId, userId, valorLiquido, nome) {
     const fmtVal = fmt(valorLiquido);
-    if (!confirm(`Registrar depósito de R$ ${fmtVal} para ${nome} no Bot?\n\nIsso adicionará cotas proporcional ao patrimônio atual.`)) return;
+    // O confirm É o passo a passo: o cálculo das cotas subtrai este valor
+    // do patrimônio lido na Binance (o dinheiro deve estar lá ANTES).
+    if (!confirm(`Registrar depósito de R$ ${fmtVal} para ${nome} no Bot?\n\n`
+        + `Antes de confirmar, o passo a passo:\n`
+        + `1. Transferir o R$ ${fmtVal} da InfinitePay para a Binance (depósito BRL);\n`
+        + `2. Conferir que o valor já está no saldo da Binance;\n`
+        + `3. Só então confirmar — as cotas são creditadas pelo patrimônio atual.\n\n`
+        + `O valor já está na Binance?`)) return;
 
     // 1. Registra o investimento no bot
     axios.post('/bot/investir-manual', { valor: valorLiquido, userId })
@@ -2068,6 +2184,12 @@ setInterval(atualizarTendencia, 60000);
 let precoBTCAtual = 0;
 const ehAdmin = {{ auth()->user()->id == 1 ? 'true' : 'false' }};
 
+// Gateway PIX ativo: InfinitePay não cobra taxa de PIX (depósito entra
+// integral); no Mercado Pago legado desconta 1%. Taxa de SAQUE é outra
+// coisa (regra própria do site) e continua aplicando nos dois.
+const ehInfinitePay = {{ config('services.infinitepay.gateway_padrao', 'mercadopago') === 'infinitepay' ? 'true' : 'false' }};
+const fatorDeposito = ehAdmin ? 1 : (ehInfinitePay ? 1 : 0.99);
+
 function atualizarPainel() {
     axios.get("/bot/valor-atual").then(res => {
         const d = res.data;
@@ -2083,9 +2205,11 @@ function atualizarPainel() {
         $('#saldo-total').text(fmt(valorAtual));
         $('#valor-pix').text(fmt(pixLiquido));
 
-        // Preço BTC no painel do investidor
+        // Preço BTC no painel do investidor — e no tile do topo (que agora
+        // é a única cotação que o não-admin vê no "Painel do Bot").
         if (precoBTCAtual > 0) {
             $('#inv-btc-price').text(fmt(precoBTCAtual, 2));
+            $('#btc-price').text(fmt(precoBTCAtual, 2));
         }
 
         const lucro  = safe(d.lucro);
@@ -2106,6 +2230,50 @@ function atualizarPainel() {
 }
 atualizarPainel();
 setInterval(atualizarPainel, 30000);
+
+// ── Histórico do próprio usuário (saques + depósitos, até 30) ────────
+// Mesma fonte do app (/bot/historico → historicoDe). Depósito entra com
+// o LÍQUIDO creditado; saque com o valor do pedido e o status andando.
+function carregarHistoricoCliente() {
+    axios.get("/bot/historico").then(res => {
+        const rows = Array.isArray(res.data) ? res.data : [];
+        const tbody = $('#tabela-historico-cliente');
+        if (!tbody.length) return;
+
+        if (!rows.length) {
+            tbody.html('<tr><td colspan="4" class="text-center text-muted py-4">Nenhum saque ou depósito ainda.</td></tr>');
+            return;
+        }
+
+        const statusMap = {
+            pago:         ['Pago', 'badge-green'],
+            pendente:     ['Pendente', 'badge-gold'],
+            em_andamento: ['Em andamento', 'badge-gold'],
+        };
+
+        let html = '';
+        rows.forEach(h => {
+            const dep    = h.tipo === 'deposito';
+            const tipo   = dep
+                ? '<span class="badge-green"><i class="fa-solid fa-arrow-down me-1"></i>Depósito</span>'
+                : '<span class="badge-red"><i class="fa-solid fa-arrow-up me-1"></i>Saque</span>';
+            const [stLabel, stCls] = statusMap[h.status] ?? [h.status, 'badge-gold'];
+            const cor   = dep ? 'text-green' : 'text-red';
+            const sinal = dep ? '+' : '−';
+            html += `<tr>
+                <td>${tipo}</td>
+                <td style="color:var(--muted);white-space:nowrap;">${h.data}</td>
+                <td class="text-end fw-600 ${cor}" style="white-space:nowrap;">${sinal} R$ ${fmt(h.valor)}</td>
+                <td><span class="${stCls}">${stLabel}</span></td>
+            </tr>`;
+        });
+        tbody.html(html);
+    }).catch(() => {
+        const tbody = $('#tabela-historico-cliente');
+        if (tbody.length) tbody.html('<tr><td colspan="4" class="text-center text-muted py-4">—</td></tr>');
+    });
+}
+carregarHistoricoCliente();
 
 // ── Saque (investidor) ────────────────────────────────
 let valorAtualCache = 0;
@@ -2322,7 +2490,7 @@ setInterval(carregarMeusSaques, 60000);
 function atualizarPreviewDeposito() {
     const val  = parseFloat(document.getElementById('deposito-valor').value) || 0;
     const prev = document.getElementById('deposito-liquido-preview');
-    prev.textContent = val > 0 ? 'R$ ' + fmt(val * (ehAdmin ? 1 : 0.99)) : '—';
+    prev.textContent = val > 0 ? 'R$ ' + fmt(val * fatorDeposito) : '—';
 }
 
 // ── PIX Depósito ──────────────────────────────────────
@@ -2332,7 +2500,7 @@ let pixPollIntvl   = null;
 const modalPix     = new bootstrap.Modal(document.getElementById('modalPix'));
 
 function mostrarEstado(estado) {
-    ['pix-loading','pix-qr','pix-pago','pix-expirado'].forEach(id => {
+    ['pix-loading','pix-qr','pix-pago','pix-expirado','pix-cancelado'].forEach(id => {
         document.getElementById(id).style.display = 'none';
     });
     document.getElementById(estado).style.display = '';
@@ -2412,12 +2580,37 @@ function verificarPagamento(txid, valor) {
             document.getElementById('pix-valor-confirmado').textContent = fmt(valor);
             mostrarEstado('pix-pago');
             atualizarPainel();
-        } else if (['expirado','cancelado'].includes(res.data.status)) {
+        } else if (res.data.status === 'cancelado') {
+            // Cancelou no outro canal (app/site) — mesmo estado final daqui
+            clearInterval(pixTimerIntvl);
+            clearInterval(pixPollIntvl);
+            mostrarEstado('pix-cancelado');
+        } else if (res.data.status === 'expirado') {
             clearInterval(pixTimerIntvl);
             clearInterval(pixPollIntvl);
             mostrarEstado('pix-expirado');
         }
     }).catch(() => {});
+}
+
+// Desistir da cobrança ANTES de pagar — descarta o QR/link pendente.
+// Se o pagamento cair depois (link segue vivo no gateway), o webhook
+// reconhece e o depósito entra normalmente.
+function cancelarPix() {
+    if (!pixTxid) return;
+    if (!confirm('Cancelar este depósito?\n\nA cobrança será descartada e nada será cobrado. Se você já pagou, o pagamento ainda será reconhecido.')) return;
+
+    const csrf = document.querySelector('meta[name="csrf-token"]').content;
+
+    axios.post('/pix/cancelar/' + pixTxid, {}, {
+        headers: { 'X-CSRF-TOKEN': csrf }
+    }).then(() => {
+        clearInterval(pixTimerIntvl);
+        clearInterval(pixPollIntvl);
+        mostrarEstado('pix-cancelado');
+    }).catch(err => {
+        alert(err?.response?.data?.error ?? 'Não foi possível cancelar. Tente novamente.');
+    });
 }
 
 function copiarPix() {

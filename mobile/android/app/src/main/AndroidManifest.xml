@@ -7,6 +7,12 @@
          (o app pede com um diálogo na primeira vez — ver servicos/notificacoes.dart). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
+    <!-- Auto-atualização: o app baixa o APK novo e dispara o instalador do
+         sistema. O Android 8+ pede ao usuário (uma vez só) a autorização
+         "instalar apps desta fonte" na primeira instalação; sem esta
+         permissão declarada, o instalador recusa direto. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
     <application
         android:name="${applicationName}"
         android:label="BotBTC"
@@ -39,6 +45,19 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Auto-atualização: expõe o APK baixado (cache interno) pro
+             instalador do sistema via content:// — o Android 7+ exige
+             FileProvider, não aceita file:// cru. Paths em res/xml/file_paths.xml. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
@@ -49,6 +68,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Visibilidade do instalador de pacotes (Android 11+ exige declarar
+             o que o app pode "enxergar"): disparar o APK baixado depende
+             disto. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>
 </manifest>

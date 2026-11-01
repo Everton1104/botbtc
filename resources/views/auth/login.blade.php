@@ -51,6 +51,13 @@
                     <i class="fa-solid fa-arrow-right-to-bracket me-2"></i>Entrar
                 </button>
             </form>
+
+            <div class="text-center mt-3 mb-2" style="font-size: .85rem; color: var(--muted);">
+                Ainda não tem conta?
+            </div>
+            <a href="{{ route('register') }}" class="btn btn-outline-muted w-100">
+                <i class="fa-solid fa-user-plus me-2"></i>Criar conta
+            </a>
         </div>
     </div>
 

@@ -35,11 +35,26 @@ class PixController extends Controller
 
         $pagamento->loadMissing('user');
 
-        // Push pro app (o WhatsApp de btc_deposito foi aposentado — ver FcmService).
+        // Push pro app + WhatsApp: só o admin dá continuidade (transferir
+        // pra Binance e registrar) — aviso nos dois canais.
         \App\Services\FcmService::notificarDeposito(
             (float) $pagamento->valor,
             $pagamento->user?->name ?? 'Desconhecido'
         );
+        \App\Http\Controllers\WhatsappController::avisarAdmin(
+            '💰 *Depósito confirmado*' . "\n"
+            . 'R$ ' . number_format((float) $pagamento->valor, 2, ',', '.') . ' de ' . ($pagamento->user?->name ?? 'Desconhecido') . "\n"
+            . 'Transfira da InfinitePay para a Binance e registre no app.'
+        );
+
+        // E pro CLIENTE: seu PIX caiu, os ativos chegam quando o admin
+        // registrar — expectativa ajustada sem você ter que avisar.
+        if ($pagamento->user_id) {
+            \App\Services\FcmService::notificarDepositoCliente(
+                (int) $pagamento->user_id,
+                (float) $pagamento->valor
+            );
+        }
     }
 
     /**
@@ -143,6 +158,62 @@ class PixController extends Controller
     }
 
     /**
+     * Cancela uma cobrança PENDENTE do próprio usuário (desistiu antes de
+     * pagar) — POST /pix/cancelar/{txid} (site) e /api/deposito/cancelar/{txid}
+     * (app). A InfinitePay não expõe cancelamento de link, então o efeito é
+     * LOCAL: a cobrança some da tela e deixa de ser retomada; o link segue
+     * vivo no gateway até expirar — e se o cliente pagar mesmo assim, o
+     * webhook/payment_check reabre como PAGO (dinheiro que caiu tem que
+     * virar depósito, ver sincronizarInfinitePay).
+     */
+    public function cancelar(Request $request, string $txid)
+    {
+        $pagamento = PixPayment::where('txid', $txid)
+            ->where('user_id', auth()->id())
+            ->firstOrFail();
+
+        if ($pagamento->status !== 'pendente') {
+            $msg = $pagamento->status === 'pago'
+                ? 'Este depósito já foi pago e não pode ser cancelado.'
+                : 'Esta cobrança já não está mais pendente.';
+            return response()->json(['error' => $msg], 422);
+        }
+
+        // Anti-corrida: consulta o gateway ANTES de cancelar — pagamento
+        // que caiu agora vira depósito confirmado (não se cancela o que
+        // já foi pago). Se a consulta falhar, segue: o webhook continua
+        // de sentinela pra reabrir se o dinheiro aparecer depois.
+        try {
+            if (str_starts_with($pagamento->txid, 'ip_')) {
+                $this->sincronizarInfinitePay($pagamento);
+            } else {
+                $dados = $this->mp->consultarPagamento($txid);
+                if (($dados['status'] ?? '') === 'approved') {
+                    $this->confirmarPago($pagamento, $dados);
+                }
+            }
+            $pagamento->refresh();
+        } catch (\Exception $e) {
+            Log::warning('Erro ao consultar pagamento antes de cancelar', [
+                'txid' => $txid, 'error' => $e->getMessage(),
+            ]);
+        }
+
+        if ($pagamento->status === 'pago') {
+            return response()->json([
+                'error' => 'O pagamento acabou de ser confirmado e não pode mais ser cancelado — o depósito segue para aprovação do administrador.',
+            ], 422);
+        }
+
+        // 'expirado' aqui (a sincronização acima pode ter marcado) também
+        // vira 'cancelado': pedido do usuário prevalece e ambos são estados
+        // terminais sem dinheiro — só o 'pago' bloqueia.
+        $pagamento->update(['status' => 'cancelado']);
+
+        return response()->json(['mensagem' => 'Depósito cancelado. Você pode gerar outro quando quiser.']);
+    }
+
+    /**
      * Consulta o status de um pagamento pelo txid (polling).
      * GET /pix/status/{txid}
      */
@@ -203,13 +274,20 @@ class PixController extends Controller
             $pagamento->refresh();
         }
 
-        if ($pagamento->status !== 'pendente') {
+        // Idempotência: já resolvido — EXCETO 'cancelado'. O cancelamento do
+        // cliente é LOCAL (a InfinitePay não expõe cancelamento de link), então
+        // o link continua pagável lá; se o dinheiro caiu DEPOIS do
+        // cancelamento, o pagamento tem que ser reconhecido — senão o cliente
+        // pagou e o valor não aparece em lugar nenhum.
+        $reabrindoCancelado = $pagamento->status === 'cancelado';
+        if ($pagamento->status !== 'pendente' && !$reabrindoCancelado) {
             return; // idempotência: já resolvido
         }
 
         $res = $this->ip->consultarStatus($pagamento);
         if (isset($res['erro']) || empty($res['paid'])) {
-            if ($pagamento->isExpirado()) {
+            // Cancelada sem pagamento segue cancelada (não vira 'expirado').
+            if (!$reabrindoCancelado && $pagamento->isExpirado()) {
                 $pagamento->update(['status' => 'expirado']);
             }
             return;
@@ -237,6 +315,7 @@ class PixController extends Controller
         Log::info('InfinitePay aprovado', [
             'txid' => $pagamento->txid, 'valor' => $pagamento->valor, 'liquido' => $valorLiquido,
             'metodo' => $captureMethod, 'parcelas' => $installments,
+            'reaberto_de' => $reabrindoCancelado ? 'cancelado' : null,
         ]);
     }
 
@@ -321,7 +400,9 @@ class PixController extends Controller
 
         $pagamento = PixPayment::where('txid', $paymentId)->first();
 
-        if (!$pagamento || $pagamento->status !== 'pendente') {
+        // 'cancelado' também acorda: cobrança que o cliente cancelou segue
+        // pagável no gateway até expirar — pagamento que caiu tem que valer.
+        if (!$pagamento || !in_array($pagamento->status, ['pendente', 'cancelado'])) {
             return response('ok', 200);
         }
 
@@ -344,11 +425,23 @@ class PixController extends Controller
 
                 $pagamento->loadMissing('user');
 
-                // Push pro app (o WhatsApp de btc_deposito foi aposentado — ver FcmService).
+                // Push pro app + WhatsApp: só o admin dá continuidade —
+                // aviso nos dois canais. E pro cliente, o "confirmado".
                 \App\Services\FcmService::notificarDeposito(
                     (float) $pagamento->valor,
                     $pagamento->user?->name ?? 'Desconhecido'
                 );
+                \App\Http\Controllers\WhatsappController::avisarAdmin(
+                    '💰 *Depósito confirmado*' . "\n"
+                    . 'R$ ' . number_format((float) $pagamento->valor, 2, ',', '.') . ' de ' . ($pagamento->user?->name ?? 'Desconhecido') . "\n"
+                    . 'Transfira da InfinitePay para a Binance e registre no app.'
+                );
+                if ($pagamento->user_id) {
+                    \App\Services\FcmService::notificarDepositoCliente(
+                        (int) $pagamento->user_id,
+                        (float) $pagamento->valor
+                    );
+                }
             }
         } catch (\Exception $e) {
             Log::error('Erro ao confirmar pagamento via webhook', ['error' => $e->getMessage()]);

@@ -8,10 +8,7 @@ use App\Models\User;
 use Illuminate\Foundation\Auth\RegistersUsers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
-use App\Models\BotInvestment;
-use App\Http\Controllers\BinanceController;
 
 class RegisterController extends Controller
 {
@@ -52,30 +49,14 @@ class RegisterController extends Controller
      */
     protected function validator(array $data)
     {
+        // Sem reCAPTCHA: a barreira anti-robô é o código de 6 dígitos enviado
+        // por WhatsApp logo após o cadastro (verificação obrigatória no
+        // middleware whatsapp.verified antes de acessar qualquer página).
         return Validator::make($data, [
-            'name'                 => ['required', 'string', 'max:255'],
-            'whatsapp'             => ['required', 'string', 'max:20'],
-            'email'                => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password'             => ['required', 'string', 'min:8', 'confirmed'],
-            'g-recaptcha-response' => [
-                'required',
-                function ($attribute, $value, $fail) {
-                    $secret = env('RECAPTCHA_SECRET_KEY');
-
-                    if (!$secret) return; // chave não configurada (dev local)
-
-                    $res = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
-                        'secret'   => $secret,
-                        'response' => $value,
-                    ])->json();
-
-                    if (!($res['success'] ?? false)) {
-                        $fail('Confirme que você não é um robô.');
-                    }
-                },
-            ],
-        ], [
-            'g-recaptcha-response.required' => 'Confirme que você não é um robô.',
+            'name'     => ['required', 'string', 'max:255'],
+            'whatsapp' => ['required', 'string', 'max:20'],
+            'email'    => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
         ]);
     }
 

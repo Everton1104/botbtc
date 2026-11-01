@@ -17,6 +17,7 @@
 import 'dart:async'; // unawaited: dispara sem esperar
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart'; // abrir cadastro no navegador
 
 import '../servicos/api.dart';
 import '../servicos/notificacoes.dart';
@@ -153,6 +154,33 @@ class _TelaLoginState extends State<TelaLogin> {
     );
 
     ctrl.dispose(); // o diálogo morreu, o controller também
+  }
+
+  /// Abre a página de CADASTRO do site no navegador do aparelho. O registro
+  /// não existe dentro do app porque valida o número por WhatsApp (código
+  /// por mensagem) — feito o cadastro, o cliente volta e entra por aqui.
+  Future<void> _criarContaNoSite() async {
+    try {
+      final abriu = await launchUrl(
+        Uri.parse('$kBaseUrl/register'),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!abriu && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Não foi possível abrir o navegador.'),
+              backgroundColor: Cores.vermelho),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Não foi possível abrir o navegador.'),
+              backgroundColor: Cores.vermelho),
+        );
+      }
+    }
   }
 
   /// Envia o formulário: valida os campos e chama a API.
@@ -326,6 +354,14 @@ class _TelaLoginState extends State<TelaLogin> {
                   TextButton(
                     onPressed: _carregando ? null : _esqueciSenha,
                     child: const Text('Esqueci minha senha'),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ── Sem conta? Cadastro é pelo site (valida WhatsApp) ──
+                  TextButton.icon(
+                    onPressed: _carregando ? null : _criarContaNoSite,
+                    icon: const Icon(Icons.open_in_new, size: 16),
+                    label: const Text('Não tem conta? Criar no site'),
                   ),
                 ],
               ),
