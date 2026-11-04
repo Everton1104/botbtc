@@ -9,7 +9,9 @@ use Illuminate\Support\Facades\Log;
 use App\Models\BotPatrimonio;
 use App\Models\BotState;
 use App\Models\BotTransfer;
+use App\Models\BtcPriceAlert;
 use App\Services\BotExecutor;
+use App\Services\FcmService;
 use App\Http\Controllers\BinanceController;
 
 class ExecutarBots extends Command
@@ -70,6 +72,16 @@ class ExecutarBots extends Command
                 Log::warning("ExecutarBots: falha ao sincronizar transfers (não bloqueia execução): " . $e->getMessage());
             }
 
+            // Alertas de preço do admin ("avisa quando o BTC chegar a X",
+            // criado no app). Fora do loop de bots: funciona mesmo com bot
+            // pausado ou desativado, e não paga chamada à Binance quando
+            // não há pendentes.
+            try {
+                $this->verificarAlertasPreco();
+            } catch (\Throwable $e) {
+                Log::warning("ExecutarBots: falha ao checar alertas de preço (não bloqueia execução): " . $e->getMessage());
+            }
+
             foreach ($bots as $bot) {
                 try {
                     $executor->executar($bot->id_user);
@@ -83,6 +95,37 @@ class ExecutarBots extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Alertas de preço: varre os pendentes contra o ticker público e manda
+     * UM push por alerta cruzado. Marca disparado_em/preco_disparo ANTES de
+     * notificar — se o push falhar (Firebase fora etc.), o alerta não volta
+     * a disparar no ciclo seguinte (notificação é apelido, nunca crítico).
+     */
+    private function verificarAlertasPreco(): void
+    {
+        $pendentes = BtcPriceAlert::pendentes()->get();
+        if ($pendentes->isEmpty()) {
+            return; // sem alertas: nem toca a Binance
+        }
+
+        $preco = (float) app(BinanceController::class)->getPrecos()['BTCBRL'];
+        if ($preco <= 0) {
+            return; // ticker indisponível — o próximo ciclo tenta de novo
+        }
+
+        foreach ($pendentes as $alerta) {
+            if (!$alerta->bateu($preco)) {
+                continue;
+            }
+
+            $alerta->disparado_em  = now();
+            $alerta->preco_disparo = $preco;
+            $alerta->save();
+
+            FcmService::notificarAlertaBtc($alerta->user_id, $alerta->direcao, $alerta->alvo, $preco);
+        }
     }
 
     /**

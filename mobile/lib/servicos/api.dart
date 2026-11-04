@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.0';
+const String kAppVersao = '1.3.1';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").
@@ -570,6 +570,36 @@ class ApiService {
     return RelatorioMensal.fromJson(
       jsonDecode(resposta.body) as Map<String, dynamic>,
     );
+  }
+
+  /// ALERTAS de preço do BTC (GET /api/admin/alertas-btc): a lista (pendentes
+  /// no topo) + o preço atual, cacheado 45s no servidor.
+  static Future<AlertasBtc> alertasBtc() async {
+    final resposta = await _requisicaoAcao('GET', '/api/admin/alertas-btc');
+    return AlertasBtc.fromJson(
+      jsonDecode(resposta.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// CRIA um alerta de preço (POST /api/admin/alertas-btc). O ciclo do bot
+  /// (≤1 min) confere e manda push quando o BTC cruza o alvo.
+  static Future<String> criarAlertaBtc({
+    required double alvo,
+    required bool acima,
+  }) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/admin/alertas-btc',
+      corpo: {'alvo': alvo, 'direcao': acima ? 'acima' : 'abaixo'},
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// APAGA um alerta (DELETE /api/admin/alertas-btc/{id}) — pendente ou
+  /// já disparado.
+  static Future<String> excluirAlertaBtc(int id) async {
+    final resposta = await _requisicaoAcao('DELETE', '/api/admin/alertas-btc/$id');
+    return _mensagemDe(resposta);
   }
 
   /// Executor comum das ações de dinheiro (saques e depósitos): montar a

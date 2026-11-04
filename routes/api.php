@@ -100,4 +100,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/simulacao', [AdminApiController::class, 'simulacao']);
     // P&L realizado mensal (FIFO) — o mesmo /bot/relatorio/mensal
     Route::get('/admin/relatorio', [AdminApiController::class, 'relatorio']);
+    // Alertas de preço do BTC ("avisa quando chegar a X") — o ciclo do bot
+    // confere os pendentes (≤1 min) e manda push único no cruzamento
+    Route::get('/admin/alertas-btc', [AdminApiController::class, 'alertasBtc']);
+    Route::post('/admin/alertas-btc', [AdminApiController::class, 'criarAlertaBtc']);
+    Route::delete('/admin/alertas-btc/{id}', [AdminApiController::class, 'excluirAlertaBtc']);
 });

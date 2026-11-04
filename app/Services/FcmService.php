@@ -145,6 +145,24 @@ class FcmService
     }
 
     /**
+     * Push de alerta de preço do BTC — o "avisa quando o BTC chegar a X"
+     * que o admin cria no app. Dispara uma única vez (o ciclo marca
+     * disparado_em antes de chamar aqui; push é apelido, não crítico).
+     */
+    public static function notificarAlertaBtc(int $userId, string $direcao, float $alvo, float $precoAtual): void
+    {
+        $alvoFmt = 'R$ ' . number_format($alvo, 2, ',', '.');
+
+        self::enviar(
+            '🎯 BTC chegou no seu preço',
+            'BTC ' . ($direcao === 'acima' ? 'subiu até' : 'caiu até') . " {$alvoFmt} — agora R$ "
+                . number_format($precoAtual, 2, ',', '.'),
+            ['tipo' => 'alerta_btc', 'direcao' => $direcao],
+            $userId,
+        );
+    }
+
+    /**
      * Push de saque solicitado — espelha o WhatsApp que o admin já recebe.
      * A chave PIX (opcional) vai no corpo: o admin paga lendo a notificação.
      */

@@ -578,3 +578,50 @@ double _num(dynamic v) {
   if (v is String) return double.tryParse(v) ?? 0;
   return 0;
 }
+
+/// Um alerta de preço do BTC criado pelo admin ("avisa quando chegar a X").
+/// O ciclo do bot confere os pendentes (≤1 min) e manda push único quando o
+/// preço cruza o alvo — depois disparadoEm deixa de ser null.
+class AlertaBtc {
+  final int id;
+  final double alvo;
+  final String direcao; // acima | abaixo
+  final DateTime? disparadoEm;
+  final double? precoDisparo;
+
+  const AlertaBtc({
+    required this.id,
+    required this.alvo,
+    required this.direcao,
+    this.disparadoEm,
+    this.precoDisparo,
+  });
+
+  bool get disparado => disparadoEm != null;
+  bool get acima => direcao == 'acima';
+
+  factory AlertaBtc.fromJson(Map<String, dynamic> j) => AlertaBtc(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        alvo: _num(j['alvo']),
+        direcao: j['direcao'] as String? ?? 'acima',
+        disparadoEm: j['disparado_em'] == null
+            ? null
+            : DateTime.tryParse(j['disparado_em'] as String),
+        precoDisparo: j['preco_disparo'] == null ? null : _num(j['preco_disparo']),
+      );
+}
+
+/// Resposta de GET /api/admin/alertas-btc.
+class AlertasBtc {
+  final double? preco; // null = Binance não respondeu agora (a lista segue)
+  final List<AlertaBtc> alertas; // pendentes no topo (ordem do servidor)
+
+  const AlertasBtc({this.preco, required this.alertas});
+
+  factory AlertasBtc.fromJson(Map<String, dynamic> j) => AlertasBtc(
+        preco: j['preco'] == null ? null : _num(j['preco']),
+        alertas: (j['alertas'] as List? ?? [])
+            .map((a) => AlertaBtc.fromJson(a as Map<String, dynamic>))
+            .toList(),
+      );
+}

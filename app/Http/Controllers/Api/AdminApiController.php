@@ -6,6 +6,7 @@ use App\Http\Controllers\BinanceController;
 use App\Http\Controllers\Controller;
 use App\Models\BotConfig;
 use App\Models\BotTransfer;
+use App\Models\BtcPriceAlert;
 use App\Services\BacktestService;
 use App\Services\BotAdminService;
 use App\Services\BotExecutor;
@@ -13,6 +14,7 @@ use App\Services\PnlService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 /**
  * Admin do bot no app mobile — os MESMOS controles da aba "Mais Informações"
@@ -230,6 +232,85 @@ class AdminApiController extends Controller
         $patrimonio = max(100, (float) $request->input('patrimonio', 1000));
 
         return response()->json(app(BacktestService::class)->rodar($dias, $patrimonio));
+    }
+
+    // ── Alertas de preço do BTC ("avisa quando chegar a X") ─────────────
+
+    /**
+     * GET /api/admin/alertas-btc — a lista de alertas (pendentes no topo,
+     * disparados abaixo) + o preço atual do BTC, cacheado 45s pra cada
+     * abertura da aba não virar chamada à Binance. Preço null = Binance
+     * não respondeu agora; a lista segue de pé.
+     */
+    public function alertasBtc(Request $request, BinanceController $binance): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $preco = null;
+        try {
+            $preco = Cache::remember('admin.btc_preco', 45, function () use ($binance) {
+                $p = (float) $binance->getPrecoBTC();
+                return $p > 0 ? round($p, 2) : null;
+            });
+        } catch (\Throwable) {
+            // mantém null — degenera como o /api/painel
+        }
+
+        return response()->json([
+            'preco'   => $preco,
+            'alertas' => BtcPriceAlert::orderByDesc('disparado_em') // nulls por último
+                ->orderByDesc('id')
+                ->limit(50)
+                ->get(),
+        ]);
+    }
+
+    /**
+     * POST /api/admin/alertas-btc — body { "alvo": 600000, "direcao":
+     * "acima"|"abaixo" }. O ciclo do bot (≤1 min) confere e manda push
+     * único quando o preço cruza o alvo. Alvo já satisfeito hoje dispara
+     * no próximo ciclo — decisão do admin, não validamos contra o preço.
+     */
+    public function criarAlertaBtc(Request $request): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $request->validate([
+            'alvo'    => ['required', 'numeric', 'min:1000', 'max:100000000'],
+            'direcao' => ['required', Rule::in([BtcPriceAlert::DIRECAO_ACIMA, BtcPriceAlert::DIRECAO_ABAIXO])],
+        ]);
+
+        if (BtcPriceAlert::pendentes()->where('user_id', $request->user()->id)->count() >= 10) {
+            return response()->json(['mensagem' => 'Limite de 10 alertas pendentes — apague um antes de criar outro.'], 422);
+        }
+
+        $alerta = BtcPriceAlert::create([
+            'user_id' => (int) $request->user()->id,
+            'alvo'    => round((float) $request->input('alvo'), 2),
+            'direcao' => $request->input('direcao'),
+        ]);
+
+        $alvoFmt = 'R$ ' . number_format($alerta->alvo, 2, ',', '.');
+        $msg = 'Alerta criado: BTC ' . ($alerta->direcao === 'acima' ? 'acima de ' : 'abaixo de ')
+            . "{$alvoFmt}. Você recebe um push quando o preço cruzar.";
+
+        return response()->json(['mensagem' => $msg, 'alerta' => $alerta]);
+    }
+
+    /** DELETE /api/admin/alertas-btc/{id} — apaga pendente ou já disparado. */
+    public function excluirAlertaBtc(Request $request, int $id): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $apagou = BtcPriceAlert::where('id', $id)->delete() > 0;
+
+        return response()->json(['mensagem' => $apagou ? 'Alerta removido.' : 'Alerta não encontrado (já removido?).']);
     }
 
     /**
