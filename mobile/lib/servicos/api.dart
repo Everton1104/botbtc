@@ -766,9 +766,12 @@ class ApiService {
   /// Lista as carteiras do usuário com saldo/UTXOs/histórico ao vivo.
   static Future<List<Map<String, dynamic>>> carteirasDados() async {
     await carregarTokenSalvo();
+    // /carteiras/dados consulta o mempool.space endereço a endereço (com
+    // retry pros 429) — pode levar ~30-50s com várias carteiras; timeout
+    // exclusivo maior que o padrão de 20s.
     final r = await http
         .get(Uri.parse('$kBaseUrl/api/carteiras/dados'), headers: _headersComToken())
-        .timeout(kTimeoutApi);
+        .timeout(const Duration(seconds: 90));
     if (r.statusCode == 200) {
       return (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
     }

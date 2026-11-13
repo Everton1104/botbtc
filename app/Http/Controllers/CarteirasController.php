@@ -172,23 +172,35 @@ class CarteirasController extends Controller
         $todas = $receber->map(fn ($e) => [$e, 'receber'])
             ->merge($troco->map(fn ($e) => [$e, 'troco']));
 
-        // ── 1ª leva: estatísticas de cada endereço (sequencial com retry — ──
-        // o mempool limita rajadas; a fila certa é mais rápida que refazer 429)
+        // ── 1ª leva: estatísticas de cada endereço ──
+        // Lotes PARALELOS de 5 (rápido) com pausa entre eles; quem der 429
+        // refaz individual com backoff — equilibra velocidade × rate limit.
         $saldo = 0;
         $pendente = 0;
         $comMovimento = [];
-        foreach ($todas as [$e, $cadeia]) {
-            $r = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}");
-            if (!$r || !$r->ok()) continue;
-            $info = $r->json();
-            if (!is_array($info)) continue;
+        foreach (array_chunk($todas->all(), 5) as $lote) {
+            $resps = Http::pool(function ($pool) use ($lote) {
+                foreach ($lote as [$e]) {
+                    $pool->as($e['endereco'])->timeout(10)->get(self::MEMPOOL . "/address/{$e['endereco']}");
+                }
+            });
+            foreach ($lote as [$e, $cadeia]) {
+                $r = $resps[$e['endereco']] ?? null;
+                if (!$r || !$r->ok()) {
+                    $r = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}");
+                }
+                if (!$r || !$r->ok()) continue;
+                $info = $r->json();
+                if (!is_array($info)) continue;
 
-            // o mempool devolve chain_stats/mempool_stats na RAIZ do JSON
-            $stats = $info['chain_stats'] ?? ($info['address']['chain_stats'] ?? []);
-            $memp = $info['mempool_stats'] ?? ($info['address']['mempool_stats'] ?? []);
-            $saldo += (int) ($stats['funded_txo_sum'] ?? 0) - (int) ($stats['spent_txo_sum'] ?? 0);
-            $pendente += (int) ($memp['funded_txo_sum'] ?? 0) - (int) ($memp['spent_txo_sum'] ?? 0);
-            if ((int) ($stats['tx_count'] ?? 0) > 0) $comMovimento[] = [$e, $cadeia];
+                // o mempool devolve chain_stats/mempool_stats na RAIZ do JSON
+                $stats = $info['chain_stats'] ?? ($info['address']['chain_stats'] ?? []);
+                $memp = $info['mempool_stats'] ?? ($info['address']['mempool_stats'] ?? []);
+                $saldo += (int) ($stats['funded_txo_sum'] ?? 0) - (int) ($stats['spent_txo_sum'] ?? 0);
+                $pendente += (int) ($memp['funded_txo_sum'] ?? 0) - (int) ($memp['spent_txo_sum'] ?? 0);
+                if ((int) ($stats['tx_count'] ?? 0) > 0) $comMovimento[] = [$e, $cadeia];
+            }
+            usleep(200000);
         }
 
         // altura atual da chain — pra contar confirmações
