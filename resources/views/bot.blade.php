@@ -403,9 +403,13 @@
                         <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Guard de meta (% do alvo)</label>
                         <input type="number" id="cfg-guard-meta" class="form-control form-control-sm" min="0" max="100" step="1" placeholder="80">
                     </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Boost de ordens (%)</label>
+                        <input type="number" id="cfg-boost" class="form-control form-control-sm" min="0" max="100" step="5" placeholder="0">
+                    </div>
                 </div>
                 <div style="font-size:.72rem;color:#777;margin-bottom:.4rem;">
-                    Piso: ordem que vai entrar nunca é menor que X% do saldo (0 desliga). Guard: com o lado de risco abaixo de X% do alvo, o freio da tendência forte é suavizado de ×0.5 para ×0.8 (recomprar barato é o que o rebalanceamento pede).
+                    Piso: ordem que vai entrar nunca é menor que X% do saldo (0 desliga). Guard: com o lado de risco abaixo de X% do alvo, o freio da tendência forte é suavizado de ×0.5 para ×0.8 (recomprar barato é o que o rebalanceamento pede). Boost: multiplica o valor FINAL de todas as ordens nas duas pernas, depois de todos os ajustes do bot (ex.: 30 = ordens 30% maiores que a decisão final, inclusive pisos; 0 = desligado) — trocar o valor cancela as ordens abertas e o próximo ciclo recria o par no novo tamanho. Únicos limites por cima do boost: nunca além de 99,5% do saldo ou 95% do estoque.
                 </div>
 
                 {{-- M5: spread e taxa · M7: extremos de RSI --}}
@@ -1648,6 +1652,7 @@ function carregarConfig() {
             'cfg-nivel-final':     'nivel_final',
             'cfg-piso-ordem':      'piso_ordem_pct',
             'cfg-guard-meta':      'guard_meta_pct',
+            'cfg-boost':           'boost_pct',
         };
         Object.entries(mapa).forEach(([id, campo]) => {
             const el = document.getElementById(id);
@@ -1726,6 +1731,7 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
         'cfg-nivel-final':     'nivel_final',
         'cfg-piso-ordem':      'piso_ordem_pct',
         'cfg-guard-meta':      'guard_meta_pct',
+        'cfg-boost':           'boost_pct',
     };
     Object.entries(campos).forEach(([id, campo]) => {
         const val = document.getElementById(id)?.value;

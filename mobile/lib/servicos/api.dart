@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.1';
+const String kAppVersao = '1.3.6';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").
@@ -429,8 +429,14 @@ class ApiService {
 
   /// REGISTRA um depósito no bot como admin (credita cotas + marca
   /// registrado, numa única transaction no servidor).
-  static Future<String> registrarDeposito(int id) async {
-    final resposta = await _requisicaoAcao('POST', '/api/deposito/registrar/$id');
+  /// REGISTRA um depósito no bot (admin). [gatilho] preenchido = RETÉM:
+  /// vira cotas só quando o BTC cair até o preço-gatilho (o ciclo confere).
+  static Future<String> registrarDeposito(int id, {double? gatilho}) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/deposito/registrar/$id',
+      corpo: gatilho == null ? null : {'gatilho_preco': gatilho},
+    );
     return _mensagemDe(resposta);
   }
 
@@ -595,6 +601,15 @@ class ApiService {
     return _mensagemDe(resposta);
   }
 
+  /// MARCA o depósito retido como JÁ TRANSFERIDO pra Binance (admin): o
+  /// valor sai do capital do fundo (cota e bot) e o gatilho converte
+  /// sozinho quando o preço atingir, sem pausa.
+  static Future<String> marcarTransferidoDeposito(int id) async {
+    final resposta =
+        await _requisicaoAcao('POST', '/api/deposito/transferido/$id');
+    return _mensagemDe(resposta);
+  }
+
   /// APAGA um alerta (DELETE /api/admin/alertas-btc/{id}) — pendente ou
   /// já disparado.
   static Future<String> excluirAlertaBtc(int id) async {
@@ -716,13 +731,18 @@ class ApiService {
       // Ordem importa: nos 422 (validação), o Laravel manda BOTH "errors"
       // (uma lista por campo, mensagens limpas) e "message" (resumo que
       // termina com "(and 1 more error)" — em inglês, sem tradução).
-      // Preferimos a mensagem LIMPA de errors; "message" fica para os
-      // casos em que só ele existe (401, 500...).
+      // Preferimos a mensagem LIMPA de errors; "message"/"mensagem" ficam
+      // para os casos em que só ele existe (401, 500, e os services do
+      // Laravel do projeto, que respondem {"mensagem": "..."} em pt-BR —
+      // sem esta chave o app mostrava "Erro inesperado (422)" no lugar
+      // do motivo real, ex. guards da remoção de conta).
       if (corpo is Map && corpo['errors'] is Map && (corpo['errors'] as Map).isNotEmpty) {
         final primeiro = (corpo['errors'] as Map).values.first;
         if (primeiro is List && primeiro.isNotEmpty) {
           mensagem = primeiro.first as String;
         }
+      } else if (corpo is Map && corpo['mensagem'] is String) {
+        mensagem = corpo['mensagem'] as String;
       } else if (corpo is Map && corpo['message'] is String) {
         mensagem = corpo['message'] as String;
       } else if (corpo is Map && corpo['error'] is String) {

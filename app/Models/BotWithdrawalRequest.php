@@ -22,8 +22,10 @@ class BotWithdrawalRequest extends Model
         'pago_at',
     ];
 
+    // withTrashed: conta removida (soft delete) continua nomeada no
+    // histórico de saques.
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class)->withTrashed();
     }
 }

@@ -355,7 +355,7 @@ class BotExecutor
             if (isset($saldosChk['balances'])) {
                 $balancesChk = collect($saldosChk['balances']);
                 $saldoBTCChk = (float) ($balancesChk->firstWhere('asset', 'BTC')['free'] ?? 0);
-                $saldoBRLChk = (float) ($balancesChk->firstWhere('asset', 'BRL')['free'] ?? 0);
+                $saldoBRLChk = $this->brlDisponivel((float) ($balancesChk->firstWhere('asset', 'BRL')['free'] ?? 0));
                 $saltoRef     = $state->salto > 0 ? (float) $state->salto : $precoAtual * 0.01;
                 $valorVendaOk = $saldoBTCChk * ($precoAtual + $saltoRef) >= $this->minNotionalEfetivo($configChk);
                 $valorCompraOk = $saldoBRLChk >= $this->minNotionalEfetivo($configChk);
@@ -712,7 +712,7 @@ class BotExecutor
         }
 
         $balances = collect($saldos['balances']);
-        $saldoBRL = (float) ($balances->firstWhere('asset', 'BRL')['free'] ?? 0);
+        $saldoBRL = $this->brlDisponivel((float) ($balances->firstWhere('asset', 'BRL')['free'] ?? 0));
         $saldoBTC = (float) ($balances->firstWhere('asset', 'BTC')['free'] ?? 0);
 
         if ($saldoBRL < 10 && $saldoBTC <= 0) {
@@ -760,7 +760,10 @@ class BotExecutor
         $precoVenda  = $precoAtual + $salto;
 
         $config      = BotConfig::atual();
-        $valorCompra = $saldoBRL * $config->nivel1;
+        $boost       = $this->boostFator($config);
+        // Boost × nível pode passar do saldo (ex.: 0.85 × 1.3) — trava em
+        // 99,5% como no criarOrdensNovas (a Binance recusaria sem saldo).
+        $valorCompra = min($saldoBRL * $config->nivel1 * $boost, $saldoBRL * 0.995);
 
         // Zera os ids antes de recriar: assim um id velho não fica fingindo que a
         // perna ainda existe (essencial para o guard de "par incompleto").
@@ -773,7 +776,7 @@ class BotExecutor
             $state->order_id_compra = $orderCompra['orderId'] ?? null;
         }
 
-        $quantidadeVenda = $saldoBTC * $config->nivel1;
+        $quantidadeVenda = min($saldoBTC * $config->nivel1 * $boost, $saldoBTC * 0.995);
 
         if ($quantidadeVenda > 0 && ($quantidadeVenda * $precoVenda) >= $this->minNotionalEfetivo($config)) {
             $orderVenda            = $this->binance->sellLimit($precoVenda, $quantidadeVenda);
@@ -827,6 +830,34 @@ class BotExecutor
         $nivelFinal = (float) ($config->nivel_final ?? 0);
         return $config->niveis()[max(1, $contador)]
             ?? ($nivelFinal > 0 ? $nivelFinal : 0.08);
+    }
+
+    /**
+     * BRL disponível pro bot operar: saldo REAL menos o total de depósitos
+     * condicionais já transferidos pra Binance esperando gatilho (dinheiro
+     * de cliente sem cota — não é capital do fundo; operar com ele seria
+     * apostar dinheiro alheio que não pertence aos cotistas). Usado em
+     * TODA leitura de saldo que dimensiona ordens, alocação ou performance.
+     */
+    private function brlDisponivel(float $brlReal): float
+    {
+        $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+        return max(0.0, $brlReal - $retidos);
+    }
+
+    /**
+     * BOOST de ordens (admin): multiplicador fixo (1 + boost%) no valor
+     * FINAL de toda ordem criada — aplicado POR ÚLTIMO, depois de todos os
+     * ajustes do bot (nível, fatores de tendência/alocação, bump de
+     * min_notional e piso por ordem). A ordem sai X% maior que a decisão
+     * final; apenas os TETOS ABSOLUTOS ainda mandam por cima (99,5% do
+     * saldo na compra, 95% do estoque na venda — além disso a Binance
+     * recusaria). A troca de valor no painel cancela as ordens abertas e o
+     * ciclo recria o par no novo tamanho.
+     */
+    private function boostFator(BotConfig $config): float
+    {
+        return 1.0 + max(0.0, min(100.0, (float) ($config->boost_pct ?? 0))) / 100.0;
     }
 
     // ============================================================
@@ -1316,7 +1347,7 @@ class BotExecutor
             $saldos = $this->binance->getSaldos();
             if (isset($saldos['balances'])) {
                 $b   = collect($saldos['balances']);
-                $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+                $brl = $this->brlDisponivel((float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0));
                 $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
             }
         } catch (\Throwable $e) {
@@ -1365,7 +1396,7 @@ class BotExecutor
                 return;
             }
             $b   = collect($saldos['balances']);
-            $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+            $brl = $this->brlDisponivel((float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0));
             $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
 
             $config->patrimonio_inicial = round($brl + $btc * $precoAtual, 2);
@@ -1697,7 +1728,7 @@ class BotExecutor
         }
 
         $balances = collect($saldos['balances']);
-        $saldoBRL = (float) ($balances->firstWhere('asset', 'BRL')['free'] ?? 0);
+        $saldoBRL = $this->brlDisponivel((float) ($balances->firstWhere('asset', 'BRL')['free'] ?? 0));
         $saldoBTC = (float) ($balances->firstWhere('asset', 'BTC')['free'] ?? 0);
 
         $direcao       = $state->direcao_atual;
@@ -1854,6 +1885,15 @@ class BotExecutor
             $valorCompra = $saldoBRL * (min($pisoPct, 99.5) / 100.0);
         }
 
+        // ── Boost do admin: POR ÚLTIMO, após TODOS os ajustes do bot (nível,
+        // fatores, bumps e piso) — a ordem sai X% maior que a decisão final.
+        // Único limite que ainda manda é o teto absoluto do saldo (99,5%):
+        // ordem maior que o disponível a Binance recusaria.
+        $valorCompra *= $this->boostFator($config);
+        if ($valorCompra > $saldoBRL * 0.995) {
+            $valorCompra = $saldoBRL * 0.995;
+        }
+
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
         Log::info('DEBUG-COMPRA', [
             'saldoBRL' => $saldoBRL,
@@ -1935,6 +1975,17 @@ class BotExecutor
             $percentualVenda = min($pisoPct, self::ALLIN_CAP * 100.0) / 100.0;
             $qtyVenda        = $saldoBTC * $percentualVenda;
             $valorVenda      = $qtyVenda * $precoVenda;
+        }
+
+        // ── Boost do admin: POR ÚLTIMO, após TODOS os ajustes (nível, fatores,
+        // bump e piso) — a perna sai X% maior que a decisão final do bot. O
+        // teto absoluto do all-in (95% do estoque) segue mandando por cima.
+        $boostVenda = $this->boostFator($config);
+        $qtyVenda   *= $boostVenda;
+        $valorVenda *= $boostVenda;
+        if ($qtyVenda > $saldoBTC * self::ALLIN_CAP) {
+            $qtyVenda   = $saldoBTC * self::ALLIN_CAP;
+            $valorVenda = $qtyVenda * $precoVenda;
         }
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──

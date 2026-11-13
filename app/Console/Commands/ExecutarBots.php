@@ -73,13 +73,19 @@ class ExecutarBots extends Command
             }
 
             // Alertas de preço do admin ("avisa quando o BTC chegar a X",
-            // criado no app). Fora do loop de bots: funciona mesmo com bot
-            // pausado ou desativado, e não paga chamada à Binance quando
-            // não há pendentes.
+            // criado no app) e depósitos condicionais retidos ("vira cotas
+            // quando o BTC cair até X"). Fora do loop de bots: funcionam
+            // mesmo com bot pausado ou desativado, e não pagam chamada à
+            // Binance quando não há pendentes.
             try {
                 $this->verificarAlertasPreco();
             } catch (\Throwable $e) {
                 Log::warning("ExecutarBots: falha ao checar alertas de preço (não bloqueia execução): " . $e->getMessage());
+            }
+            try {
+                $this->converterDepositosRetidos();
+            } catch (\Throwable $e) {
+                Log::warning("ExecutarBots: falha ao checar depósitos retidos (não bloqueia execução): " . $e->getMessage());
             }
 
             foreach ($bots as $bot) {
@@ -126,6 +132,31 @@ class ExecutarBots extends Command
 
             FcmService::notificarAlertaBtc($alerta->user_id, $alerta->direcao, $alerta->alvo, $preco);
         }
+    }
+
+    /**
+     * Depósitos condicionais: só consulta o ticker quando existe algum
+     * retido; com preço em mão, deixa o DepositoService converter quem
+     * atingiu o gatilho (credita cotas + pausa o bot pra servir a
+     * transferência pra Binance).
+     */
+    private function converterDepositosRetidos(): void
+    {
+        $temRetido = \App\Models\PixPayment::where('status', 'pago')
+            ->where('registrado', false)
+            ->whereNull('convertido_em')
+            ->whereNotNull('gatilho_preco')
+            ->exists();
+        if (!$temRetido) {
+            return; // nada retido: nem toca a Binance
+        }
+
+        $preco = (float) app(BinanceController::class)->getPrecos()['BTCBRL'];
+        if ($preco <= 0) {
+            return; // ticker indisponível — o próximo ciclo tenta de novo
+        }
+
+        app(\App\Services\DepositoService::class)->processarGatilhos($preco);
     }
 
     /**

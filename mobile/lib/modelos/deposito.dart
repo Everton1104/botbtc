@@ -155,6 +155,8 @@ class DepositoHistorico {
   final double? btcPrice; // preço do BTC na hora do pagamento
   final String status; // 'pago' | 'estornado'
   final bool registrado; // true = admin já creditou as cotas
+  final bool aguardandoGatilho; // retido: cotas só quando BTC <= gatilho
+  final double? gatilhoPreco; // preço-gatilho do depósito condicional
 
   const DepositoHistorico({
     required this.id,
@@ -163,6 +165,8 @@ class DepositoHistorico {
     required this.btcPrice,
     required this.status,
     required this.registrado,
+    this.aguardandoGatilho = false,
+    this.gatilhoPreco,
   });
 
   bool get estornado => status == 'estornado';
@@ -175,6 +179,10 @@ class DepositoHistorico {
       btcPrice: json['btc_price'] == null ? null : _num(json['btc_price']),
       status: json['status'] as String? ?? 'pago',
       registrado: json['registrado'] as bool? ?? false,
+      aguardandoGatilho: json['aguardando_gatilho'] as bool? ?? false,
+      gatilhoPreco: json['gatilho_preco'] == null
+          ? null
+          : _num(json['gatilho_preco']),
     );
   }
 }
@@ -193,6 +201,9 @@ class DepositoAdmin {
   final String pagoEm;
   final bool registrado;
   final bool estornado;
+  final bool aguardandoGatilho; // retido: cotas só quando BTC <= gatilho
+  final double? gatilhoPreco; // preço-gatilho do depósito condicional
+  final bool transferido; // retido cujo valor já está na Binance
 
   const DepositoAdmin({
     required this.id,
@@ -206,6 +217,9 @@ class DepositoAdmin {
     required this.pagoEm,
     required this.registrado,
     required this.estornado,
+    this.aguardandoGatilho = false,
+    this.gatilhoPreco,
+    this.transferido = false,
   });
 
   factory DepositoAdmin.fromJson(Map<String, dynamic> json) => DepositoAdmin(
@@ -220,6 +234,11 @@ class DepositoAdmin {
         pagoEm: json['pago_em'] as String? ?? '—',
         registrado: json['registrado'] as bool? ?? false,
         estornado: json['estornado'] as bool? ?? false,
+        aguardandoGatilho: json['aguardando_gatilho'] as bool? ?? false,
+        gatilhoPreco: json['gatilho_preco'] == null
+            ? null
+            : _num(json['gatilho_preco']),
+        transferido: json['transferido'] as bool? ?? false,
       );
 }
 

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BotInvestment;
 use App\Models\BotWithdrawalRequest;
+use App\Models\FcmToken;
 use App\Models\PixPayment;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -19,10 +20,13 @@ use Illuminate\Support\Facades\DB;
 class UsuarioService
 {
     /**
-     * Remove a conta de um usuário SEM cotas, sem depósito pago e sem
-     * saque pendente — nada com valor financeiro pode existir. Junto vão
-     * os tokens de acesso/app, cobranças mortas (pendente/expirado) e a
-     * linha zerada de investimento; os FCM tokens caem por FK cascade.
+     * REMOVE (soft delete) a conta de um usuário sem valor financeiro
+     * vivo: sem cotas, sem saque pendente e sem depósito pago que ainda
+     * não foi registrado (dinheiro recebido e não processado). A conta é
+     * DESATIVADA, não apagada: usuário e histórico financeiro (depósitos,
+     * saques) ficam no banco pra sempre — todas as listas e o login usam
+     * Eloquent, então conta removida some delas sozinha. Tokens de
+     * acesso/app e de push são revogados na hora.
      */
     public function remover(int $userId, int $adminId): array
     {
@@ -40,8 +44,8 @@ class UsuarioService
             return ['ok' => false, 'code' => 422, 'mensagem' => "{$user->name} possui cotas — a conta não pode ser removida."];
         }
 
-        if (PixPayment::where('user_id', $userId)->whereIn('status', ['pago', 'estornado'])->exists()) {
-            return ['ok' => false, 'code' => 422, 'mensagem' => "{$user->name} tem depósitos no histórico — a conta não pode ser removida."];
+        if (PixPayment::where('user_id', $userId)->where('status', 'pago')->where('registrado', false)->exists()) {
+            return ['ok' => false, 'code' => 422, 'mensagem' => "{$user->name} tem depósito pago sem registro no bot — registre ou estorne antes de remover a conta."];
         }
 
         if (BotWithdrawalRequest::where('user_id', $userId)->where('status', 'pendente')->exists()) {
@@ -49,18 +53,17 @@ class UsuarioService
         }
 
         DB::transaction(function () use ($user, $userId) {
-            // Tokens Sanctum do app e sobras sem valor financeiro
+            // Acesso morto na hora: token do app (Sanctum) e push (FCM)
             DB::table('personal_access_tokens')
                 ->where('tokenable_type', User::class)
                 ->where('tokenable_id', $userId)
                 ->delete();
-            PixPayment::where('user_id', $userId)->delete();
-            BotWithdrawalRequest::where('user_id', $userId)->delete();
-            BotInvestment::where('user_id', $userId)->delete();
+            FcmToken::where('user_id', $userId)->delete();
 
-            $user->delete(); // fcm_tokens caem por FK cascade
+            // Soft delete: deleted_at setado, tudo mais preservado
+            $user->delete();
         });
 
-        return ['ok' => true, 'mensagem' => "Conta de {$user->name} removida."];
+        return ['ok' => true, 'mensagem' => "Conta de {$user->name} removida — o histórico fica preservado no banco."];
     }
 }

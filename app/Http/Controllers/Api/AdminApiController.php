@@ -166,6 +166,11 @@ class AdminApiController extends Controller
                 $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
                 $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
 
+                // Performance do FUNDO: retidos esperando gatilho não são
+                // capital operacional (o bot nem os enxerga) — fora da base.
+                $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+                $brl     = max(0.0, $brl - $retidos);
+
                 $performance = $this->pnl->performance($brl, $btc, $preco);
             }
         } catch (\Throwable) {

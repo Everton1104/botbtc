@@ -163,6 +163,41 @@ class FcmService
     }
 
     /**
+     * Push do gatilho CONVERTIDO: depósito retido atingiu o alvo e o ciclo
+     * creditou as cotas sozinho — o valor já estava na Binance, nada a
+     * fazer (nem de madrugada). Informativo pro admin.
+     */
+    public static function notificarGatilhoConvertido(float $valor, string $nome, float $gatilho): void
+    {
+        self::enviar(
+            '🟢 Depósito virou cotas (gatilho)',
+            'BTC caiu até R$ ' . number_format($gatilho, 2, ',', '.') . ' — R$ '
+                . number_format($valor, 2, ',', '.') . " de {$nome} virou cotas automaticamente. "
+                . 'O valor já estava na Binance: nada a fazer.',
+            ['tipo' => 'deposito', 'gatilho' => '1'],
+            self::ADMIN_ID,
+        );
+    }
+
+    /**
+     * Push do gatilho atingido com valor AINDA FORA da Binance: o sistema
+     * NÃO converteu (sem lastro) — o admin decide: transferir pra Binance
+     * e marcar "transferido" (converte sozinho no ciclo seguinte), ou
+     * registrar sem gatilho (fluxo manual clássico com pausa).
+     */
+    public static function notificarGatilhoAguardandoTransferencia(float $valor, string $nome, float $gatilho): void
+    {
+        self::enviar(
+            '🟡 Gatilho atingido — valor fora da Binance',
+            'BTC caiu até R$ ' . number_format($gatilho, 2, ',', '.') . ' — R$ '
+                . number_format($valor, 2, ',', '.') . " de {$nome} aguardam. Transfira pra Binance "
+                . 'e marque "transferido" no app (converte sozinho), ou registre sem gatilho.',
+            ['tipo' => 'deposito', 'gatilho' => 'aguardando'],
+            self::ADMIN_ID,
+        );
+    }
+
+    /**
      * Push de saque solicitado — espelha o WhatsApp que o admin já recebe.
      * A chave PIX (opcional) vai no corpo: o admin paga lendo a notificação.
      */

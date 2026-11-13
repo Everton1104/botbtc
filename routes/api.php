@@ -76,6 +76,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Aprovação do admin — registrar credita cotas + marca registrado
     // numa única transaction; estornar devolve via MercadoPago.
     Route::post('/deposito/registrar/{id}', [DepositoApiController::class, 'registrar']);
+    // Depósito retido com gatilho: marcar que o valor já foi transferido
+    // pra Binance (fica fora do capital do fundo até o gatilho converter).
+    Route::post('/deposito/transferido/{id}', [DepositoApiController::class, 'transferido']);
     Route::post('/deposito/estornar/{id}', [DepositoApiController::class, 'estornar']);
     // Aporte direto sem gateway — só admin
     Route::post('/deposito/manual', [DepositoApiController::class, 'manual']);

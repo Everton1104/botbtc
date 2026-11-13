@@ -34,6 +34,7 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
   final _ctrPisoBaixa = TextEditingController();
   final _ctrPisoOrdem = TextEditingController();
   final _ctrGuardMeta = TextEditingController();
+  final _ctrBoost = TextEditingController();
   final _ctrSpread = TextEditingController();
   final _ctrTaxa = TextEditingController();
   final _ctrRsiMax = TextEditingController();
@@ -64,6 +65,7 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
     _ctrPisoBaixa.dispose();
     _ctrPisoOrdem.dispose();
     _ctrGuardMeta.dispose();
+    _ctrBoost.dispose();
     _ctrSpread.dispose();
     _ctrTaxa.dispose();
     _ctrRsiMax.dispose();
@@ -106,6 +108,7 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
     _ctrPisoAlta.text = _semZeros(c.pisoAltaDeltaPct);
     _ctrPisoBaixa.text = _semZeros(c.pisoBaixaDeltaPct);
     _ctrPisoOrdem.text = _semZeros(c.pisoOrdemPct);
+    _ctrBoost.text = _semZeros(c.boostPct);
     _ctrGuardMeta.text = _semZeros(c.guardMetaPct);
     _ctrSpread.text = _semZeros(c.spreadMinimoPct);
     _ctrTaxa.text = _semZeros(c.taxaTotalPct);
@@ -242,6 +245,7 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
         allinThreshold: _lerInt(_ctrAllin, atual.allinThreshold),
         minNotional: atual.minNotional,
         pisoOrdemPct: _lerDouble(_ctrPisoOrdem, atual.pisoOrdemPct),
+        boostPct: _lerDouble(_ctrBoost, atual.boostPct),
         targetBtcPct: _alvoBtc,
         deltaAlertaPct: _lerDouble(_ctrDeltaAlerta, atual.deltaAlertaPct),
         deltaBloqueioPct: _lerDouble(_ctrDeltaBloqueio, atual.deltaBloqueioPct),
@@ -478,10 +482,16 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
           titulo: 'Dimensionamento de ordens',
           descricao: 'Piso: ordem que entra nunca é menor que X% do saldo '
               '(0 desliga). Guard: com o lado de risco abaixo de X% do alvo, o '
-              'freio da tendência forte é suavizado de ×0.5 para ×0.8.',
+              'freio da tendência forte é suavizado de ×0.5 para ×0.8. Boost: '
+              'multiplica o valor FINAL das ordens nas duas pernas, depois de '
+              'todos os ajustes do bot (ex.: 30 → ordens 30% maiores, inclusive '
+              'pisos; 0 = desligado) — trocar o valor cancela as ordens abertas '
+              'e o ciclo recria o par no novo tamanho. Limites por cima: 99,5% '
+              'do saldo e 95% do estoque.',
           children: [
             _campo('Piso por ordem (% do saldo)', _ctrPisoOrdem, '%'),
             _campo('Guard de meta (% do alvo)', _ctrGuardMeta, '%'),
+            _campo('Boost de ordens (%)', _ctrBoost, '%'),
           ],
         ),
 

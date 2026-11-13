@@ -30,6 +30,7 @@ import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_acoes.dart';
 import 'tela_admin.dart';
+import 'tela_cartao1248.dart';
 import 'tela_login.dart';
 
 class TelaHome extends StatefulWidget {
@@ -280,8 +281,10 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
         title: const Text('Excluir conta'),
         content: Text(
           'Excluir a CONTA de ${i.nome} (${i.email})?\n\n'
-          'Esta ação é irreversível. Só é possível sem cotas, sem depósitos '
-          'no histórico e sem saque pendente.',
+          'Esta ação é irreversível. Só é possível sem cotas, sem depósito '
+          'pago pendente de registro e sem saque pendente. A conta sai das '
+          'listas e não pode mais acessar — o histórico financeiro fica '
+          'preservado no banco.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Voltar')),
@@ -361,6 +364,15 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
               tooltip: 'Admin do bot',
               onPressed: _abrirAdmin,
             ),
+          // Cartão 1248: backup físico da seed — imagem do cartão, instruções
+          // e PDF pra imprimir (o simulador interativo continua no site).
+          IconButton(
+            icon: const Icon(Icons.confirmation_number),
+            tooltip: 'Cartão 1248',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TelaCartao1248()),
+            ),
+          ),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Sair', onPressed: _sair),
         ],
       ),

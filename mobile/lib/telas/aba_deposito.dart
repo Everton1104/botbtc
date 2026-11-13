@@ -573,28 +573,151 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
     }
   }
 
-  /// REGISTRAR depósito no bot (admin) — crédito de cotas.
+  /// REGISTRAR depósito no bot (admin) — crédito de cotas. Duas opções:
   ///
-  /// O diálogo é o passo a passo: o cálculo das cotas assume que o valor
-  /// do PIX JÁ foi transferido da InfinitePay para a Binance (subtrai o
-  /// valor do patrimônio lido). Registrar antes da transferência emite
-  /// cotas a mais e dilui o preço da cota de todos.
+  /// • AGORA: o cálculo das cotas assume que o valor do PIX JÁ foi
+  ///   transferido da InfinitePay para a Binance (subtrai do patrimônio
+  ///   lido). Registrar antes da transferência emite cotas a mais.
+  /// • COM GATILHO: retém o depósito — vira cotas só quando o BTC CAIR
+  ///   até o preço-gatilho (o ciclo confere a cada minuto). O valor pode
+  ///   continuar na InfinitePay: a conversão pausa o bot e avisa pra
+  ///   você transferir pra Binance e liberar (mesmo ritual do manual).
   Future<void> _registrar(DepositoAdmin d) async {
+    final r = await _dialogoRegistrar(d);
+    if (r == null) return; // cancelado
+
+    double? gatilho;
+    if (r['esperar'] == true) {
+      gatilho = double.tryParse(
+            (r['gatilho'] as String).replaceAll('.', '').replaceAll(',', '.'),
+          ) ??
+          double.tryParse(r['gatilho'] as String);
+      if (gatilho == null || gatilho < 1000) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Digite um preço-gatilho válido (ex.: 400000).'),
+                backgroundColor: Cores.vermelho),
+          );
+        }
+        return;
+      }
+    }
+
+    await _acao(
+      chamada: () => ApiService.registrarDeposito(d.id, gatilho: gatilho),
+      bloqueado: () => _processandoId != null,
+      ligar: () => setState(() => _processandoId = null),
+      desligar: () => setState(() => _processandoId = d.id),
+    );
+  }
+
+  /// O diálogo do registrar: escolhe entre creditar agora ou reter até o
+  /// BTC cair até um gatilho. Devolve null (cancelado) ou um mapa com
+  /// 'esperar' (bool) e 'gatilho' (String digitada, vazia = agora).
+  Future<Map<String, dynamic>?> _dialogoRegistrar(DepositoAdmin d) {
+    var esperar = false;
+    final ctrGatilho = TextEditingController();
+
+    final futuro = showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Registrar depósito no Bot'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Registrar ${moeda(d.liquido)} de ${d.userName}?\n'),
+                if (!esperar)
+                  const Text(
+                    'Registrar AGORA exige o ritual: o valor já deve estar '
+                    'transferido da InfinitePay para a Binance (as cotas são '
+                    'creditadas pelo patrimônio atual).',
+                    style: TextStyle(fontSize: 12, height: 1.4),
+                  ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Esperar o BTC cair (gatilho)',
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  subtitle: const Text(
+                    'O valor fica retido e vira cotas só quando o BTC cair '
+                    'até o preço abaixo. Não altera o valor das cotas enquanto '
+                    'espera.',
+                    style: TextStyle(fontSize: 11, height: 1.35),
+                  ),
+                  activeThumbColor: Cores.dourado,
+                  value: esperar,
+                  onChanged: (v) => setDialog(() => esperar = v),
+                ),
+                if (esperar) ...[
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: ctrGatilho,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Vira cotas se BTC cair até (R\$)',
+                      hintText: '400000',
+                      prefixText: 'R\$ ',
+                      counterText: '',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLength: 12,
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Ao atingir, o sistema credita as cotas sozinho, PAUSA o '
+                    'bot e te avisa: transfira o valor pra Binance e libere.',
+                    style: TextStyle(fontSize: 11, height: 1.35, color: Cores.textoSuave),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Voltar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop({
+                'esperar': esperar,
+                'gatilho': esperar ? ctrGatilho.text.trim() : '',
+              }),
+              child: Text(esperar ? 'Reter' : 'Registrar'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // O diálogo fechou: solta o controller fora do builder.
+    futuro.whenComplete(ctrGatilho.dispose);
+    return futuro;
+  }
+
+  /// MARCAR TRANSFERIDO (admin) — o valor do depósito retido já chegou na
+  /// Binance. A partir daqui o dinheiro fica fora do capital do fundo e o
+  /// gatilho converte sozinho, sem pausa (mesmo de madrugada).
+  Future<void> _marcarTransferido(DepositoAdmin d) async {
     final prosseguir = await _confirmar(
-      titulo: 'Registrar depósito no Bot',
-      mensagem: 'Registrar ${moeda(d.liquido)} de ${d.userName}?\n\n'
-          'Passo a passo antes de confirmar:\n'
-          '1. Transferir ${moeda(d.liquido)} da InfinitePay para a '
-          'Binance (depósito BRL);\n'
-          '2. Conferir que o valor já está no saldo da Binance;\n'
-          '3. Confirmar — as cotas são creditadas pelo patrimônio atual.\n\n'
-          'O valor já está na Binance?',
-      botao: 'Registrar',
+      titulo: 'Valor já na Binance',
+      mensagem: 'O valor de ${moeda(d.liquido)} de ${d.userName} já foi '
+          'transferido pra Binance?\n\nA partir de agora ele fica FORA do '
+          'capital do fundo (o bot não opera com ele) e vira cotas '
+          'automaticamente quando o BTC cair até ${d.gatilhoPreco != null ? moeda(d.gatilhoPreco!) : '—'} '
+          '— sem pausa, sem ação sua. Se o preço já estiver no gatilho, a '
+          'conversão acontece no próximo ciclo (≤1 min).',
+      botao: 'Confirmar',
     );
     if (prosseguir != true) return;
 
     await _acao(
-      chamada: () => ApiService.registrarDeposito(d.id),
+      chamada: () => ApiService.marcarTransferidoDeposito(d.id),
       bloqueado: () => _processandoId != null,
       ligar: () => setState(() => _processandoId = null),
       desligar: () => setState(() => _processandoId = d.id),
@@ -1120,7 +1243,13 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
                   children: [
                     Text(d.estornado ? 'Estornado em ${d.pagoEm}' : 'Pago em ${d.pagoEm}',
                         style: const TextStyle(color: Cores.textoSuave)),
-                    if (!d.estornado && !d.registrado)
+                    if (!d.estornado && !d.registrado && d.aguardandoGatilho)
+                      Text(
+                        'Retido — cotas quando BTC cair até '
+                        '${d.gatilhoPreco != null ? moeda(d.gatilhoPreco!) : '—'}',
+                        style: const TextStyle(fontSize: 10.5, color: Cores.dourado),
+                      )
+                    else if (!d.estornado && !d.registrado)
                       const Text('Aguardando registro no bot',
                           style:
                               TextStyle(fontSize: 10.5, color: Cores.dourado)),
@@ -1277,6 +1406,44 @@ class _AbaDepositoState extends State<AbaDeposito> with WidgetsBindingObserver {
                 Expanded(child: _miniInfo('Método', d.metodo)),
               ],
             ),
+            // Depósito condicional: o gatilho em destaque (o que falta pra
+            // virar cotas) — o botão "Registrar no Bot" continua de pé e
+            // ANTECIPA a conversão se você quiser.
+            if (d.aguardandoGatilho && d.gatilhoPreco != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Cores.dourado.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  d.transferido
+                      ? 'RETIDO NA BINANCE — vira cotas automaticamente quando BTC cair até ${moeda(d.gatilhoPreco!)} (sem pausa)'
+                      : 'RETIDO — vira cotas quando BTC cair até ${moeda(d.gatilhoPreco!)} · transfira o valor pra Binance e toque "já transferi"',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Cores.dourado),
+                ),
+              ),
+              if (!d.transferido) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Cores.verde,
+                      side: const BorderSide(color: Cores.verde),
+                    ),
+                    onPressed: _processandoId != null ? null : () => _marcarTransferido(d),
+                    icon: _processandoId == d.id
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.account_balance_outlined, size: 16),
+                    label: Text(_processandoId == d.id ? 'Marcando...' : 'Já transferi pra Binance',
+                        style: const TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+              ],
+            ],
             const SizedBox(height: 6),
             // Lembrete fixo do ritual (o diálogo ao registrar detalha os
             // passos): cotas só depois do valor estar na Binance.

@@ -51,6 +51,10 @@ class DepositoApiController extends Controller
      * POST /api/deposito/registrar/{id} — SÓ ADMIN. Credita as cotas e
      * marca o PIX como registrado numa única transaction (no site são
      * dois passos separados — aqui não há janela de duplo crédito).
+     *
+     * Body opcional { "gatilho_preco": X }: RETÉM o depósito — vira cotas
+     * só quando o BTC cair até X (o ciclo confere; a conversão pausa o
+     * bot pro admin transferir o valor pra Binance e liberar).
      */
     public function registrar(Request $request, int $id): JsonResponse
     {
@@ -58,7 +62,34 @@ class DepositoApiController extends Controller
             return response()->json(['mensagem' => 'Acesso negado.'], 403);
         }
 
-        $r = $this->depositos->registrarDeposito($id);
+        // Gatilho opcional: aceita "600000" e "600000,50" (teclado do app).
+        $gatilho = null;
+        $bruto = str_replace(',', '.', (string) $request->input('gatilho_preco', ''));
+        if ($bruto !== '') {
+            $gatilho = (float) $bruto;
+            if ($gatilho < 1000) {
+                return response()->json(['mensagem' => 'Gatilho inválido — use um preço do BTC (ex.: 400000).'], 422);
+            }
+        }
+
+        $r = $this->depositos->registrarDeposito($id, $gatilho);
+
+        return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
+    }
+
+    /**
+     * POST /api/deposito/transferido/{id} — SÓ ADMIN. Marca que o valor do
+     * depósito retido JÁ foi transferido pra Binance: a partir daqui ele
+     * fica fora do capital do fundo (cota e bot) e o gatilho converte
+     * sozinho quando o preço atingir — sem pausa, sem ritual.
+     */
+    public function transferido(Request $request, int $id): JsonResponse
+    {
+        if ($request->user()->id !== 1) {
+            return response()->json(['mensagem' => 'Acesso negado.'], 403);
+        }
+
+        $r = $this->depositos->marcarTransferido($id);
 
         return response()->json(['mensagem' => $r['mensagem']], $r['ok'] ? 200 : ($r['code'] ?? 422));
     }

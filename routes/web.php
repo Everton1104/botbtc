@@ -9,6 +9,33 @@ Route::get('/politicabot', function () {
     return view('politicabot');
 });
 
+// ── Cartão 1248 ──────────────────────────────────────────────────────────────
+// Backup físico das frases da cold wallet: página pública com instruções,
+// simulador animado (monta número BIP-39 0-2048), lista das 2048 palavras e
+// download do PDF FIXO (public/cartao-1248.pdf, 24 cartões, só frente).
+// Pra trocar a cartela, é só substituir esse arquivo.
+Route::view('/1248', 'cartao1248')->name('cartao1248');
+
+// ── Gerar Carteira ───────────────────────────────────────────────────────────
+// Aba de geração/importação de seed: frase nova ou colada, cartões 1248 por
+// palavra, zpub watch-only em destaque (seed/xprv ficam no "Avançado") e
+// assinador offline (só na versão baixada). Pública como o próprio 1248.
+Route::view('/gerar-carteira', 'gerar-carteira')->name('gerar-carteira');
+
+// ── Carteiras (watch-only) ───────────────────────────────────────────────────
+// Aba do painel: importa zpub (chave PÚBLICA), acompanha saldo/histórico em
+// tempo real (mempool.space), monta transação NÃO assinada e transmite a
+// assinada — a assinatura em si fica no arquivo offline do Cartão 1248.
+Route::middleware(['auth', 'whatsapp.verified'])->group(function () {
+    Route::get('/carteiras', [\App\Http\Controllers\CarteirasController::class, 'index'])->name('carteiras');
+    Route::get('/carteiras/dados', [\App\Http\Controllers\CarteirasController::class, 'dados']);
+    Route::get('/carteiras/taxas', [\App\Http\Controllers\CarteirasController::class, 'taxas']);
+    Route::post('/carteiras/importar', [\App\Http\Controllers\CarteirasController::class, 'importar']);
+    Route::post('/carteiras/enviar', [\App\Http\Controllers\CarteirasController::class, 'enviar']);
+    Route::post('/carteiras/{id}/enderecos', [\App\Http\Controllers\CarteirasController::class, 'atualizarEnderecos']);
+    Route::delete('/carteiras/{id}', [\App\Http\Controllers\CarteirasController::class, 'destruir']);
+});
+
 Route::get('/', function () {
     return view('bot');
 })->middleware(['auth', 'whatsapp.verified']);
@@ -474,6 +501,11 @@ Route::get('/admin/usuarios-investimentos', function (BinanceController $binance
 
     $patrimonioAtual = ((float)$brl['free'] + (float)$brl['locked'])
                      + (((float)$btc['free'] + (float)$btc['locked']) * $preco);
+
+    // Retidos na Binance esperando gatilho não são capital do fundo —
+    // o preço da cota não pode vê-los (mesma regra do app).
+    $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+    $patrimonioAtual = max(0.0, $patrimonioAtual - $retidos);
 
     $totalCotas   = (float) BotInvestment::sum('cotas');
     $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;

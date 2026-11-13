@@ -59,6 +59,12 @@ class SaqueService
         $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
                          + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
 
+        // Depósitos condicionais já transferidos esperando gatilho: estão
+        // no saldo mas não são capital do FUNDO — o preço da cota (base do
+        // saque) não pode enxergar esse dinheiro.
+        $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+        $patrimonioAtual = max(0.0, $patrimonioAtual - $retidos);
+
         $valorBruto = 0.0;
 
         try {

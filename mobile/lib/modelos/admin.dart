@@ -31,6 +31,7 @@ class ConfigBot {
   final int allinThreshold;
   final double minNotional;
   final double pisoOrdemPct;
+  final double boostPct; // multiplicador de ordens (0 = desligado, máx 100)
   final double targetBtcPct; // alvo de alocação (BRL é sempre 100−BTC)
   final double deltaAlertaPct, deltaBloqueioPct;
   final double pisoAltaDeltaPct, pisoBaixaDeltaPct;
@@ -54,6 +55,7 @@ class ConfigBot {
     required this.allinThreshold,
     required this.minNotional,
     required this.pisoOrdemPct,
+    this.boostPct = 0,
     required this.targetBtcPct,
     required this.deltaAlertaPct,
     required this.deltaBloqueioPct,
@@ -83,6 +85,7 @@ class ConfigBot {
         allinThreshold: (j['allin_threshold'] as num?)?.toInt() ?? 12,
         minNotional: _num(j['min_notional']),
         pisoOrdemPct: _num(j['piso_ordem_pct']),
+        boostPct: _num(j['boost_pct']),
         targetBtcPct: _num(j['target_btc_pct']),
         deltaAlertaPct: _num(j['delta_alerta_pct']),
         deltaBloqueioPct: _num(j['delta_bloqueio_pct']),
@@ -113,6 +116,7 @@ class ConfigBot {
         'allin_threshold': allinThreshold,
         'min_notional': minNotional,
         'piso_ordem_pct': pisoOrdemPct,
+        'boost_pct': boostPct,
         'target_btc_pct': targetBtcPct,
         'delta_alerta_pct': deltaAlertaPct,
         'delta_bloqueio_pct': deltaBloqueioPct,

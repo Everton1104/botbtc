@@ -225,6 +225,11 @@ class PainelApiController extends Controller
         $patrimonioAtual = ((float) $brl['free'] + (float) $brl['locked'])
                          + (((float) $btc['free'] + (float) $btc['locked']) * $preco);
 
+        // Retidos na Binance esperando gatilho não são capital do fundo —
+        // o preço da cota (e o valor do investidor) não pode vê-los.
+        $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+        $patrimonioAtual = max(0.0, $patrimonioAtual - $retidos);
+
         $totalCotas   = (float) BotInvestment::sum('cotas');
         $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
 
@@ -257,6 +262,10 @@ class PainelApiController extends Controller
 
         $patrimonioAtual = ((float) $brl['free'] + (float) $brl['locked'])
                          + (((float) $btc['free'] + (float) $btc['locked']) * $preco);
+
+        // Retidos na Binance esperando gatilho não são capital do fundo.
+        $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
+        $patrimonioAtual = max(0.0, $patrimonioAtual - $retidos);
 
         $totalCotas   = (float) BotInvestment::sum('cotas');
         $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;

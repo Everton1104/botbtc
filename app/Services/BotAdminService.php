@@ -110,7 +110,41 @@ class BotAdminService
             }
         }
 
+        // ── Boost de ordens: multiplicador fixo no tamanho de TODAS as ordens
+        // (0 = desligado). Trocou o valor → cancela as ordens abertas; o
+        // próximo ciclo recria o par já no novo tamanho (mesmo ritual da
+        // pausa manual, sem congelar nada).
+        $boostAntigo = (float) ($cfg->boost_pct ?? 0);
+        if (array_key_exists('boost_pct', $input)) {
+            $cfg->boost_pct = max(0.0, min(100.0, (float) $input['boost_pct']));
+        }
+        $boostMudou = (float) $cfg->boost_pct !== $boostAntigo;
+
         $cfg->save();
+
+        if ($boostMudou) {
+            $canceladas = 0;
+            try {
+                $binance = app(BinanceController::class);
+                $open    = $binance->getOpenOrders('BTCBRL');
+                if (is_array($open)) {
+                    foreach ($open as $ordem) {
+                        $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
+                        $canceladas++;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('BotAdminService: falha ao cancelar ordens na troca do boost (o ciclo recria de qualquer forma): ' . $e->getMessage());
+            }
+
+            $pct = number_format((float) $cfg->boost_pct, 1, ',', '.');
+            return [
+                'ok'     => true,
+                'mensagem' => 'Configuração salva. Boost de ordens agora é '
+                    . ($cfg->boost_pct > 0 ? "+{$pct}%" : 'desligado')
+                    . " — {$canceladas} ordem(ns) cancelada(s); o próximo ciclo recria o par no novo tamanho.",
+            ];
+        }
 
         return ['ok' => true, 'mensagem' => 'Configuração salva com sucesso!'];
     }

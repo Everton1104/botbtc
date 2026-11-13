@@ -116,12 +116,16 @@ class DepositoService
             ->orderByDesc('pago_em')
             ->get()
             ->map(fn($p) => [
-                'id'         => $p->id,
-                'valor'      => (float) $p->valor,
-                'pago_em'    => $p->pago_em?->format('d/m/Y H:i') ?? '—',
-                'btc_price'  => $p->btc_price ? (float) $p->btc_price : null,
-                'status'     => $p->status,
-                'registrado' => (bool) $p->registrado,
+                'id'                 => $p->id,
+                'valor'              => (float) $p->valor,
+                'pago_em'            => $p->pago_em?->format('d/m/Y H:i') ?? '—',
+                'btc_price'          => $p->btc_price ? (float) $p->btc_price : null,
+                'status'             => $p->status,
+                'registrado'         => (bool) $p->registrado,
+                // Depósito condicional retido: sem cotas até o BTC cair
+                // até o gatilho (o cliente vê o status no histórico).
+                'aguardando_gatilho' => $p->isAguardandoGatilho(),
+                'gatilho_preco'      => $p->gatilho_preco ? (float) $p->gatilho_preco : null,
             ])->all();
     }
 
@@ -135,29 +139,38 @@ class DepositoService
             ->orderByDesc('pago_em')
             ->get()
             ->map(fn($p) => [
-                'id'         => $p->id,
-                'txid'       => $p->txid,
-                'user_id'    => $p->user_id,
-                'user_name'  => $p->user?->name  ?? 'Desconhecido',
-                'user_email' => $p->user?->email ?? '—',
-                'valor'      => (float) $p->valor,
-                'liquido'    => $this->valorACreditar($p),
-                'metodo'     => str_starts_with($p->txid, 'manual_')
+                'id'                 => $p->id,
+                'txid'               => $p->txid,
+                'user_id'            => $p->user_id,
+                'user_name'          => $p->user?->name  ?? 'Desconhecido',
+                'user_email'         => $p->user?->email ?? '—',
+                'valor'              => (float) $p->valor,
+                'liquido'            => $this->valorACreditar($p),
+                'metodo'             => str_starts_with($p->txid, 'manual_')
                     ? 'Manual'
                     : ($p->capture_method === 'credit_card'
                         ? 'Cartão ' . (int) $p->installments . 'x'
                         : 'PIX'),
-                'pago_em'    => $p->pago_em?->format('d/m/Y H:i'),
-                'registrado' => (bool) $p->registrado,
-                'estornado'  => $p->status === 'estornado',
+                'pago_em'            => $p->pago_em?->format('d/m/Y H:i'),
+                'registrado'         => (bool) $p->registrado,
+                'estornado'          => $p->status === 'estornado',
+                'aguardando_gatilho' => $p->isAguardandoGatilho(),
+                'gatilho_preco'      => $p->gatilho_preco ? (float) $p->gatilho_preco : null,
+                'transferido'        => $p->transferido_em !== null,
             ])->all();
     }
 
     /**
      * REGISTRAR NO BOT — os 2 passos do site (investir-manual + marcar
      * registrado) numa única transaction. Crédito pelo valor LÍQUIDO.
+     *
+     * $gatilhoPreco (admin, opcional): em vez de creditar na hora, RETÉM o
+     * depósito — vira cotas só quando o BTC CAIR até o preço-gatilho (o
+     * ciclo confere a cada minuto). O dinheiro fica na custódia de sempre
+     * (fora da Binance): nada muda no patrimônio nem no preço da cota
+     * enquanto espera. Re-registrar sem gatilho converte na hora.
      */
-    public function registrarDeposito(int $pixId): array
+    public function registrarDeposito(int $pixId, ?float $gatilhoPreco = null): array
     {
         $pix = PixPayment::where('id', $pixId)->where('status', 'pago')->first();
 
@@ -169,6 +182,28 @@ class DepositoService
         }
         if (!$pix->user_id) {
             return ['ok' => false, 'code' => 404, 'mensagem' => 'Depósito sem investidor associado.'];
+        }
+
+        // ── Retenção por gatilho: marca e sai sem tocar em cotas ────────
+        if ($gatilhoPreco !== null && $gatilhoPreco > 0) {
+            try {
+                $precoAtual = (float) $this->binance->getPrecoBTC();
+            } catch (\Throwable) {
+                return ['ok' => false, 'code' => 500, 'mensagem' => 'Erro ao ler o preço do BTC. Tente novamente.'];
+            }
+            if ($gatilhoPreco >= $precoAtual) {
+                $fmt = number_format($gatilhoPreco, 2, ',', '.');
+                return ['ok' => false, 'code' => 422, 'mensagem' =>
+                    "BTC já está abaixo de R$ {$fmt} (agora R$ " . number_format($precoAtual, 2, ',', '.')
+                    . ') — use um gatilho MENOR que o preço atual, ou registre sem gatilho.'];
+            }
+
+            $pix->update(['gatilho_preco' => $gatilhoPreco]);
+
+            $fmt = number_format($gatilhoPreco, 2, ',', '.');
+            return ['ok' => true, 'mensagem' =>
+                'Depósito retido: vira cotas quando o BTC cair até R$ ' . $fmt
+                . '. O bot pausa sozinho na conversão pra você transferir o valor pra Binance.'];
         }
 
         $valor = $this->valorACreditar($pix);
@@ -187,9 +222,15 @@ class DepositoService
         }
 
         DB::transaction(function () use ($pix, $valor, $patrimonio, $btcPrice) {
-            $this->creditarCotasNaTransacao($pix->user_id, $valor, $patrimonio);
+            // Retido JÁ transferido: o valor está na Binance dentro dos
+            // retidos — não subtrai de novo (o retidosNaBinance da base já
+            // o exclui). Fluxo comum (dinheiro recém-chegado): subtrai.
+            $jaNoPatrimonio = $pix->transferido_em === null;
+            $this->creditarCotasNaTransacao($pix->user_id, $valor, $patrimonio, $jaNoPatrimonio);
 
-            $updates = ['registrado' => true];
+            // gatilho_preco null: registro imediato cancela qualquer
+            // retenção anterior (re-registrar um retido = antecipar).
+            $updates = ['registrado' => true, 'gatilho_preco' => null];
             if ($btcPrice) {
                 $updates['btc_price'] = $btcPrice;
             }
@@ -285,6 +326,125 @@ class DepositoService
         }
     }
 
+    // ── Depósito condicional (gatilho de preço) ─────────────────────────
+
+    /**
+     * TOTAL retido na Binance esperando gatilho (pago, sem cotas, com
+     * gatilho e JÁ transferido): dinheiro de cliente que existe no saldo
+     * real mas NÃO é capital do fundo. O preço da cota e o saldo operacional
+     * do bot descontam este valor até a conversão — quem não é cotista ainda
+     * não pode inflacionar/operar com o fundo.
+     */
+    public function retidosNaBinance(): float
+    {
+        return PixPayment::queryRetidosNaBinance()->get()
+            ->sum(fn ($p) => $this->valorACreditar($p));
+    }
+
+    /**
+     * Depósitos retidos cujo gatilho foi atingido — chamado pelo ciclo do
+     * bot (ExecutarBots) quando o BTC está <= gatilho. Dois estados:
+     *
+     * • JÁ TRANSFERIDO pra Binance: converte NA HORA — credita cotas pelo
+     *   preço da cota do momento (base = patrimônio do fundo, retidos
+     *   excluídos), marca convertido e avisa os dois lados. SEM pausa: o
+     *   dinheiro já está lá dentro, nada a fazer de madrugada.
+     * • AINDA NÃO TRANSFERIDO: NÃO converte sozinho (o dinheiro não está
+     *   na Binance — creditar cotas sem lastro e pausar às 3h da manhã é
+     *   o que esta v2 evita). Manda UM push pro admin decidir: transferir
+     *   e marcar "transferido" (o próximo ciclo converte), ou registrar
+     *   sem gatilho (fluxo manual clássico com pausa).
+     *
+     * Um falhar não bloqueia os outros.
+     */
+    public function processarGatilhos(float $precoBtc): int
+    {
+        $retidos = PixPayment::where('status', 'pago')
+            ->where('registrado', false)
+            ->whereNull('convertido_em')
+            ->whereNotNull('gatilho_preco')
+            ->where('gatilho_preco', '>=', $precoBtc)
+            ->with('user:id,name')
+            ->get();
+
+        foreach ($retidos as $pix) {
+            try {
+                $nome    = $pix->user?->name ?? 'investidor';
+                $valor   = $this->valorACreditar($pix);
+                $gatilho = (float) $pix->gatilho_preco;
+
+                // ── Ainda fora da Binance: só avisa (uma vez) ────────────
+                if ($pix->transferido_em === null) {
+                    $jaAvisado = $pix->aviso_gatilho_em !== null
+                        && $pix->aviso_gatilho_em->gt(now()->subDay());
+                    if (!$jaAvisado) {
+                        $pix->update(['aviso_gatilho_em' => now()]);
+                        \App\Services\FcmService::notificarGatilhoAguardandoTransferencia($valor, $nome, $gatilho);
+                        Log::info("Gatilho de depósito atingido (BTC R$ " . number_format($gatilho, 2, ',', '.') . ") mas #{$pix->id} fora da Binance — admin avisado.");
+                    }
+                    continue;
+                }
+
+                // ── Transferido: conversão automática, sem pausa ─────────
+                // Patrimônio lido FORA da transaction (Binance) — por retido,
+                // porque cada crédito muda o preço da cota do próximo.
+                $patrimonio = $this->patrimonioAtual();
+
+                DB::transaction(function () use ($pix, $valor, $patrimonio, $precoBtc) {
+                    // Crédito ANTES de marcar convertido: o próprio valor
+                    // continua no bucket dos retidos durante o cálculo da
+                    // base (fluxo false = patrimônio do fundo puro).
+                    $this->creditarCotasNaTransacao($pix->user_id, $valor, $patrimonio, valorJaNoPatrimonio: false);
+                    $pix->update([
+                        'registrado'    => true,
+                        'convertido_em' => now(),
+                        'btc_price'     => $precoBtc,
+                    ]);
+                });
+
+                \App\Services\FcmService::notificarGatilhoConvertido($valor, $nome, $gatilho);
+                \App\Services\FcmService::notificarAtivosLiberados($pix->user_id, $valor);
+
+                Log::info("Gatilho de depósito atingido (BTC R$ " . number_format($gatilho, 2, ',', '.') . "): R$ {$valor} de {$nome} virou cotas (automático, valor já na Binance).");
+            } catch (\Throwable $e) {
+                Log::warning("DepositoService: falha ao converter depósito retido #{$pix->id} (tenta de novo no próximo ciclo): " . $e->getMessage());
+            }
+        }
+
+        return $retidos->count();
+    }
+
+    /**
+     * MARCAR TRANSFERIDO (admin): o valor do depósito retido já foi pra
+     * Binance — a partir daqui o dinheiro é excluído do capital do fundo
+     * (cota e bot) e o gatilho converte sozinho, sem pausa. Se o preço já
+     * estiver no gatilho, o próximo ciclo (≤1 min) converte.
+     */
+    public function marcarTransferido(int $pixId): array
+    {
+        $pix = PixPayment::where('id', $pixId)->where('status', 'pago')->first();
+
+        if (!$pix) {
+            return ['ok' => false, 'code' => 404, 'mensagem' => 'Depósito não encontrado ou já processado.'];
+        }
+        if ($pix->registrado) {
+            return ['ok' => false, 'code' => 422, 'mensagem' => 'Depósito já registrado no bot.'];
+        }
+        if ($pix->gatilho_preco === null) {
+            return ['ok' => false, 'code' => 422, 'mensagem' => 'Este depósito não está retido por gatilho.'];
+        }
+        if ($pix->transferido_em !== null) {
+            return ['ok' => false, 'code' => 422, 'mensagem' => 'Depósito já estava marcado como transferido.'];
+        }
+
+        $pix->update(['transferido_em' => now(), 'aviso_gatilho_em' => null]);
+
+        $gatilho = number_format((float) $pix->gatilho_preco, 2, ',', '.');
+        return ['ok' => true, 'mensagem' =>
+            "Marcado como transferido — o valor agora espera o gatilho (BTC ≤ R$ {$gatilho}) já dentro da Binance, fora do capital do fundo. "
+            . 'A conversão em cotas é automática quando o preço atingir, sem pausar o bot.'];
+    }
+
     // ── Crédito de cotas (núcleo compartilhado) ──────────────────────────
 
     /**
@@ -331,8 +491,8 @@ class DepositoService
     /**
      * Crédito de cotas — corpo exato da antiga closure (matemática idêntica).
      *
-     * $valorJaNoPatrimonio distingue os dois fluxos:
-     *  • PIX/registrar (true): o dinheiro JÁ caiu na Binance antes do
+     * $valorJaNoPatrimonio distingue os fluxos:
+     *  • PIX/registrar comum (true): o dinheiro JÁ caiu na Binance antes do
      *    registro — subtrai o valor do patrimônio pra não inflar o preço
      *    da cota (comportamento original);
      *  • manual (false): o admin registra ANTES de transferir — o
@@ -340,6 +500,15 @@ class DepositoService
      *    Foi o bug das cotas infladas do depósito de R$ 5.000 (subtraiu
      *    dinheiro que ainda não estava lá: preço/cota R$ 0,35 vs R$ 1,16
      *    real → 3,3× mais cotas que o certo).
+     *  • conversão de retido transferido (false): o dinheiro ESTÁ na
+     *    Binance, mas dentro dos retidos — descontado junto com os demais
+     *    (a base é sempre o patrimônio do FUNDO, não o saldo bruto).
+     *
+     * SEMPRE desconta os retidos-na-Binance (depósitos condicionais
+     * esperando gatilho): são dinheiro de cliente sem cota — não podem
+     * inflacionar o preço que o novo depósito vai pagar. Chamar o crédito
+     * ANTES de marcar convertido_em para o próprio retido continuar no
+     * bucket durante o cálculo.
      */
     private function creditarCotasNaTransacao(
         int $userId,
@@ -350,11 +519,9 @@ class DepositoService
         // Lock para evitar corrida com outros depósitos simultâneos
         $totalCotas = (float) BotInvestment::lockForUpdate()->sum('cotas');
 
-        // No fluxo PIX o dinheiro já está na Binance, mas não deve inflar
-        // o preço da cota antes do registro; no manual ele nem chegou lá.
-        $base            = $valorJaNoPatrimonio ? max(0, $patrimonioAtual - $valor) : $patrimonioAtual;
-        $precoPorCota    = $totalCotas > 0 ? $base / $totalCotas : 1.0;
-        $novasCotas      = $valor / $precoPorCota;
+        $base = max(0, $patrimonioAtual - $this->retidosNaBinance() - ($valorJaNoPatrimonio ? $valor : 0));
+        $precoPorCota = $totalCotas > 0 ? $base / $totalCotas : 1.0;
+        $novasCotas   = $valor / $precoPorCota;
 
         $invest = BotInvestment::where('user_id', $userId)->lockForUpdate()->first();
 

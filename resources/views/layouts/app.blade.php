@@ -245,6 +245,17 @@
                         <li class="nav-item">
                             <a class="nav-link" href="/download"><i class="fa-brands fa-android me-1"></i>App Android</a>
                         </li>
+                        @auth
+                        <li class="nav-item">
+                            <a class="nav-link" href="/carteiras"><i class="fa-solid fa-wallet me-1"></i>Carteiras</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/gerar-carteira"><i class="fa-solid fa-key me-1"></i>Gerar Carteira</a>
+                        </li>
+                        @endauth
+                        <li class="nav-item">
+                            <a class="nav-link" href="/1248"><i class="fa-solid fa-ticket me-1"></i>Cartão 1248</a>
+                        </li>
                         <li class="nav-item dropdown">
                             <a id="navbarDropdown" class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
                                 <i class="fa-regular fa-circle-user me-1"></i>{{ Auth::user()->name }}

@@ -13,7 +13,7 @@ class BotConfig extends Model
         'nivel1', 'nivel2', 'nivel3', 'nivel4', 'nivel5', 'nivel6', 'nivel7',
         'nivel_final',
         'allin_threshold',
-        'min_notional', 'piso_ordem_pct',
+        'min_notional', 'piso_ordem_pct', 'boost_pct',
         // Otimização M1-M9 (defaults nas migrations). Zonas/pisos de alocação
         // são relativos ao alvo (target_btc_pct); target_brl_pct é derivado
         // (100−BTC) e gravado só por conveniência de leitura.
@@ -29,7 +29,7 @@ class BotConfig extends Model
         'nivel1' => 'float', 'nivel2' => 'float', 'nivel3' => 'float',
         'nivel4' => 'float', 'nivel5' => 'float', 'nivel6' => 'float',
         'nivel7' => 'float', 'nivel_final' => 'float', 'allin_threshold' => 'integer',
-        'min_notional' => 'float', 'piso_ordem_pct' => 'float',
+        'min_notional' => 'float', 'piso_ordem_pct' => 'float', 'boost_pct' => 'float',
         'target_btc_pct' => 'float', 'target_brl_pct' => 'float',
         'delta_alerta_pct' => 'float', 'delta_bloqueio_pct' => 'float',
         'piso_alta_delta_pct' => 'float', 'piso_baixa_delta_pct' => 'float',
