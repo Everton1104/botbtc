@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CarteirasController;
 use App\Http\Controllers\Api\AdminApiController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DepositoApiController;
@@ -32,6 +33,14 @@ Route::get('/versao-app', function () {
 });
 
 Route::middleware('auth:sanctum')->group(function () {
+
+    // ── Carteiras watch-only (o app chama os MESMOS métodos da aba web) ─────
+    Route::get('/carteiras/dados', [CarteirasController::class, 'dados']);
+    Route::get('/carteiras/taxas', [CarteirasController::class, 'taxas']);
+    Route::post('/carteiras/importar', [CarteirasController::class, 'importar']);
+    Route::post('/carteiras/enviar', [CarteirasController::class, 'enviar']);
+    Route::post('/carteiras/{id}/enderecos', [CarteirasController::class, 'atualizarEnderecos']);
+    Route::delete('/carteiras/{id}', [CarteirasController::class, 'destruir']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
 

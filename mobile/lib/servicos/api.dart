@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.6';
+const String kAppVersao = '1.3.8';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").
@@ -759,6 +759,79 @@ class ApiService {
     }
 
     throw ApiException(mensagem, resposta.statusCode);
+  }
+
+  // ── Carteiras watch-only (aba Carteiras do site, mesmos endpoints) ─────────
+
+  /// Lista as carteiras do usuário com saldo/UTXOs/histórico ao vivo.
+  static Future<List<Map<String, dynamic>>> carteirasDados() async {
+    await carregarTokenSalvo();
+    final r = await http
+        .get(Uri.parse('$kBaseUrl/api/carteiras/dados'), headers: _headersComToken())
+        .timeout(kTimeoutApi);
+    if (r.statusCode == 200) {
+      return (jsonDecode(r.body) as List).cast<Map<String, dynamic>>();
+    }
+    _lancaErro(r);
+  }
+
+  /// Taxas atuais do mempool (sat/vB) pra sugestão e estimativa de tempo.
+  static Future<Map<String, int>> carteirasTaxas() async {
+    await carregarTokenSalvo();
+    final r = await http
+        .get(Uri.parse('$kBaseUrl/api/carteiras/taxas'), headers: _headersComToken())
+        .timeout(kTimeoutApi);
+    if (r.statusCode == 200) {
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      return j.map((k, v) => MapEntry(k, (v as num).toInt()));
+    }
+    _lancaErro(r);
+  }
+
+  /// Cadastra zpub watch-only (endereços derivados no próprio aparelho).
+  static Future<void> carteirasImportar(String rotulo, String zpub, Map<String, dynamic> enderecos) async {
+    await carregarTokenSalvo();
+    final r = await http.post(
+      Uri.parse('$kBaseUrl/api/carteiras/importar'),
+      headers: _headersComToken(),
+      body: jsonEncode({'rotulo': rotulo, 'zpub': zpub, 'enderecos': enderecos}),
+    ).timeout(kTimeoutApi);
+    if (r.statusCode != 200 && r.statusCode != 201) _lancaErro(r);
+  }
+
+  /// Estende a lista de endereços vigiados.
+  static Future<void> carteirasEnderecos(int id, List<Map<String, dynamic>> receber) async {
+    await carregarTokenSalvo();
+    final r = await http.post(
+      Uri.parse('$kBaseUrl/api/carteiras/$id/enderecos'),
+      headers: _headersComToken(),
+      body: jsonEncode({'receber': receber}),
+    ).timeout(kTimeoutApi);
+    if (r.statusCode != 200) _lancaErro(r);
+  }
+
+  /// Remove uma carteira (só para de vigiar).
+  static Future<void> carteirasRemover(int id) async {
+    await carregarTokenSalvo();
+    final r = await http.delete(
+      Uri.parse('$kBaseUrl/api/carteiras/$id'),
+      headers: _headersComToken(),
+    ).timeout(kTimeoutApi);
+    if (r.statusCode != 200) _lancaErro(r);
+  }
+
+  /// Transmite transação JÁ assinada (hex) pra mempool → txid.
+  static Future<String> carteirasEnviar(String hex) async {
+    await carregarTokenSalvo();
+    final r = await http.post(
+      Uri.parse('$kBaseUrl/api/carteiras/enviar'),
+      headers: _headersComToken(),
+      body: jsonEncode({'hex': hex}),
+    ).timeout(kTimeoutApi);
+    if (r.statusCode == 200) {
+      return (jsonDecode(r.body)['txid'] ?? '?') as String;
+    }
+    _lancaErro(r);
   }
 }
 

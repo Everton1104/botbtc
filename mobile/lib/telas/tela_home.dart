@@ -30,7 +30,7 @@ import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_acoes.dart';
 import 'tela_admin.dart';
-import 'tela_cartao1248.dart';
+import 'tela_suite.dart';
 import 'tela_login.dart';
 
 class TelaHome extends StatefulWidget {
@@ -368,9 +368,9 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
           // e PDF pra imprimir (o simulador interativo continua no site).
           IconButton(
             icon: const Icon(Icons.confirmation_number),
-            tooltip: 'Cartão 1248',
+            tooltip: 'Cartão 1248 · Gerar · Carteiras',
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const TelaCartao1248()),
+              MaterialPageRoute(builder: (_) => const TelaSuite()),
             ),
           ),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Sair', onPressed: _sair),
