@@ -117,8 +117,17 @@
                     <button class="btn btn-outline-muted ger-lang" data-lang="pt">Português</button>
                 </div>
                 <button class="btn btn-gold btn-sm fw-bold" id="btnUsarColada"><i class="fa-solid fa-check me-1"></i>Importar</button>
+                <button class="btn btn-outline-muted btn-sm" id="btnConverter" title="Troca o idioma das palavras mantendo o número de cada posição">
+                    <i class="fa-solid fa-language me-1"></i>Converter p/ <span id="converterAlvo">Português</span>
+                </button>
             </div>
             <span id="colarErro" style="font-size:.8rem; color:var(--red);" class="d-block mt-1"></span>
+            <span id="converterAviso" class="d-none mt-2 d-block" style="font-size:.75rem; color:#e6b84c; line-height:1.5;">
+                <i class="fa-solid fa-triangle-exclamation me-1"></i>
+                Convertido — os <strong class="text-light">números das posições são os mesmos</strong>, mas pelo padrão BIP-39 a seed nasce
+                das <strong class="text-light">palavras escritas</strong>: trocar o idioma gera uma <strong class="text-light">carteira DIFERENTE</strong>
+                (a zpub abaixo já é a nova). Guarde a frase no idioma que vai usar na carteira real.
+            </span>
         </div>
     </div>
 
@@ -338,6 +347,30 @@
             var original = btn.innerHTML;
             btn.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copiada!';
             setTimeout(function () { btn.innerHTML = original; }, 1500);
+        });
+    });
+
+    // ── Converter idioma das palavras (números das posições preservados) ──
+    var converterDe = 'en';
+    document.getElementById('btnConverter').addEventListener('click', function () {
+        if (!ultimaFrase.length) { document.getElementById('colarErro').textContent = 'Gere ou importe uma carteira primeiro.'; return; }
+        var alvo = converterDe === 'en' ? 'pt' : 'en';
+        var listaAlvo = BIP39[alvo];
+        var convertida = ultimaFrase.map(function (p) {
+            return { pos: p.pos, n: p.n, palavra: listaAlvo[p.n - 1] };
+        });
+        converterDe = alvo;
+        document.getElementById('converterAlvo').textContent = alvo === 'pt' ? 'Português' : 'Inglês';
+        document.getElementById('converterAviso').classList.remove('d-none');
+        window.C1248Ger.definir(convertida, alvo); // re-deriva: zpub NOVA aparece
+    });
+    // label inicial do botão acompanha o idioma selecionado nos botões
+    document.querySelectorAll('.ger-lang').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            converterDe = btn.dataset.lang === 'en' ? 'en' : 'pt';
+            // alvo do conversor = o OUTRO idioma
+            var alvo = converterDe === 'en' ? 'pt' : 'en';
+            document.getElementById('converterAlvo').textContent = alvo === 'pt' ? 'Português' : 'Inglês';
         });
     });
 

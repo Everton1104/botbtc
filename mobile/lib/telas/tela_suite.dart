@@ -79,6 +79,7 @@ class _AbaGerarCarteiraState extends State<AbaGerarCarteira> {
   Derivacao? _deriv;
   String? _derivandoErro;
   bool _carregando = false;
+  bool _avisoConversao = false;
 
   @override
   void dispose() {
@@ -161,6 +162,22 @@ class _AbaGerarCarteiraState extends State<AbaGerarCarteira> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t), backgroundColor: Cores.vermelho));
   }
 
+  /// Converte as palavras da frase pro OUTRO idioma, preservando o nº de
+  /// cada posição. Aviso BIP-39: a seed vem das PALAVRAS — a carteira muda.
+  void _converterIdioma() {
+    if (_frase == null) return;
+    final alvo = _lang == 'en' ? 'pt' : 'en';
+    final lista = listaDe(alvo);
+    final convertida = _frase!
+        .map((p) => {'pos': p['pos'], 'n': p['n'], 'palavra': lista[(p['n'] as int) - 1]})
+        .toList();
+    setState(() {
+      _lang = alvo;
+      _avisoConversao = true;
+    });
+    _definir(convertida, 'convertida');
+  }
+
   void _copiar(String t, String rotulo) {
     Clipboard.setData(ClipboardData(text: t));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$rotulo copiad$rotulo!'), backgroundColor: Cores.verde));
@@ -225,7 +242,23 @@ class _AbaGerarCarteiraState extends State<AbaGerarCarteira> {
             decoration: const InputDecoration(isDense: true, hintText: 'palavras…  ou  1723 45 987 …'),
           ),
           const SizedBox(height: 8),
-          OutlinedButton(onPressed: _importar, child: const Text('Importar')),
+          Row(children: [
+            OutlinedButton(onPressed: _importar, child: const Text('Importar')),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.language, size: 16),
+              label: Text(_frase == null ? 'Converter' : (_lang == 'en' ? 'p/ Português' : 'p/ Inglês')),
+              onPressed: _frase == null ? null : _converterIdioma,
+            ),
+          ]),
+          if (_avisoConversao)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Convertido: os números das posições são os mesmos, mas a seed nasce das palavras escritas — trocar o idioma gera uma carteira DIFERENTE (a zpub já é a nova).',
+                style: TextStyle(fontSize: 10.5, color: Color(0xFFe6b84c), height: 1.4),
+              ),
+            ),
         ])),
         const SizedBox(height: 16),
 
