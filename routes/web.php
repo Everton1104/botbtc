@@ -30,6 +30,7 @@ Route::middleware(['auth', 'whatsapp.verified'])->group(function () {
     Route::get('/carteiras', [\App\Http\Controllers\CarteirasController::class, 'index'])->name('carteiras');
     Route::get('/carteiras/dados', [\App\Http\Controllers\CarteirasController::class, 'dados']);
     Route::get('/carteiras/taxas', [\App\Http\Controllers\CarteirasController::class, 'taxas']);
+    Route::get('/carteiras/cotacao', [\App\Http\Controllers\CarteirasController::class, 'cotacao']);
     Route::post('/carteiras/importar', [\App\Http\Controllers\CarteirasController::class, 'importar']);
     Route::post('/carteiras/enviar', [\App\Http\Controllers\CarteirasController::class, 'enviar']);
     Route::post('/carteiras/{id}/enderecos', [\App\Http\Controllers\CarteirasController::class, 'atualizarEnderecos']);

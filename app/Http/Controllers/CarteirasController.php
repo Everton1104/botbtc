@@ -86,6 +86,19 @@ class CarteirasController extends Controller
         })->values());
     }
 
+    /** Cotação BTC/BRL ao vivo (Binance — a mesma fonte do bot) */
+    public function cotacao()
+    {
+        try {
+            $preco = Http::timeout(8)
+                ->get('https://api.binance.com/api/v3/ticker/price?symbol=BTCBRL')
+                ->json()['price'] ?? 0;
+            return response()->json(['btc_brl' => (float) $preco]);
+        } catch (\Throwable) {
+            return response()->json(['btc_brl' => 0]);
+        }
+    }
+
     /** Taxas atuais do mempool (sat/vB) — pra sugerir e estimar tempo */
     public function taxas()
     {
@@ -128,6 +141,29 @@ class CarteirasController extends Controller
 
     // ── internals ────────────────────────────────────────────────────────────
 
+    /**
+     * GET com retry: o mempool.space responde 429 (rate limit) quando o
+     * painel dispara várias consultas — 3 tentativas com backoff antes de
+     * desistir do endereço.
+     */
+    private function getComRetry(string $url): ?\Illuminate\Http\Client\Response
+    {
+        for ($tentativa = 0; $tentativa < 3; $tentativa++) {
+            try {
+                $r = Http::timeout(10)->get($url);
+                if ($r->ok()) return $r;
+                if ($r->status() === 429) {
+                    usleep((1 + $tentativa) * 700000); // 0,7s / 1,4s / 2,1s
+                    continue;
+                }
+                return $r;
+            } catch (\Throwable) {
+                usleep(500000);
+            }
+        }
+        return null;
+    }
+
     private function situacao(WatchWallet $w): array
     {
         $receber = collect($w->enderecos['receber'] ?? []);
@@ -136,27 +172,20 @@ class CarteirasController extends Controller
         $todas = $receber->map(fn ($e) => [$e, 'receber'])
             ->merge($troco->map(fn ($e) => [$e, 'troco']));
 
-        // ── 1ª leva, TODA em paralelo (pool): estatísticas de cada endereço ──
-        $resps = [];
-        foreach (array_chunk($todas->all(), 25) as $lote) {
-            $resps += Http::pool(function ($pool) use ($lote) {
-                foreach ($lote as [$e]) {
-                    $pool->as($e['endereco'])->timeout(10)->get(self::MEMPOOL . "/address/{$e['endereco']}");
-                }
-            });
-        }
-
+        // ── 1ª leva: estatísticas de cada endereço (sequencial com retry — ──
+        // o mempool limita rajadas; a fila certa é mais rápida que refazer 429)
         $saldo = 0;
         $pendente = 0;
         $comMovimento = [];
         foreach ($todas as [$e, $cadeia]) {
-            $r = $resps[$e['endereco']] ?? null;
-            if (!$r || method_exists($r, 'ok') && !$r->ok()) continue;
+            $r = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}");
+            if (!$r || !$r->ok()) continue;
             $info = $r->json();
             if (!is_array($info)) continue;
 
-            $stats = $info['address']['chain_stats'] ?? [];
-            $memp = $info['address']['mempool_stats'] ?? [];
+            // o mempool devolve chain_stats/mempool_stats na RAIZ do JSON
+            $stats = $info['chain_stats'] ?? ($info['address']['chain_stats'] ?? []);
+            $memp = $info['mempool_stats'] ?? ($info['address']['mempool_stats'] ?? []);
             $saldo += (int) ($stats['funded_txo_sum'] ?? 0) - (int) ($stats['spent_txo_sum'] ?? 0);
             $pendente += (int) ($memp['funded_txo_sum'] ?? 0) - (int) ($memp['spent_txo_sum'] ?? 0);
             if ((int) ($stats['tx_count'] ?? 0) > 0) $comMovimento[] = [$e, $cadeia];
@@ -166,56 +195,47 @@ class CarteirasController extends Controller
         try { $tip = (int) Http::timeout(8)->get(self::MEMPOOL . '/blocks/tip/height')->body(); }
         catch (\Throwable) { $tip = 0; }
 
-        // ── 2ª leva, em paralelo: UTXO + histórico SÓ dos endereços com movimento ──
+        // ── 2ª leva: UTXO + histórico SÓ dos endereços com movimento ──
         $utxos = [];
         $txs   = [];
         $vistos = [];
-        foreach (array_chunk($comMovimento, 25) as $lote) {
-            $resps2 = Http::pool(function ($pool) use ($lote) {
-                foreach ($lote as [$e]) {
-                    $pool->as('u' . $e['endereco'])->timeout(10)->get(self::MEMPOOL . "/address/{$e['endereco']}/utxo");
-                    $pool->as('t' . $e['endereco'])->timeout(10)->get(self::MEMPOOL . "/address/{$e['endereco']}/txs");
+        foreach ($comMovimento as [$e, $cadeia]) {
+            $ru = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}/utxo");
+            if ($ru) {
+                foreach ((array) $ru->json() as $u) {
+                    $utxos[] = [
+                        'txid'    => $u['txid'],
+                        'vout'    => (int) $u['vout'],
+                        'sats'    => (int) $u['value'],
+                        'endereco' => $e['endereco'],
+                        'i'       => $e['i'],
+                        'cadeia'  => $cadeia,
+                        'confirmado' => (int) ($u['status']['confirmed'] ?? 0) === 1,
+                    ];
                 }
-            });
+            }
 
-            foreach ($lote as [$e, $cadeia]) {
-                $ru = $resps2['u' . $e['endereco']] ?? null;
-                if ($ru && $ru->ok()) {
-                    foreach ((array) $ru->json() as $u) {
-                        $utxos[] = [
-                            'txid'    => $u['txid'],
-                            'vout'    => (int) $u['vout'],
-                            'sats'    => (int) $u['value'],
-                            'endereco' => $e['endereco'],
-                            'i'       => $e['i'],
-                            'cadeia'  => $cadeia,
-                            'confirmado' => (int) ($u['status']['confirmed'] ?? 0) === 1,
-                        ];
+            $rt = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}/txs");
+            if ($rt) {
+                foreach ((array) $rt->json() as $tx) {
+                    if (isset($vistos[$tx['txid']])) continue;
+                    $vistos[$tx['txid']] = true;
+                    $entrada = 0; $saida = 0;
+                    foreach ($tx['vin'] ?? [] as $in) {
+                        if (($in['prevout']['scriptpubkey_address'] ?? null) === $e['endereco']) $saida += (int) $in['prevout']['value'];
                     }
-                }
-
-                $rt = $resps2['t' . $e['endereco']] ?? null;
-                if ($rt && $rt->ok()) {
-                    foreach ((array) $rt->json() as $tx) {
-                        if (isset($vistos[$tx['txid']])) continue;
-                        $vistos[$tx['txid']] = true;
-                        $entrada = 0; $saida = 0;
-                        foreach ($tx['vin'] ?? [] as $in) {
-                            if (($in['prevout']['scriptpubkey_address'] ?? null) === $e['endereco']) $saida += (int) $in['prevout']['value'];
-                        }
-                        foreach ($tx['vout'] ?? [] as $out) {
-                            if (($out['scriptpubkey_address'] ?? null) === $e['endereco']) $entrada += (int) $out['value'];
-                        }
-                        $conf = (int) ($tx['status']['confirmed'] ?? 0) === 1;
-                        $alt = (int) ($tx['status']['block_height'] ?? 0);
-                        $txs[] = [
-                            'txid'   => $tx['txid'],
-                            'quando' => $conf ? date('d/m/Y H:i', (int) $tx['status']['block_time']) : 'na mempool',
-                            'delta'  => $entrada - $saida,
-                            'conf'   => $conf,
-                            'confirmacoes' => ($conf && $tip && $alt) ? $tip - $alt + 1 : 0,
-                        ];
+                    foreach ($tx['vout'] ?? [] as $out) {
+                        if (($out['scriptpubkey_address'] ?? null) === $e['endereco']) $entrada += (int) $out['value'];
                     }
+                    $conf = (int) ($tx['status']['confirmed'] ?? 0) === 1;
+                    $alt = (int) ($tx['status']['block_height'] ?? 0);
+                    $txs[] = [
+                        'txid'   => $tx['txid'],
+                        'quando' => $conf ? date('d/m/Y H:i', (int) $tx['status']['block_time']) : 'na mempool',
+                        'delta'  => $entrada - $saida,
+                        'conf'   => $conf,
+                        'confirmacoes' => ($conf && $tip && $alt) ? $tip - $alt + 1 : 0,
+                    ];
                 }
             }
         }

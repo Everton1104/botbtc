@@ -471,6 +471,7 @@ class AbaCarteiras extends StatefulWidget {
 class _AbaCarteirasState extends State<AbaCarteiras> {
   List<Map<String, dynamic>>? _carteiras;
   Map<String, int>? _taxas;
+  double _cotacao = 0; // BTC/BRL pro saldo em reais
   String? _erro;
   Timer? _timer;
 
@@ -515,6 +516,9 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
       ApiService.carteirasTaxas().then((t) {
         if (mounted) setState(() => _taxas = t);
       }).catchError((_) {});
+      ApiService.carteirasCotacao().then((c) {
+        if (mounted && c > 0) setState(() => _cotacao = c);
+      }).catchError((_) {});
     } catch (e) {
       if (mounted) setState(() => _erro = e.toString().replaceFirst('Exception: ', ''));
     }
@@ -524,7 +528,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     final zpub = _zpubCtrl.text.trim();
     if (zpub.isEmpty) return;
     try {
-      final enderecos = zpubEnderecos(zpub, 20, 5);
+      final enderecos = zpubEnderecos(zpub, 20, 20);
       await ApiService.carteirasImportar(
         _rotuloCtrl.text.trim().isEmpty ? 'Carteira' : _rotuloCtrl.text.trim(),
         zpub,
@@ -588,7 +592,14 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
 
   String _fmtSats(dynamic n) {
     final v = (n is num) ? n : int.tryParse(n.toString()) ?? 0;
-    if (v >= 100000000) return '${(v / 100000000).toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll('.', ',')} BTC';
+    if (v >= 100000000) {
+      var txt = '${(v / 100000000).toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll('.', ',')} BTC';
+      if (_cotacao > 0) {
+        final brl = (v / 100000000) * _cotacao;
+        txt += '\nR\$ ${brl.toStringAsFixed(2).replaceAll('.', ',')}';
+      }
+      return txt;
+    }
     return '${v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.')} sats';
   }
 
@@ -675,7 +686,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
               ]),
             ),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text(_fmtSats(c['saldo']), style: const TextStyle(color: Cores.dourado, fontWeight: FontWeight.w800, fontSize: 13)),
+              Text(_fmtSats(c['saldo']), textAlign: TextAlign.right, style: const TextStyle(color: Cores.dourado, fontWeight: FontWeight.w800, fontSize: 12.5, height: 1.3)),
               if (pendente != 0)
                 Text('+$pendente sats a confirmar', style: const TextStyle(color: Cores.verde, fontSize: 10)),
             ]),

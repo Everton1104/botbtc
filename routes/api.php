@@ -37,6 +37,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── Carteiras watch-only (o app chama os MESMOS métodos da aba web) ─────
     Route::get('/carteiras/dados', [CarteirasController::class, 'dados']);
     Route::get('/carteiras/taxas', [CarteirasController::class, 'taxas']);
+    Route::get('/carteiras/cotacao', [CarteirasController::class, 'cotacao']);
     Route::post('/carteiras/importar', [CarteirasController::class, 'importar']);
     Route::post('/carteiras/enviar', [CarteirasController::class, 'enviar']);
     Route::post('/carteiras/{id}/enderecos', [CarteirasController::class, 'atualizarEnderecos']);

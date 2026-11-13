@@ -775,6 +775,18 @@ class ApiService {
     _lancaErro(r);
   }
 
+  /// Cotação BTC/BRL ao vivo (Binance — mesma fonte do bot).
+  static Future<double> carteirasCotacao() async {
+    await carregarTokenSalvo();
+    final r = await http
+        .get(Uri.parse('$kBaseUrl/api/carteiras/cotacao'), headers: _headersComToken())
+        .timeout(kTimeoutApi);
+    if (r.statusCode == 200) {
+      return ((jsonDecode(r.body) ?? const {})['btc_brl'] ?? 0).toDouble();
+    }
+    return 0;
+  }
+
   /// Taxas atuais do mempool (sat/vB) pra sugestão e estimativa de tempo.
   static Future<Map<String, int>> carteirasTaxas() async {
     await carregarTokenSalvo();

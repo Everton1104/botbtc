@@ -160,7 +160,7 @@
         if (zpub.length < 111) return;
         previewTimer = setTimeout(function () {
             try {
-                var r = C1248Carteira.zpubEnderecos(zpub, 20, 5);
+                var r = C1248Carteira.zpubEnderecos(zpub, 20, 20);
                 prev.style.color = 'var(--green)';
                 prev.textContent = '✓ zpub válida — ' + r.receber.length + ' endereços de recebimento derivados (o 1º é ' + r.receber[0].endereco + ')';
             } catch (e) {
@@ -175,7 +175,7 @@
         var zpub = document.getElementById('impZpub').value.trim();
         var rotulo = document.getElementById('impRotulo').value.trim() || 'Carteira';
         var enderecos;
-        try { enderecos = C1248Carteira.zpubEnderecos(zpub, 20, 5); }
+        try { enderecos = C1248Carteira.zpubEnderecos(zpub, 20, 20); }
         catch (e) { erro.textContent = e.message; return; }
 
         fetch('/carteiras/importar', {
@@ -198,8 +198,17 @@
     });
 
     // ── dados + render ──
+    var COTACAO = 0; // BTC/BRL, buscada junto com os dados
     function fmtSats(n) {
-        if (n >= 100000000) return (n / 100000000).toFixed(8).replace(/\.?0+$/, '') + ' BTC';
+        if (n >= 100000000) {
+            var btc = (n / 100000000).toFixed(8).replace(/\.?0+$/, '');
+            var txt = btc.replace('.', ',') + ' BTC';
+            if (COTACAO > 0) {
+                var brl = (n / 100000000) * COTACAO;
+                txt += ' · R$ ' + brl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            return txt;
+        }
         return n.toLocaleString('pt-BR') + ' sats';
     }
 
@@ -207,6 +216,9 @@
         fetch('/carteiras/dados', { headers: { 'Accept': 'application/json' } })
             .then(function (r) { return r.json(); })
             .then(function (dados) { window.__dadosCarteiras = dados; render(dados); });
+        fetch('/carteiras/cotacao', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { if (j.btc_brl) { COTACAO = j.btc_brl; render(window.__dadosCarteiras || []); } });
     }
 
     // ── modal de endereços (+ histórico por endereço, direto do mempool) ──
