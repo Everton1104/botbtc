@@ -478,6 +478,11 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   final _zpubCtrl = TextEditingController();
   final _hexCtrl = TextEditingController();
 
+  /// Controladores do formulário de transação POR CARTEIRA — criados no
+  /// build seriam refeitos a cada polling de 30s, apagando o que o usuário
+  /// digitou. Aqui eles vivem no State e só são descartados no dispose.
+  final Map<int, (TextEditingController, TextEditingController, TextEditingController)> _pacoteCtrls = {};
+
   @override
   void initState() {
     super.initState();
@@ -491,6 +496,11 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     _rotuloCtrl.dispose();
     _zpubCtrl.dispose();
     _hexCtrl.dispose();
+    for (final t in _pacoteCtrls.values) {
+      t.$1.dispose();
+      t.$2.dispose();
+      t.$3.dispose();
+    }
     super.dispose();
   }
 
@@ -726,9 +736,15 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   }
 
   Widget _pacoteWidget(Map<String, dynamic> c, List utxosUsaveis) {
-    final destCtrl = TextEditingController();
-    final valorCtrl = TextEditingController();
-    final taxaCtrl = TextEditingController();
+    final id = c['id'] as int;
+    if (!_pacoteCtrls.containsKey(id)) {
+      _pacoteCtrls[id] = (
+        TextEditingController(),
+        TextEditingController(),
+        TextEditingController(),
+      );
+    }
+    final (destCtrl, valorCtrl, taxaCtrl) = _pacoteCtrls[id]!;
 
     // taxa padrão: mínimo recomendado × tamanho
     if (_taxas != null && utxosUsaveis.isNotEmpty && taxaCtrl.text.isEmpty) {
