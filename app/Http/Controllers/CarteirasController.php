@@ -96,7 +96,7 @@ class CarteirasController extends Controller
                 $estado = $this->atualizarUma($w);
             }
             $estado['idade_seg'] = $w->atualizado_em
-                ? now()->diffInSeconds($w->atualizado_em)
+                ? abs(now()->diffInSeconds($w->atualizado_em))
                 : null;
             return $estado;
         })->values());

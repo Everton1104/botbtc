@@ -21,12 +21,10 @@ class AtualizarCarteiras extends Command
     public function handle(): int
     {
         $ctrl = app(CarteirasController::class);
-        $metodo = new \ReflectionMethod($ctrl, 'atualizarUma');
-        $metodo->setAccessible(true);
 
         foreach (WatchWallet::all() as $w) {
             try {
-                $metodo->invoke($ctrl, $w);
+                $ctrl->atualizarUma($w);
                 $this->info("✓ {$w->rotulo}");
             } catch (\Throwable $e) {
                 $this->warn("✗ {$w->rotulo}: {$e->getMessage()}");
