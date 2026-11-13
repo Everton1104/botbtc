@@ -9,7 +9,8 @@ class WatchWallet extends Model
     protected $fillable = ['user_id', 'rotulo', 'zpub', 'enderecos'];
 
     protected $casts = [
-        'enderecos' => 'array',
-        'estado'    => 'array',
+        'enderecos'     => 'array',
+        'estado'        => 'array',
+        'atualizado_em' => 'datetime',
     ];
 }
