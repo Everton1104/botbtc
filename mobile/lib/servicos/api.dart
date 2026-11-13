@@ -793,7 +793,7 @@ class ApiService {
     await carregarTokenSalvo();
     final r = await http.post(
       Uri.parse('$kBaseUrl/api/carteiras/importar'),
-      headers: _headersComToken(),
+      headers: {..._headersComToken(), 'Content-Type': applicationJson},
       body: jsonEncode({'rotulo': rotulo, 'zpub': zpub, 'enderecos': enderecos}),
     ).timeout(kTimeoutApi);
     if (r.statusCode != 200 && r.statusCode != 201) _lancaErro(r);
@@ -804,7 +804,7 @@ class ApiService {
     await carregarTokenSalvo();
     final r = await http.post(
       Uri.parse('$kBaseUrl/api/carteiras/$id/enderecos'),
-      headers: _headersComToken(),
+      headers: {..._headersComToken(), 'Content-Type': applicationJson},
       body: jsonEncode({'receber': receber}),
     ).timeout(kTimeoutApi);
     if (r.statusCode != 200) _lancaErro(r);
@@ -825,7 +825,7 @@ class ApiService {
     await carregarTokenSalvo();
     final r = await http.post(
       Uri.parse('$kBaseUrl/api/carteiras/enviar'),
-      headers: _headersComToken(),
+      headers: {..._headersComToken(), 'Content-Type': applicationJson},
       body: jsonEncode({'hex': hex}),
     ).timeout(kTimeoutApi);
     if (r.statusCode == 200) {
