@@ -10,5 +10,6 @@ class WatchWallet extends Model
 
     protected $casts = [
         'enderecos' => 'array',
+        'estado'    => 'array',
     ];
 }

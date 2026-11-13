@@ -14,4 +14,5 @@ Artisan::command('inspire', function () {
 // (timeout -s 9 1800), o mutex órfão em cache_locks expira rápido
 // em vez de congelar o bot por ~17-24h (incidentes de 31/08 e 08/09/2026).
 Schedule::command('bots:executar')->everyMinute()->withoutOverlapping(10);
+Schedule::command('carteiras:atualizar')->everyTwoMinutes()->withoutOverlapping(10);
 Schedule::command('bots:recarregar-bnb')->everyFiveMinutes()->withoutOverlapping(10);

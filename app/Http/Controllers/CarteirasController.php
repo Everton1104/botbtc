@@ -75,15 +75,41 @@ class CarteirasController extends Controller
         return response()->json(['ok' => true, 'total' => count($end['receber'])]);
     }
 
-    /** Saldos, UTXOs e histórico de todas as carteiras do usuário (mempool ao vivo) */
+    /**
+     * Saldos, UTXOs e histórico — do CACHE (instantâneo). O scheduler
+     * (carteiras:atualizar) mantém o snapshot fresco em segundo plano;
+     * ?refresh=1 força a atualização antes de responder.
+     */
     public function dados(Request $req)
     {
         $carteiras = WatchWallet::where('user_id', $req->user()->id)
             ->orderByDesc('id')->get();
 
+        if ($req->boolean('refresh')) {
+            foreach ($carteiras as $w) $this->atualizarUma($w);
+        }
+
         return response()->json($carteiras->map(function ($w) {
-            return $this->situacao($w);
+            $estado = $w->estado;
+            if (!$estado) {
+                // sem cache ainda: gera agora (primeira vez) e guarda
+                $estado = $this->atualizarUma($w);
+            }
+            $estado['idade_seg'] = $w->atualizado_em
+                ? now()->diffInSeconds($w->atualizado_em)
+                : null;
+            return $estado;
         })->values());
+    }
+
+    /** Consulta o mempool e grava o snapshot no banco (usado pelo scheduler). */
+    public function atualizarUma(WatchWallet $w): array
+    {
+        $estado = $this->situacao($w);
+        $w->estado = $estado;
+        $w->atualizado_em = now();
+        $w->save();
+        return $estado;
     }
 
     /** Cotação BTC/BRL ao vivo (Binance — a mesma fonte do bot) */
@@ -186,7 +212,8 @@ class CarteirasController extends Controller
             });
             foreach ($lote as [$e, $cadeia]) {
                 $r = $resps[$e['endereco']] ?? null;
-                if (!$r || !$r->ok()) {
+                // no pool, conexão falha = a entrada vem como ConnectionException
+                if (!$r instanceof \Illuminate\Http\Client\Response || !$r->ok()) {
                     $r = $this->getComRetry(self::MEMPOOL . "/address/{$e['endereco']}");
                 }
                 if (!$r || !$r->ok()) continue;

@@ -16,6 +16,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http2;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../servicos/api.dart';
@@ -592,15 +593,14 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
 
   String _fmtSats(dynamic n) {
     final v = (n is num) ? n : int.tryParse(n.toString()) ?? 0;
-    if (v >= 100000000) {
-      var txt = '${(v / 100000000).toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll('.', ',')} BTC';
-      if (_cotacao > 0) {
-        final brl = (v / 100000000) * _cotacao;
-        txt += '\nR\$ ${brl.toStringAsFixed(2).replaceAll('.', ',')}';
-      }
-      return txt;
+    final btc = v / 100000000;
+    var txt = '${btc.toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll('.', ',')} BTC';
+    if (_cotacao > 0) {
+      final brl = btc * _cotacao;
+      txt += '\nR\$ ${brl.toStringAsFixed(2).replaceAll('.', ',')}';
     }
-    return '${v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.')} sats';
+    txt += '\n${v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.')} sats';
+    return txt;
   }
 
   int _vsizeDe(int nUtxos) => 11 + 68 * nUtxos + 62;
@@ -738,6 +738,8 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
               ),
             const SizedBox(height: 10),
 
+            _enderecosWidget(c),
+
             // criar transação não assinada
             _pacoteWidget(c, utxosUsaveis),
           ]),
@@ -829,5 +831,128 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
         ),
         child: child,
       );
+
+  // ── Endereços de recebimento (lista + histórico por endereço + criar mais) ──
+  final Map<String, bool> _histAberto = {};
+  final Map<String, Widget> _histCache = {};
+
+  Widget _enderecosWidget(Map<String, dynamic> c) {
+    final enderecos = (c['receber'] as List?) ?? [];
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        iconColor: Cores.dourado,
+        title: Text('Endereços de recebimento (' + enderecos.length.toString() + ')',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+        children: [
+          for (final e in enderecos)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Column(children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(color: Cores.dourado.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(4)),
+                    child: Text('nº ' + e['i'].toString(), style: const TextStyle(fontSize: 10, color: Cores.dourado, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: SelectableText(e['endereco'].toString(),
+                        style: const TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: Cores.texto)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 14),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: e['endereco'].toString()));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Endereço copiado'), backgroundColor: Cores.verde));
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.history, size: 15),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _toggleHistorico(c['id'].toString() + '-' + e['i'].toString(), e['endereco'].toString()),
+                  ),
+                ]),
+                if (_histAberto[c['id'].toString() + '-' + e['i'].toString()] == true)
+                  (_histCache[c['id'].toString() + '-' + e['i'].toString()] ??
+                      const Padding(padding: EdgeInsets.all(6), child: SizedBox(height: 14, width: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Cores.dourado)))),
+              ]),
+            ),
+          const SizedBox(height: 6),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.add, size: 15),
+            label: const Text('Criar mais 10 endereços', style: TextStyle(fontSize: 12)),
+            onPressed: () async {
+              try {
+                final end = zpubEnderecos(c['zpub'].toString(), enderecos.length + 10, 20);
+                await ApiService.carteirasEnderecos(c['id'] as int, end.receber.cast<Map<String, dynamic>>());
+                _carregar();
+              } catch (e2) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(e2.toString().replaceFirst('Exception: ', '')), backgroundColor: Cores.vermelho));
+                }
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleHistorico(String chave, String endereco) {
+    setState(() {
+      _histAberto[chave] = !(_histAberto[chave] ?? false);
+    });
+    if (_histAberto[chave] == true && !_histCache.containsKey(chave)) {
+      http2
+          .get(Uri.parse('https://mempool.space/api/address/' + endereco + '/txs'))
+          .timeout(const Duration(seconds: 15))
+          .then((r) {
+        final txs = jsonDecode(r.body) as List;
+        Widget w;
+        if (txs.isEmpty) {
+          w = const Padding(padding: EdgeInsets.only(left: 30, bottom: 4),
+              child: Text('sem transações neste endereço.', style: TextStyle(fontSize: 10.5, color: Cores.textoSuave)));
+        } else {
+          w = Padding(
+            padding: const EdgeInsets.only(left: 30, bottom: 4),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (final tx in txs.take(6))
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 1),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(
+                        (tx['status'] != null && tx['status']['confirmed'] == true)
+                            ? DateTime.fromMillisecondsSinceEpoch((tx['status']['block_time'] as int) * 1000).toString().substring(0, 16)
+                            : 'na mempool',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: (tx['status'] != null && tx['status']['confirmed'] == true) ? Cores.verde : Cores.dourado),
+                      ),
+                    ),
+                    Text(tx['txid'].toString().substring(0, 12) + '…',
+                        style: const TextStyle(fontSize: 9.5, fontFamily: 'monospace', color: Cores.textoSuave)),
+                  ]),
+                ),
+            ]),
+          );
+        }
+        if (mounted) setState(() => _histCache[chave] = w);
+      }).catchError((_) {
+        if (mounted) {
+          setState(() => _histCache[chave] = const Padding(
+              padding: EdgeInsets.only(left: 30, bottom: 4),
+              child: Text('não deu pra consultar agora.', style: TextStyle(fontSize: 10.5, color: Cores.vermelho))));
+        }
+      });
+    }
+  }
 }
 
