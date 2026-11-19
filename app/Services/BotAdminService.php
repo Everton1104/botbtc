@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Http\Controllers\BinanceController;
 use App\Models\BotConfig;
+use App\Models\BotEstrategiaHistorico;
 use App\Models\BotInvestment;
 use App\Models\BotState;
 use Illuminate\Support\Facades\DB;
@@ -120,22 +121,64 @@ class BotAdminService
         }
         $boostMudou = (float) $cfg->boost_pct !== $boostAntigo;
 
+        // ── Estratégia do grid: 'atr' (dinâmico, padrão) × 'fixo' (spread
+        // fixo — valorização no lugar do ATR). Os parâmetros do modo fixo
+        // vêm clamped junto. Piso do gatilho = taxa TOTAL: um ciclo captura
+        // o gatilho (SELL a C+g executa, recria centrado no fill, BUY a C
+        // executa → ganho bruto = g), então gatilho abaixo da taxa total
+        // executa no prejuízo por construção (0,15% era break-even exato).
+        $estrategiaAntiga = (string) $cfg->estrategia_grid;
+        if (array_key_exists('estrategia_grid', $input)) {
+            $nova = strtolower(trim((string) $input['estrategia_grid']));
+            $cfg->estrategia_grid = in_array($nova, ['atr', 'fixo'], true) ? $nova : 'atr';
+        }
+        $valorOrdemAntigo = (float) $cfg->fixo_valor_ordem;
+        if (array_key_exists('fixo_valor_ordem', $input)) {
+            $cfg->fixo_valor_ordem = max(50.0, min(50000.0, (float) $input['fixo_valor_ordem']));
+        }
+        $gatilhoAntigo = (float) $cfg->fixo_gatilho_pct;
+        if (array_key_exists('fixo_gatilho_pct', $input)) {
+            $taxa = (float) ($cfg->taxa_total_pct ?: 0.15);
+            $cfg->fixo_gatilho_pct = max(round($taxa, 3), min(5.0, (float) $input['fixo_gatilho_pct']));
+        }
+        if (array_key_exists('fixo_espera_min', $input)) {
+            $cfg->fixo_espera_min = max(1, min(1440, (int) $input['fixo_espera_min']));
+        }
+        $trocouEstrategia = (string) $cfg->estrategia_grid !== $estrategiaAntiga;
+        // Mudança de gatilho/valor com o fixo ATIVO recria o par na hora
+        // (ritual do boost): sem isso, o par aberto seguiria no gatilho
+        // velho até o próximo fill.
+        $mudouParametroFixo = !$trocouEstrategia
+            && (string) $cfg->estrategia_grid === 'fixo'
+            && (abs((float) $cfg->fixo_gatilho_pct - $gatilhoAntigo) >= 0.0005
+                || abs((float) $cfg->fixo_valor_ordem - $valorOrdemAntigo) >= 0.01);
+
         $cfg->save();
 
+        if ($trocouEstrategia) {
+            $canceladas = $this->aplicarTrocaDeEstrategia((string) $cfg->estrategia_grid);
+
+            $nome = $cfg->estrategia_grid === 'fixo' ? 'Spread fixo' : 'ATR dinâmico';
+            return [
+                'ok'       => true,
+                'mensagem' => "Configuração salva. Estratégia trocada para {$nome} — {$canceladas} ordem(ns) cancelada(s); o próximo ciclo cria o par no formato novo.",
+            ];
+        }
+
+        if ($mudouParametroFixo) {
+            $canceladas = $this->cancelarOrdensAbertas();
+
+            $g = number_format((float) $cfg->fixo_gatilho_pct, 3, ',', '.');
+            return [
+                'ok'       => true,
+                'mensagem' => "Configuração salva. Spread fixo agora: gatilho ±{$g}%, ordens de R$ "
+                    . number_format((float) $cfg->fixo_valor_ordem, 2, ',', '.')
+                    . " — {$canceladas} ordem(ns) cancelada(s); o próximo ciclo (≤1 min) recria o par já no novo gatilho.",
+            ];
+        }
+
         if ($boostMudou) {
-            $canceladas = 0;
-            try {
-                $binance = app(BinanceController::class);
-                $open    = $binance->getOpenOrders('BTCBRL');
-                if (is_array($open)) {
-                    foreach ($open as $ordem) {
-                        $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
-                        $canceladas++;
-                    }
-                }
-            } catch (\Throwable $e) {
-                Log::warning('BotAdminService: falha ao cancelar ordens na troca do boost (o ciclo recria de qualquer forma): ' . $e->getMessage());
-            }
+            $canceladas = $this->cancelarOrdensAbertas();
 
             $pct = number_format((float) $cfg->boost_pct, 1, ',', '.');
             return [
@@ -147,6 +190,134 @@ class BotAdminService
         }
 
         return ['ok' => true, 'mensagem' => 'Configuração salva com sucesso!'];
+    }
+
+    /**
+     * Cancela as ordens abertas do BTCBRL (ritual da troca de boost/estrategia:
+     * o próximo ciclo do bot recria tudo no formato novo). Falha aqui não
+     * bloqueia nada — o ciclo recria de qualquer forma.
+     */
+    private function cancelarOrdensAbertas(): int
+    {
+        $canceladas = 0;
+        try {
+            $binance = app(BinanceController::class);
+            $open    = $binance->getOpenOrders('BTCBRL');
+            if (is_array($open)) {
+                foreach ($open as $ordem) {
+                    $binance->cancelarOrdem('BTCBRL', $ordem['orderId']);
+                    $canceladas++;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('BotAdminService: falha ao cancelar ordens abertas (o ciclo recria de qualquer forma): ' . $e->getMessage());
+        }
+
+        return $canceladas;
+    }
+
+    // ── Estratégia do grid: botão ATR ↔ Spread fixo ──────────────────────────
+
+    /**
+     * Alterna a estratégia pelo BOTÃO do painel (mesmo ritual do salvarConfig:
+     * limpa flags da estratégia antiga e cancela as ordens abertas — o próximo
+     * ciclo cria o par no formato novo, com os parâmetros já configurados).
+     * Chamar já na estratégia pedida é no-op (não cancela nada).
+     */
+    public function alternarEstrategia(bool $fixo): array
+    {
+        $cfg  = BotConfig::atual();
+        $nova = $fixo ? 'fixo' : 'atr';
+
+        if ((string) $cfg->estrategia_grid === $nova) {
+            return [
+                'ok'              => true,
+                'estrategia_grid' => $nova,
+                'canceladas'      => 0,
+                'mensagem'        => 'A estratégia já é ' . ($fixo ? 'spread fixo' : 'ATR dinâmico') . ' — nada a fazer.',
+            ];
+        }
+
+        $cfg->estrategia_grid = $nova;
+        $cfg->save();
+
+        $canceladas = $this->aplicarTrocaDeEstrategia($nova);
+
+        return [
+            'ok'              => true,
+            'estrategia_grid' => $nova,
+            'canceladas'      => $canceladas,
+            'mensagem'        => ($fixo
+                ? 'Spread fixo ATIVADO (R$ ' . number_format((float) $cfg->fixo_valor_ordem, 2, ',', '.')
+                    . ' ±' . number_format((float) $cfg->fixo_gatilho_pct, 3, ',', '.')
+                    . '% por perna) — '
+                : 'ATR dinâmico restaurado — ')
+                . $canceladas . ' ordem(ns) cancelada(s); o próximo ciclo cria o par no formato novo.',
+        ];
+    }
+
+    /**
+     * Ritual da troca de estratégia (comum ao salvarConfig e ao botão do
+     * painel): estado de uma estratégia não serve pra outra — o modo subida é
+     * freio do grid ATR (não se aplica ao fixo) e a espera do fixo não
+     * significa nada pro ATR. Cancela as ordens abertas (o próximo ciclo
+     * recria no formato novo) e registra a era no histórico (base da
+     * comparação de performance entre os modos). Retorna quantas cancelou.
+     */
+    private function aplicarTrocaDeEstrategia(string $nova): int
+    {
+        if ($nova === 'fixo') {
+            Log::info('BotAdminService: estratégia trocada ATR → SPREAD FIXO (valor R$ '
+                . number_format((float) BotConfig::atual()->fixo_valor_ordem, 2, ',', '.')
+                . ', gatilho ±' . number_format((float) BotConfig::atual()->fixo_gatilho_pct, 3, ',', '.')
+                . '%, espera ' . BotConfig::atual()->fixo_espera_min . 'min).');
+        } else {
+            BotState::whereNotNull('fixo_espera_desde')->update(['fixo_espera_desde' => null]);
+            Log::info('BotAdminService: estratégia trocada SPREAD FIXO → ATR (grid dinâmico restaurado).');
+        }
+
+        $this->registrarEra($nova);
+
+        return $this->cancelarOrdensAbertas();
+    }
+
+    /**
+     * Linha do tempo das estratégias: encerra a era vigente e abre a da nova
+     * estratégia, fotografando preço BTC e patrimônio na borda (mesmo critério
+     * do snapshot diário do ExecutarBots: BRL livre+bloqueado + BTC×preço).
+     * Falha na Binance NUNCA bloqueia a troca — a era abre sem a foto.
+     */
+    private function registrarEra(string $nova): void
+    {
+        try {
+            $binance = app(BinanceController::class);
+            $preco   = (float) $binance->getPrecos()['BTCBRL'];
+            $saldos  = $binance->getSaldos();
+
+            $foto = null;
+            if ($preco > 0 && !empty($saldos['balances'])) {
+                $b   = collect($saldos['balances']);
+                $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
+                $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
+                $foto = ['preco_btc' => $preco, 'patrimonio' => round($brl + $btc * $preco, 2)];
+            }
+
+            $vigente = BotEstrategiaHistorico::vigente();
+            if ($vigente) {
+                $vigente->encerrado_em = now();
+                $vigente->save();
+            }
+
+            BotEstrategiaHistorico::create(array_merge([
+                'estrategia'  => $nova,
+                // gatilho vigente na abertura da era (contexto da comparação
+                // por gatilho; só existe na estratégia fixa)
+                'gatilho_pct' => $nova === 'fixo' ? (float) BotConfig::atual()->fixo_gatilho_pct : null,
+                'iniciado_em' => now(),
+            ], $foto ?? []));
+        } catch (\Throwable $e) {
+            Log::warning('BotAdminService: falha ao registrar era no histórico (a troca segue): ' . $e->getMessage());
+        }
     }
 
     // ── Pausa manual e modo "preparar subida" ─────────────────────────────────
@@ -187,26 +358,6 @@ class BotAdminService
     }
 
     /**
-     * Gatilho manual do admin: modo "preparar subida" (inibe vendas, só compra).
-     * O cancelamento das vendas abertas e a recriação do par acontecem no próximo
-     * ciclo do bot (executarModoSubida / fluxo normal). Aqui só persiste o flag.
-     */
-    public function alternarModoSubida(int $idUser, bool $ativo): array
-    {
-        $state = BotState::where('id_user', $idUser)->first();
-        if (!$state) {
-            return ['ok' => false, 'code' => 404, 'erro' => 'Estado não encontrado'];
-        }
-
-        $state->modo_subida = $ativo;
-        $state->save();
-
-        Log::info('BotExecutor: modo "preparar subida" ' . ($ativo ? 'ATIVADO' : 'DESATIVADO') . ' pelo admin.');
-
-        return ['ok' => true, 'modo_subida' => $ativo];
-    }
-
-    /**
      * Estado operacional pro app: flags manuais do admin + pausa automática
      * dos saques (a mesma leitura do banner "Liberar bot" do site).
      */
@@ -216,7 +367,9 @@ class BotAdminService
 
         return [
             'pausado_manual'    => (bool) ($state?->pausado_manual ?? false),
-            'modo_subida'       => (bool) ($state?->modo_subida ?? false),
+            // Modo "preparar subida" removido (2026-11-19) — mantido sempre
+            // false pra app antigo instalado continuar parseando o estado.
+            'modo_subida'       => false,
             'modo_subida_auto'  => (bool) ($state?->modo_subida_auto ?? false),
             'bot_ativo'         => (bool) ($state?->ativo ?? false),
             'pausa_saques'      => app(SaqueService::class)->statusPausa(),

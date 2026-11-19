@@ -23,6 +23,8 @@ class BotConfig extends Model
         'camadas_atr_habilitado', 'rsi_maximo_compra', 'rsi_minimo_venda',
         'adapt_histerese_pct', 'adapt_cooldown_min', 'adapt_persistencia_min',
         'patrimonio_inicial', 'btc_inicial', 'brl_inicial', 'base_iniciada_em',
+        // Estratégia "spread fixo" (feature reversível — default 'atr')
+        'estrategia_grid', 'fixo_valor_ordem', 'fixo_gatilho_pct', 'fixo_espera_min',
     ];
 
     protected $casts = [
@@ -42,6 +44,9 @@ class BotConfig extends Model
         'adapt_cooldown_min' => 'integer', 'adapt_persistencia_min' => 'integer',
         'patrimonio_inicial' => 'float', 'btc_inicial' => 'float', 'brl_inicial' => 'float',
         'base_iniciada_em' => 'datetime',
+        'estrategia_grid' => 'string',
+        'fixo_valor_ordem' => 'float', 'fixo_gatilho_pct' => 'float',
+        'fixo_espera_min' => 'integer',
     ];
 
     private static ?self $cache = null;
@@ -79,6 +84,11 @@ class BotConfig extends Model
                 'adapt_histerese_pct'    => 30.0,
                 'adapt_cooldown_min'     => 240,
                 'adapt_persistencia_min' => 30,
+                // Spread fixo (só vale com estrategia_grid='fixo')
+                'estrategia_grid'    => 'atr',
+                'fixo_valor_ordem'   => 1000.0,
+                'fixo_gatilho_pct'   => 0.30,
+                'fixo_espera_min'    => 30,
             ]);
         }
 

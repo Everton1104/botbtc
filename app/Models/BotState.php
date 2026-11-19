@@ -21,10 +21,10 @@ class BotState extends Model
         'ativo',
         'pausado_ate',
         'pausa_motivo',
-        'modo_subida',
         'pausado_manual',
         'modo_subida_auto',
         'par_criado_em',
+        'fixo_espera_desde',
     ];
 
     protected $casts = [
@@ -35,9 +35,9 @@ class BotState extends Model
         'preco_referencia'  => 'float',
         'ativo'             => 'boolean',
         'pausado_ate'       => 'datetime',
-        'modo_subida'       => 'boolean',
         'pausado_manual'    => 'boolean',
         'modo_subida_auto'  => 'boolean',
         'par_criado_em'     => 'datetime',
+        'fixo_espera_desde' => 'datetime',
     ];
 }

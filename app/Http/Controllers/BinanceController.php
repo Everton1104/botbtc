@@ -167,6 +167,35 @@ class BinanceController extends Controller
         return (float) ($response->json()['price'] ?? 0.0);
     }
 
+    /**
+     * Filtros do par (exchangeInfo público — sem assinatura): tickSize do
+     * preço, stepSize da qty e minNotional. O BTCBRL só aceita preço INTEIRO
+     * (tick 1) — preços com centavos são rejeitados com PRICE_FILTER, então
+     * quem calcula preço por percentual (spread fixo) precisa arredondar
+     * pro tick antes de enviar.
+     */
+    public function getExchangeInfo(?string $symbol = null): ?array
+    {
+        $response = Http::timeout(10)->connectTimeout(5)
+            ->get("{$this->baseUrl}/api/v3/exchangeInfo?symbol=" . ($symbol ?? self::SYMBOL));
+
+        $filtros = $response->json()['symbols'][0]['filters'] ?? [];
+        if (empty($filtros)) {
+            return null;
+        }
+
+        $porTipo = [];
+        foreach ($filtros as $f) {
+            $porTipo[$f['filterType']] = $f;
+        }
+
+        return [
+            'tick'        => (float) ($porTipo['PRICE_FILTER']['tickSize'] ?? 0),
+            'step'        => (float) ($porTipo['LOT_SIZE']['stepSize'] ?? 0),
+            'min_notional'=> (float) ($porTipo['NOTIONAL']['minNotional'] ?? $porTipo['MIN_NOTIONAL']['minNotional'] ?? 0),
+        ];
+    }
+
     public function getPrecos(): array
     {
         $btc = Http::timeout(10)->connectTimeout(5)->get("{$this->baseUrl}/api/v3/ticker/price?symbol=BTCBRL")->json()['price'] ?? 0;

@@ -325,6 +325,26 @@
         <div class="card-body">
             <form id="form-config-bot">
 
+                {{-- Estratégia do grid: ATR dinâmico × Spread fixo (reversível) --}}
+                <div style="font-size:.8rem;color:#aaa;margin-bottom:.5rem;">Estratégia do grid — parâmetros do spread fixo</div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Valor da ordem (R$)</label>
+                        <input type="number" id="cfg-fixo-valor" class="form-control form-control-sm" min="50" max="50000" step="50" placeholder="1000">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Gatilho por perna (%)</label>
+                        <input type="number" id="cfg-fixo-gatilho" class="form-control form-control-sm" min="0.15" max="5" step="0.005" placeholder="0.30">
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label mb-1" style="font-size:.75rem;color:#888;">Espera p/ rebase (min)</label>
+                        <input type="number" id="cfg-fixo-espera" class="form-control form-control-sm" min="1" max="1440" step="1" placeholder="30">
+                    </div>
+                </div>
+                <div style="font-size:.72rem;color:#777;margin-bottom:.9rem;">
+                    <strong>Spread fixo</strong> (liga/desliga pelo botão <em>Estratégia do Grid</em> na seção de controles): ordens sempre de R$ fixo, compra a −X% e venda a +X% da base — sem ATR, sem níveis progressivos e sem bloqueios de tendência. Cada ciclo captura o GATILHO em bruto: com 0,30% captura 0,30%, paga 0,15% de taxa Binance e sobra 0,15% líquido (lucro = valor da taxa). O gatilho nunca fica abaixo da taxa total (0,15% seria lucro zero por ciclo). Sobrar saldo insuficiente pra uma perna: segura pelo tempo de espera e, sem estabilizar, recria a base no preço atual (rebase) operando com o que houver. Estes parâmetros valem pra próxima vez que o spread fixo for ativado.
+                </div>
+
                 {{-- All-in --}}
                 <div class="row g-3 align-items-end mb-3">
                     <div class="col-6 col-md-3">
@@ -470,7 +490,7 @@
                     <button type="submit" class="btn btn-sm btn-warning px-4">
                         <i class="fa-solid fa-floppy-disk me-1"></i> Salvar
                     </button>
-                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa o Nível 8+ até atingir o all-in · all-in cap: 95% · salto sempre dinâmico (ATR)</span>
+                    <span style="font-size:.76rem;color:#888;">Acima do nível 7 usa o Nível 8+ até atingir o all-in · all-in cap: 95% · salto dinâmico (ATR) ou gatilho fixo (botão Estratégia do Grid)</span>
                 </div>
 
                 <div id="cfg-msg" class="mt-2" style="font-size:.82rem;"></div>
@@ -690,70 +710,127 @@
     })();
     </script>
 
-    {{-- Modo "Preparar Subida" (gatilho manual do admin) --}}
+    {{-- Modo "Preparar Subida" REMOVIDO (2026-11-19, a pedido do admin) —
+         o gatilho manual de inibir vendas saiu do bot e do painel; a coluna
+         modo_subida segue no banco (órfã/reversível) e a API mobile responde
+         no-op false até o app sair versão sem o botão. --}}
     </div>{{-- /sec-maisinfo Pausa Manual --}}
+
+    {{-- Estratégia do grid: ATR dinâmico × Spread fixo (botão liga/desliga) --}}
     <div class="sec-maisinfo">
-    <div class="section-title mt-2"><i class="fa-solid fa-rocket me-2"></i>Modo Preparar Subida</div>
-    <div class="card mb-4" id="card-modo-subida">
+    <div class="section-title mt-2"><i class="fa-solid fa-arrows-left-right-to-line me-2"></i>Estratégia do Grid</div>
+    <div class="card mb-4" id="card-estrategia">
         <div class="card-body">
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
                 <div style="max-width:620px;">
                     <div style="font-size:.9rem;font-weight:600;">
                         Estado atual:
-                        <span id="modo-subida-badge" class="badge bg-secondary ms-1">—</span>
+                        <span id="estrategia-badge" class="badge bg-secondary ms-1">—</span>
                     </div>
                     <div style="font-size:.78rem;color:#aaa;margin-top:.4rem;">
-                        Quando <strong>ativo</strong>, o bot <strong>cancela as ordens de venda</strong> e só cria/mantém <strong>compras</strong> — você segura uma subida forte sem realizar lucro cedo. Continha comprando nas pullbacks. Desligue quando o movimento acabar (o bot volta ao grid normal sozinho).
+                        <strong>ATR dinâmico</strong>: grid com salto pela volatilidade, níveis progressivos e proteções de tendência (o bot de sempre). <strong>Spread fixo</strong>: ordens de valor fixo a ±gatilho% da base — a valorização paga a taxa e gera lucro igual a ela, sem bloqueios. A troca <strong>cancela as ordens abertas</strong> na hora; o próximo ciclo (≤1 min) cria o par no formato novo. Os parâmetros do fixo (valor/gatilho/espera) ficam no form de Configuração.
                     </div>
                 </div>
-                <button id="btn-modo-subida" class="btn btn-sm px-4" type="button" disabled>
-                    <i class="fa-solid fa-rocket me-1"></i><span id="btn-modo-subida-txt">—</span>
-                </button>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    {{-- Edição rápida do gatilho — só faz sentido no modo fixo.
+                         Mesmo endpoint do form (/bot/config): piso 0,15% (taxa
+                         total) no backend + efeito imediato (recria o par). --}}
+                    <div id="estrategia-editar" class="d-flex align-items-center gap-2" style="display:none;">
+                        <div class="input-group input-group-sm" style="width:150px;" title="Gatilho por perna (%) — mínimo = taxa total (0,15%)">
+                            <input type="number" id="estrategia-gatilho" class="form-control" min="0.15" max="5" step="0.05" placeholder="0.30">
+                            <span class="input-group-text" style="font-size:.75rem;">%</span>
+                        </div>
+                        <button id="btn-gatilho-aplicar" class="btn btn-sm btn-outline-warning px-3" type="button">
+                            <i class="fa-solid fa-check me-1"></i>Aplicar
+                        </button>
+                    </div>
+                    <button id="btn-estrategia" class="btn btn-sm px-4" type="button" disabled>
+                        <i class="fa-solid fa-bolt me-1"></i><span id="btn-estrategia-txt">—</span>
+                    </button>
+                </div>
             </div>
-            <div id="modo-subida-msg" class="mt-2" style="font-size:.82rem;"></div>
+            <div id="estrategia-msg" class="mt-2" style="font-size:.82rem;"></div>
         </div>
     </div>
 
     <script>
     (function(){
-        const badge = document.getElementById('modo-subida-badge');
-        const btn = document.getElementById('btn-modo-subida');
-        const btnTxt = document.getElementById('btn-modo-subida-txt');
-        const msg = document.getElementById('modo-subida-msg');
-        const card = document.getElementById('card-modo-subida');
-        let ativo = false;
+        const badge  = document.getElementById('estrategia-badge');
+        const btn    = document.getElementById('btn-estrategia');
+        const btnTxt = document.getElementById('btn-estrategia-txt');
+        const btnIco = btn.querySelector('i');
+        const msg    = document.getElementById('estrategia-msg');
+        const card   = document.getElementById('card-estrategia');
+        const editar = document.getElementById('estrategia-editar');
+        const inputG = document.getElementById('estrategia-gatilho');
+        const btnApl = document.getElementById('btn-gatilho-aplicar');
+        let fixo = false;
 
         function render(){
-            badge.className = 'badge ms-1 ' + (ativo ? 'bg-success' : 'bg-secondary');
-            badge.textContent = ativo ? 'ATIVO' : 'inativo';
-            btn.className = 'btn btn-sm px-4 ' + (ativo ? 'btn-danger' : 'btn-success');
-            btnTxt.textContent = ativo ? 'Desativar' : 'Ativar';
+            badge.className = 'badge ms-1 ' + (fixo ? 'bg-warning' : 'bg-success');
+            badge.textContent = fixo ? 'SPREAD FIXO' : 'ATR DINÂMICO';
+            btn.className = 'btn btn-sm px-4 ' + (fixo ? 'btn-success' : 'btn-warning');
+            btnIco.className = fixo ? 'fa-solid fa-chart-line me-1' : 'fa-solid fa-bolt me-1';
+            btnTxt.textContent = fixo ? 'Ativar ATR' : 'Desativar ATR (spread fixo)';
             btn.disabled = false;
-            if (card) card.style.borderLeft = ativo ? '4px solid #28a745' : '1px solid var(--border)';
+            if (editar) editar.style.display = fixo ? '' : 'none';
+            if (card) card.style.borderLeft = fixo ? '4px solid #ffc107' : '1px solid var(--border)';
         }
         function carregar(){
-            axios.get('/binance/getConf').then(r => {
-                ativo = !!(r.data && r.data.modo_subida);
+            axios.get('/bot/config').then(r => {
+                const d = r.data || {};
+                fixo = d.estrategia_grid === 'fixo';
+                if (inputG && d.fixo_gatilho_pct !== undefined && d.fixo_gatilho_pct !== null) {
+                    inputG.value = d.fixo_gatilho_pct;
+                }
                 render();
             }).catch(()=>{ msg.innerHTML = '<span style="color:#dc3545;">Não foi possível carregar o estado.</span>'; });
         }
         btn.addEventListener('click', () => {
+            const indoFixo = !fixo;
+            const aviso = indoFixo
+                ? 'DESATIVAR O ATR e ligar o SPREAD FIXO?\n\nAs ordens abertas serão canceladas e o próximo ciclo (≤1 min) cria o par fixo com o valor e gatilho do form de Configuração.\nProteções de tendência, níveis progressivos e modo subida deixam de valer enquanto o fixo estiver ativo.'
+                : 'REATIVAR O ATR DINÂMICO?\n\nAs ordens do spread fixo serão canceladas e o próximo ciclo (≤1 min) recria o grid com salto por volatilidade, níveis e proteções de sempre.';
+            if (!confirm(aviso + '\n\nConfirma?')) return;
             btn.disabled = true;
-            axios.post('/bot/modo-subida', { ativo: !ativo }).then(r => {
-                ativo = !!(r.data && r.data.modo_subida);
+            axios.post('/bot/estrategia', { fixo: indoFixo }).then(r => {
+                fixo = (r.data && r.data.estrategia_grid) === 'fixo';
                 render();
-                msg.innerHTML = ativo
-                    ? '<span style="color:#28a745;"><i class="fa-solid fa-check me-1"></i>Modo ativado — vendas inibidas a partir do próximo ciclo do bot (≤1 min).</span>'
-                    : '<span style="color:#aaa;"><i class="fa-solid fa-check me-1"></i>Modo desativado — o bot volta ao grid normal.</span>';
+                const cor = fixo ? '#ffc107' : '#28a745';
+                msg.innerHTML = '<span style="color:' + cor + ';"><i class="fa-solid fa-check me-1"></i></span>' +
+                    ((r.data && r.data.mensagem) || 'Estratégia alterada.');
             }).catch(()=>{
-                msg.innerHTML = '<span style="color:#dc3545;">Erro ao alternar o modo.</span>';
+                msg.innerHTML = '<span style="color:#dc3545;">Erro ao alternar a estratégia.</span>';
                 btn.disabled = false;
             });
+        });
+        function aplicarGatilho(){
+            const val = parseFloat(inputG.value);
+            if (isNaN(val)) {
+                msg.innerHTML = '<span style="color:#dc3545;">Informe um gatilho válido (mínimo 0,15%).</span>';
+                return;
+            }
+            btnApl.disabled = true;
+            axios.post('/bot/config', { fixo_gatilho_pct: val }).then(r => {
+                msg.innerHTML = '<span style="color:#ffc107;"><i class="fa-solid fa-check me-1"></i></span>' +
+                    ((r.data && r.data.mensagem) || 'Gatilho salvo.');
+                // Re-sincroniza o input com o valor aplicado (backend pode
+                // ter clampado pro piso da taxa total).
+                axios.get('/bot/config').then(rr => {
+                    if (rr.data && rr.data.fixo_gatilho_pct !== undefined) inputG.value = rr.data.fixo_gatilho_pct;
+                });
+            }).catch(()=>{
+                msg.innerHTML = '<span style="color:#dc3545;">Erro ao salvar o gatilho.</span>';
+            }).finally(()=>{ btnApl.disabled = false; });
+        }
+        btnApl.addEventListener('click', aplicarGatilho);
+        inputG.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); aplicarGatilho(); }
         });
         carregar();
     })();
     </script>
-    </div>{{-- /sec-maisinfo Modo Preparar Subida --}}
+    </div>{{-- /sec-maisinfo Estratégia do Grid --}}
 
     @endif {{-- fim admin --}}
 
@@ -1674,6 +1751,17 @@ function carregarConfig() {
         if (subidaAuto) subidaAuto.checked = !!d.modo_subida_auto_habilitado;
         const camadasAtr = document.getElementById('cfg-camadas-atr');
         if (camadasAtr) camadasAtr.checked = !!d.camadas_atr_habilitado;
+        // Parâmetros do spread fixo (a estratégia em si troca pelo botão
+        // "Estratégia do Grid" — card próprio na seção de controles).
+        const mapaFixo = {
+            'cfg-fixo-valor':   'fixo_valor_ordem',
+            'cfg-fixo-gatilho': 'fixo_gatilho_pct',
+            'cfg-fixo-espera':  'fixo_espera_min',
+        };
+        Object.entries(mapaFixo).forEach(([id, campo]) => {
+            const el = document.getElementById(id);
+            if (el && d[campo] !== null && d[campo] !== undefined) el.value = d[campo];
+        });
     }).catch(() => {});
 }
 carregarConfig();
@@ -1746,6 +1834,18 @@ document.getElementById('form-config-bot').addEventListener('submit', function(e
     if (subidaAuto) payload.modo_subida_auto_habilitado = subidaAuto.checked;
     const camadasAtr = document.getElementById('cfg-camadas-atr');
     if (camadasAtr) payload.camadas_atr_habilitado = camadasAtr.checked;
+
+    // Parâmetros do spread fixo — números só quando preenchidos (a
+    // estratégia em si NÃO troca por aqui, só pelo botão dedicado).
+    const camposFixo = {
+        'cfg-fixo-valor':   'fixo_valor_ordem',
+        'cfg-fixo-gatilho': 'fixo_gatilho_pct',
+        'cfg-fixo-espera':  'fixo_espera_min',
+    };
+    Object.entries(camposFixo).forEach(([id, campo]) => {
+        const val = document.getElementById(id)?.value;
+        if (val) payload[campo] = parseFloat(val);
+    });
 
     axios.post('/bot/config', payload)
         .then(res => {

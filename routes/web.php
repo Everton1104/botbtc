@@ -454,17 +454,18 @@ Route::post('/bot/performance/reset-base', function () {
     return response()->json(['mensagem' => app(\App\Services\BotAdminService::class)->resetarBasePerformance()['mensagem']]);
 })->middleware(['auth', 'whatsapp.verified']);
 
-// Gatilho manual do admin: modo "preparar subida" (inibe vendas, só compra).
-// O cancelamento das vendas abertas e a recriação do par acontecem no próximo
-// ciclo do bot (executarModoSubida / fluxo normal). Aqui só persiste o flag.
-Route::post('/bot/modo-subida', function (Request $req) {
+// Estratégia do grid: ATR ↔ Spread fixo (botão do painel). O ritual da troca
+// (limpar flags da estratégia antiga + cancelar ordens abertas) vive no
+// BotAdminService — mesmo caminho do salvarConfig; o app também troca via
+// POST /api/admin/config mandando estrategia_grid no payload.
+Route::post('/bot/estrategia', function (Request $req) {
     if (Auth::id() !== 1) return ['mensagem' => 'Acesso negado.'];
-    $req->validate(['ativo' => 'required|boolean']);
+    $req->validate(['fixo' => 'required|boolean']);
 
-    $r = app(\App\Services\BotAdminService::class)->alternarModoSubida((int) Auth::id(), (bool) $req->input('ativo'));
+    $r = app(\App\Services\BotAdminService::class)->alternarEstrategia((bool) $req->input('fixo'));
 
     if (!$r['ok']) return response()->json(['erro' => $r['erro']], $r['code'] ?? 500);
-    return ['modo_subida' => $r['modo_subida']];
+    return ['estrategia_grid' => $r['estrategia_grid'], 'canceladas' => $r['canceladas'], 'mensagem' => $r['mensagem']];
 })->middleware(['auth', 'whatsapp.verified']);
 
 // Pausa manual do admin: cancela TODAS as ordens abertas na hora e congela o

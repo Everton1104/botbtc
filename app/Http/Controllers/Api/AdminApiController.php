@@ -85,22 +85,22 @@ class AdminApiController extends Controller
         ]);
     }
 
-    /** POST /api/admin/modo-subida — body { "ativo": true }: inibe vendas (só compra). */
+    /**
+     * POST /api/admin/modo-subida — DEPRECADO (modo "preparar subida"
+     * removido em 2026-11-19). Mantido como no-op que responde sempre
+     * false: app antigo instalado segue funcionando sem erro até sair a
+     * versão do app sem o botão.
+     */
     public function modoSubida(Request $request): JsonResponse
     {
         if ($request->user()->id !== 1) {
             return response()->json(['mensagem' => 'Acesso negado.'], 403);
         }
 
-        $request->validate(['ativo' => ['required', 'boolean']]);
-
-        $r = $this->admin->alternarModoSubida((int) $request->user()->id, (bool) $request->input('ativo'));
-
-        if (!$r['ok']) {
-            return response()->json(['erro' => $r['erro']], $r['code'] ?? 500);
-        }
-
-        return response()->json(['modo_subida' => $r['modo_subida']]);
+        return response()->json([
+            'modo_subida' => false,
+            'deprecado'   => 'Modo "preparar subida" removido do bot.',
+        ]);
     }
 
     /** POST /api/admin/performance/reset-base — zera a base do painel M8. */

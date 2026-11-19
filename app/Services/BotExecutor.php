@@ -100,55 +100,26 @@ class BotExecutor
         return $cfg > 0 ? $cfg : self::MIN_NOTIONAL_FLOOR;
     }
 
-    /**
-     * Modo "preparar subida" (gatilho manual do admin): inibe as ordens de VENDA,
-     * mantém/cria só COMPRA (captura pullbacks numa subida forte sem realizar cedo).
-     * Fluxo isolado do state machine — não toca em direção/contadores, então não
-     * dispara o guard de "par incompleto" nem contadores fantasmas.
-     */
-    private function executarModoSubida(BotState $state, array $open, float $precoAtual, ?array $tendencia = null): string
-    {
-        // 1. Cancela qualquer ordem de VENDA aberta (no modo só compramos).
-        $cancelou = false;
-        foreach ($open as $ordem) {
-            if (($ordem['side'] ?? '') === 'SELL') {
-                $this->binance->cancelarOrdem(self::SYMBOL, $ordem['orderId']);
-                $cancelou = true;
-            }
-        }
-
-        // 2. Re-lista ordens após cancelamentos pra contar compras.
-        if ($cancelou) {
-            $open = $this->binance->getOpenOrders(self::SYMBOL);
-            if (!is_array($open)) $open = [];
-            Log::info("BotExecutor: modo subida — ordem(ns) de venda cancelada(s).");
-        }
-        $comprasAbertas = 0;
-        foreach ($open as $ordem) {
-            if (($ordem['side'] ?? '') === 'BUY') $comprasAbertas++;
-        }
-
-        // 3. Se não há compra aberta, cria uma (captura pullback). soCompra=true inibe a venda.
-        if ($comprasAbertas === 0) {
-            $state->order_id_compra = null;
-            $state->order_id_venda  = null;
-            $ok = $this->criarOrdensNovas($state, $precoAtual, true, $tendencia);
-            if ($ok) {
-                Log::info("BotExecutor: modo subida — compra criada em {$precoAtual} (venda inibida).");
-                return "Modo subida ativo: compra criada, venda inibida.";
-            }
-            Log::warning("BotExecutor: modo subida — não foi possível criar compra (saldo/API).");
-            return "Modo subida ativo: sem compra (saldo/API).";
-        }
-
-        return "Modo subida ativo: {$comprasAbertas} compra aberta, venda inibida.";
-    }
-
     public function executar(string $userId): string
     {
         $state = BotState::where('id_user', $userId)->first();
 
+        // ============================================================
+        // ESTRATÉGIA "SPREAD FIXO" — grid de valor fixo com gatilho por
+        // valorização (feature reversível: bot_config.estrategia_grid).
+        // Fluxo totalmente separado: state machine de direção, níveis
+        // progressivos, bloqueios de alocação e modo subida ficam
+        // CONGELADOS. Trocar a flag de volta restaura o grid ATR sem
+        // estado corrompido (a troca no painel também cancela as ordens
+        // abertas na virada). O SpreadFixoService inicializa state/par
+        // sozinho — nunca passa pelo inicializarBotSemDivisao (ordens ATR).
+        // ============================================================
+        $estrategiaFixa = BotConfig::atual()->estrategia_grid === 'fixo';
+
         if (!$state) {
+            if ($estrategiaFixa) {
+                return app(SpreadFixoService::class)->executar($userId);
+            }
             return $this->inicializarBotSemDivisao($userId);
         }
 
@@ -194,6 +165,12 @@ class BotExecutor
             return "Saque em andamento: bot seguro até concluir ou cancelar.";
         }
 
+        // Estratégia fixa (pausas manuais/saque acima já são transversais):
+        // a partir daqui o ciclo inteiro pertence ao SpreadFixoService.
+        if ($estrategiaFixa) {
+            return app(SpreadFixoService::class)->executar($userId);
+        }
+
         // Buscar ordens abertas
         $open = $this->binance->getOpenOrders(self::SYMBOL);
 
@@ -233,15 +210,6 @@ class BotExecutor
         }
 
         $this->logCicloDetalhado($userId, $state, $precoAtual, $tendencia, $config);
-
-        // ============================================================
-        // MODO "PREPARAR SUBIDA" (gatilho manual do admin) — fluxo próprio:
-        // cancela ordens de venda, mantém/cria só compra, sem tocar no state
-        // machine (contadores congelam). Volta ao normal quando desligado.
-        // ============================================================
-        if ($state->modo_subida) {
-            return $this->executarModoSubida($state, $open, $precoAtual, $tendencia);
-        }
 
         // ============================================================
         // PROTEÇÃO: cancelar ordens fora do preço atual com margem
@@ -291,7 +259,7 @@ class BotExecutor
             if (!$cancelledAny && !empty($state->order_id_compra) && !empty($state->order_id_venda)) {
                 Log::warning("BotExecutor [{$userId}]: 0 ordens sem cancelamento prévio — possível whipsaw (ambas as pernas executaram entre ciclos). Direção não registrada.");
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, $tendencia)) {
                 return "Erro ao criar par (saldo ou API). Verifique os logs.";
             }
             Log::info("BotExecutor [{$userId}]: 0 ordens abertas. Par recriado em {$precoAtual}.");
@@ -321,7 +289,7 @@ class BotExecutor
                 Log::warning("BotExecutor [{$userId}]: timeout ao cancelar ordens (range). Abortando.");
                 return "Timeout ao cancelar ordens fora do range.";
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, $tendencia)) {
                 return "Erro ao recriar par após cancelamento de range.";
             }
             Log::info("BotExecutor [{$userId}]: ordem fora do range removida. Par recriado em {$precoAtual}.");
@@ -408,7 +376,7 @@ class BotExecutor
                 Log::warning("BotExecutor [{$userId}]: timeout ao cancelar par incompleto. Abortando.");
                 return "Timeout ao cancelar par incompleto.";
             }
-            if (!$this->criarOrdensNovas($state, $precoAtual, false, $tendencia)) {
+            if (!$this->criarOrdensNovas($state, $precoAtual, $tendencia)) {
                 return "Erro ao recriar par incompleto.";
             }
             Log::info("BotExecutor [{$userId}]: par incompleto (só perna {$side}) detectado. Par recriado em {$precoAtual} sem registrar direção.");
@@ -449,7 +417,7 @@ class BotExecutor
             return "Timeout ao cancelar ordem restante. Direção já registrada.";
         }
 
-        if (!$this->criarOrdensNovas($state, $precoExecucao, false, $tendencia)) {
+        if (!$this->criarOrdensNovas($state, $precoExecucao, $tendencia)) {
             return "Direção registrada mas erro ao criar novo par. Verifique os logs.";
         }
 
@@ -871,7 +839,11 @@ class BotExecutor
                      'boll_upper' => 0.0, 'boll_lower' => 0.0, 'boll_pct_b' => 0.5, 'boll_width' => 0.0,
                      'trend_4h' => 0, 'ma21_4h' => 0.0, 'rsi_4h' => 50.0,
                      'ma21' => 0.0, 'ema9' => 0.0, 'distancia_pct' => 0.0, 'preco' => $precoAtual, 'tendencia' => 'neutra',
-                     'fear_greed' => 50];
+                     'fear_greed' => 50,
+                     // chaves derivadas do ATR (log do ciclo / M9 / M5) — sem
+                     // elas, klines indisponível virava "undefined key" no log
+                     'atr_salto' => 0.0, 'atr_longa' => 0.0, 'atr_curta' => 0.0,
+                     'camada_salto' => [0, 0], 'spread_pct' => 0.0, 'salto_minimo_spread' => 0];
 
         $klines = $this->binance->getKlines(self::SYMBOL, '1h', 50);
 
@@ -1283,9 +1255,8 @@ class BotExecutor
     // trend4h+ e F&G>60. Desativa com qualquer fraqueza: EMA9<MA21, RSI4h<55,
     // MACD cruzando pra baixo ou trend4h fora de alta. Histerese proposital
     // (ativa em 65 / desativa em 55) pra não liga/desliga em ruído.
-    // Convive com o gatilho MANUAL: o manual (state->modo_subida) tem
-    // precedência e fluxo próprio (inibe vendas por completo). O automático
-    // apenas modula a criação de ordens (venda ×0,3 · compra ×1,3).
+    // OBS: o antigo gatilho MANUAL (modo_subida) foi removido (2026-11-19);
+    // resta apenas esta modulação automática (venda ×0,3 · compra ×1,3).
     private function avaliarModoSubidaAutomatico(BotState $state, array $t, BotConfig $config): void
     {
         if (!$config->modo_subida_auto_habilitado) {
@@ -1356,9 +1327,9 @@ class BotExecutor
 
         if ($brl === null || $btc === null) {
             Log::info(sprintf(
-                'CICLO [%s]: preco=%.0f (saldos indisponíveis) ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaManual=%d subidaAuto=%d dir=%s',
+                'CICLO [%s]: preco=%.0f (saldos indisponíveis) ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaAuto=%d dir=%s',
                 $userId, $preco, $t['atr_salto'], $t['salto_dinamico'], $t['rsi'], $t['rsi_4h'],
-                $t['macd_hist'], $t['fear_greed'], $state->modo_subida ? 1 : 0,
+                $t['macd_hist'], $t['fear_greed'],
                 $state->modo_subida_auto ? 1 : 0, $state->direcao_atual ?? '—'
             ));
             return;
@@ -1367,11 +1338,11 @@ class BotExecutor
         $aloc = $this->calcularAlocacao($brl, $btc, $preco, $config, $t);
 
         Log::info(sprintf(
-            'CICLO [%s]: preco=%.0f BRL=%.2f BTC=%.8f valBTC=%.2f patr=%.2f %%BTC=%.1f/%.0f(desvio %+.1f) %%BRL=%.1f ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaManual=%d subidaAuto=%d dir=%s zona=%s%s',
+            'CICLO [%s]: preco=%.0f BRL=%.2f BTC=%.8f valBTC=%.2f patr=%.2f %%BTC=%.1f/%.0f(desvio %+.1f) %%BRL=%.1f ATR=%.0f salto=%d RSI=%.1f RSI4h=%.1f MACDhist=%+.0f F&G=%d subidaAuto=%d dir=%s zona=%s%s',
             $userId, $preco, $brl, $btc, $btc * $preco, $aloc['patrimonio'],
             $aloc['pct_btc'], $aloc['target_btc'], $aloc['desvio_btc'], $aloc['pct_brl'],
             $t['atr_salto'], $t['salto_dinamico'], $t['rsi'], $t['rsi_4h'], $t['macd_hist'],
-            $t['fear_greed'], $state->modo_subida ? 1 : 0, $state->modo_subida_auto ? 1 : 0,
+            $t['fear_greed'], $state->modo_subida_auto ? 1 : 0,
             $state->direcao_atual ?? '—', $aloc['zona'],
             $aloc['motivos'] ? ' · ' . implode(' · ', $aloc['motivos']) : ''
         ));
@@ -1383,8 +1354,9 @@ class BotExecutor
     // Ponto de partida do painel de performance. Saldos free+locked (mesmo
     // critério do snapshot diário do cron e do log do ciclo). Falha da
     // Binance aqui NUNCA aborta o ciclo — tenta de novo no próximo (a base
-    // segue null até conseguir).
-    private function fotografarBasePerformance(BotConfig $config, float $precoAtual): void
+    // segue null até conseguir). Público porque o SpreadFixoService também
+    // fotografa (a base é transversal às estratégias).
+    public function fotografarBasePerformance(BotConfig $config, float $precoAtual): void
     {
         if ($config->base_iniciada_em !== null && $config->patrimonio_inicial !== null) {
             return;
@@ -1559,7 +1531,7 @@ class BotExecutor
         }
         Cache::forget(self::CACHE_ADAPT_DESDE);
 
-        if (!$this->criarOrdensNovas($state, $centro, false, $tendencia, $saltoNovo)) {
+        if (!$this->criarOrdensNovas($state, $centro, $tendencia, $saltoNovo)) {
             return 'Adaptação do grid: falha ao recriar par (próximo ciclo recria no fluxo normal).';
         }
 
@@ -1679,7 +1651,7 @@ class BotExecutor
     // CRIAÇÃO DE NOVAS ORDENS
     // ============================================================
 
-    private function criarOrdensNovas(BotState $state, float $precoAtual, bool $soCompra = false, ?array $tendencia = null, ?int $saltoForcado = null): bool
+    private function criarOrdensNovas(BotState $state, float $precoAtual, ?array $tendencia = null, ?int $saltoForcado = null): bool
     {
         $config = BotConfig::atual();
         // Reusa a análise do ciclo quando disponível (executar() já calculou —
@@ -1765,11 +1737,7 @@ class BotExecutor
         // Fatores de alocação multiplicam os de tendência; bloqueios normais
         // seguram ordens comuns (all-in de exaustão é a excepcional e passa),
         // bloqueios TOTAIS (pisos de tendência forte) seguram tudo.
-        // Modo subida MANUAL (soCompra) é decisão explícita do admin — fica
-        // fora do controle de alocação.
-        $alocacao = $soCompra
-            ? null
-            : $this->calcularAlocacao($saldoBRL, $saldoBTC, $precoAtual, $config, $tendencia);
+        $alocacao = $this->calcularAlocacao($saldoBRL, $saldoBTC, $precoAtual, $config, $tendencia);
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
         Log::info('DEBUG-ALOCACAO', [
@@ -1846,11 +1814,7 @@ class BotExecutor
         $minN        = $this->minNotionalEfetivo($config);
         $valorCompra = 0.0;
 
-        if ($soCompra) {
-            // Modo "preparar subida": sempre compra nível1 (independente da direção)
-            // para capturar pullbacks sem realizar lucro cedo.
-            $valorCompra = $saldoBRL * $config->nivel1 * $fatorCompra;
-        } elseif ($allin && $direcao === 'down' && !($alocacao['bloquear_compra_total'] ?? false)) {
+        if ($allin && $direcao === 'down' && !($alocacao['bloquear_compra_total'] ?? false)) {
             // Excepcional (exaustão de queda): passa bloqueio NORMAL — o piso
             // de baixa forte (bloqueio total) continua valendo nem pro all-in.
             $valorCompra = $saldoBRL * self::ALLIN_CAP;
@@ -1921,14 +1885,6 @@ class BotExecutor
         }
 
         // ── VENDA ────────────────────────────────────────────────────
-        if ($soCompra) {
-            // Modo "preparar subida": inibe as ordens de venda — só compra,
-            // pra não realizar lucro cedo numa subida forte.
-            $state->save();
-            Log::info("BotExecutor: modo subida ativo — venda inibida. Compra criada=" . ($criouCompra ? 'sim' : 'nao') . ".");
-            return $criouCompra;
-        }
-
         $percentualVenda = 0.0;
 
         // All-in de venda só faz sentido no topo (longa sequência de subidas =
