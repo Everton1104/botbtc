@@ -199,17 +199,36 @@
 
     // ── dados + render ──
     var COTACAO = 0; // BTC/BRL, buscada junto com os dados
-    function fmtSats(n) {
-        if (n >= 100000000) {
-            var btc = (n / 100000000).toFixed(8).replace(/\.?0+$/, '');
-            var txt = btc.replace('.', ',') + ' BTC';
-            if (COTACAO > 0) {
-                var brl = (n / 100000000) * COTACAO;
-                txt += ' · R$ ' + brl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            }
-            return txt;
+    // Formato do saldo no card da carteira: clique no VALOR alterna
+    // BTC → sats → R$ (e volta ao BTC). A última escolha fica lembrada
+    // no navegador e volta nas próximas visitas.
+    var FMT_SALDO = 'btc';
+    try { FMT_SALDO = localStorage.getItem('c1248fmtSaldo') || 'btc'; } catch (e) {}
+    window.alternarFmt = function () {
+        FMT_SALDO = FMT_SALDO === 'btc' ? 'sats' : (FMT_SALDO === 'sats' ? 'brl' : 'btc');
+        try { localStorage.setItem('c1248fmtSaldo', FMT_SALDO); } catch (e) {}
+        render(window.__dadosCarteiras || []);
+    };
+    function fmtCarteira(n) {
+        var btc = n / 100000000;
+        if (FMT_SALDO === 'sats') return n.toLocaleString('pt-BR') + ' sats';
+        if (FMT_SALDO === 'brl') {
+            if (COTACAO > 0) return 'R$ ' + (btc * COTACAO).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return 'sem cotação agora';
         }
-        return n.toLocaleString('pt-BR') + ' sats';
+        return btc.toFixed(8).replace(/\.?0+$/, '').replace('.', ',') + ' BTC';
+    }
+    // O delta de cada linha do histórico segue o MESMO formato do total
+    // (o clique no valor da carteira comanda os dois).
+    function fmtDelta(d) {
+        var s = d >= 0 ? '+' : '−';
+        var abs = Math.abs(d);
+        if (FMT_SALDO === 'sats') return s + abs.toLocaleString('pt-BR') + ' sats';
+        if (FMT_SALDO === 'brl') {
+            if (COTACAO > 0) return s + 'R$ ' + (abs / 100000000 * COTACAO).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return s + abs.toLocaleString('pt-BR') + ' sats'; // sem cotação ainda
+        }
+        return s + (abs / 100000000).toFixed(8).replace(/\.?0+$/, '').replace('.', ',') + ' BTC';
     }
 
     function carregar() {
@@ -238,7 +257,7 @@
         (c.receber || []).forEach(function (e) {
             h += '<div style="border-bottom:1px solid var(--border); padding:8px 0;">'
               +   '<div class="d-flex flex-wrap align-items-center gap-2">'
-              +     '<span class="badge-gold" style="font-size:.7rem;">nº ' + e.i + '</span>'
+              +     '<span class="badge-gold" style="font-size:.7rem;">nº ' + (e.i + 1) + '</span>'
               +     '<code style="color:var(--gold); font-size:.76rem; word-break:break-all; user-select:all;">' + e.endereco + '</code>'
               +     '<button type="button" class="btn btn-sm btn-outline-muted py-0" title="copiar" onclick="copiarEnd(\'' + e.endereco + '\')"><i class="fa-regular fa-copy"></i></button>'
               +     '<button type="button" class="btn btn-sm btn-outline-muted py-0" onclick="meHistorico(' + e.i + ',\'' + e.endereco + '\')"><i class="fa-solid fa-clock-rotate-left me-1"></i>histórico</button>'
@@ -329,9 +348,13 @@
 
     window.aplicarTaxa = function (id, nivel) {
         var w = window['__carteira' + id];
-        if (!TAXAS || !w || !w.utxos.length) return;
-        document.getElementById('txTaxa-' + id).value = TAXAS[nivel] * vsizeDe(w.utxos.length);
+        // Sem UTXO confirmado o clique NÃO pode ser morto: sugere com 1 UTXO
+        // de referência (o usuário re-ajusta quando os UTXOs confirmarem).
+        var n = Math.max(1, (w && w.utxos.length) || 0);
+        if (!TAXAS) return;
+        document.getElementById('txTaxa-' + id).value = TAXAS[nivel] * vsizeDe(n);
         estimativa(id);
+        conversaoValor(id); // valor "max" muda quando a taxa muda
         // marca o botão escolhido (fica até o usuário digitar outra taxa ou escolher outro)
         marcarTaxa(id, nivel);
     };
@@ -348,9 +371,9 @@
         var el = document.getElementById('txEstimativa-' + id);
         var w = window['__carteira' + id];
         var bruto = document.getElementById('txTaxa-' + id).value.replace(/\D/g, '');
-        if (!el || !w || !bruto || !w.utxos.length) { if (el) el.textContent = ''; return; }
+        if (!el || !bruto) { if (el) el.textContent = ''; return; }
         var total = parseInt(bruto, 10);
-        var rate = total / vsizeDe(w.utxos.length);
+        var rate = total / vsizeDe(Math.max(1, (w && w.utxos.length) || 0));
         var t;
         if (TAXAS) {
             if (rate >= TAXAS.rapida) t = '~10 min (próximo bloco)';
@@ -384,7 +407,7 @@
               +   '<span style="min-width:0;"><i class="fa-solid fa-eye me-2 text-gold"></i><strong>' + esc(c.rotulo) + '</strong>'
               +     ' <span class="text-muted d-block" style="font-size:.7rem; font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all; user-select:all;">watch-only · ' + c.zpub + '</span></span>'
               +   '<div class="d-flex align-items-center gap-2">'
-              +     '<span class="badge-gold" style="font-size:.85rem;">' + fmtSats(c.saldo) + '</span>'
+              +     '<span class="badge-gold" style="font-size:.85rem; cursor:pointer;" title="clique pra alternar: BTC / sats / R$" onclick="alternarFmt()">' + fmtCarteira(c.saldo) + '</span>'
               +     (c.saldo_pendente ? '<span class="badge-green" style="font-size:.75rem;">+' + c.saldo_pendente.toLocaleString('pt-BR') + ' sats a confirmar</span>' : '')
               +     '<button class="btn btn-sm btn-outline-muted" title="Endereços de recebimento" onclick="abrirEnderecos(' + c.id + ')"><i class="fa-solid fa-map-location-dot"></i></button>'
               +     '<button class="btn btn-sm btn-outline-muted" onclick="removerCarteira(' + c.id + ')"><i class="fa-solid fa-trash"></i></button>'
@@ -405,7 +428,7 @@
                       +   '<span class="text-muted">' + t.quando + ' · ' + confTxt + '</span>'
                       +   '<span class="endereco-item" style="font-size:.72rem; word-break:break-all; max-width:45%;">' + t.txid + '</span>'
                       +   '<span style="color:' + (t.delta >= 0 ? 'var(--green)' : 'var(--red)') + '; font-weight:700;">'
-                      +     (t.delta >= 0 ? '+' : '') + t.delta.toLocaleString('pt-BR') + ' sats</span></div>';
+                      +     fmtDelta(t.delta) + '</span></div>';
                 });
                 h += '</div>';
             }
@@ -417,7 +440,7 @@
             } else {
                 utxosUsaveis.forEach(function (u) {
                     h += '<div class="utxo-linha py-1">' + u.txid + ':' + u.vout + ' · ' + u.sats.toLocaleString('pt-BR')
-                      + ' sats · endereço nº ' + u.i + (u.cadeia === 'troco' ? ' (troco)' : '') + '</div>';
+                      + ' sats · endereço nº ' + (u.i + 1) + (u.cadeia === 'troco' ? ' (troco)' : '') + '</div>';
                 });
                 h += '<div class="text-muted mt-1" style="font-size:.74rem;">' + utxosUsaveis.length + ' UTXO(s)</div>';
             }
@@ -427,9 +450,10 @@
               + '<div class="form-label mb-1">Criar transação <strong class="text-light">não assinada</strong> <span class="text-muted" style="font-weight:400; font-size:.74rem;">— o pacote pronto pro arquivo offline</span></div>'
               + '<div class="row g-2">'
               +   '<div class="col-md-5"><input type="text" class="form-control form-control-sm" id="txDest-' + c.id + '" placeholder="destino bc1q…"></div>'
-              +   '<div class="col-md-4"><input type="text" class="form-control form-control-sm" id="txValor-' + c.id + '" placeholder="valor em sats (ou max)"></div>'
-              +   '<div class="col-md-3"><input type="text" class="form-control form-control-sm" id="txTaxa-' + c.id + '" placeholder="taxa em sats" oninput="estimativa(' + c.id + ')"></div>'
+              +   '<div class="col-md-4"><input type="text" class="form-control form-control-sm" id="txValor-' + c.id + '" placeholder="valor em sats (ou max)" oninput="conversaoValor(' + c.id + ')"></div>'
+              +   '<div class="col-md-3"><input type="text" class="form-control form-control-sm" id="txTaxa-' + c.id + '" placeholder="taxa em sats" oninput="estimativa(' + c.id + ');conversaoValor(' + c.id + ')"></div>'
               + '</div>'
+              + '<div id="txConv-' + c.id + '" class="text-gold mt-1" style="font-size:.74rem; display:none;"></div>'
               + '<div class="d-flex flex-wrap align-items-center gap-2 mt-1">'
               +   '<span class="text-muted" style="font-size:.72rem;">Taxa sugerida:</span>'
               +   '<button type="button" class="btn btn-outline-muted btn-sm py-0 taxa-btn" data-id="' + c.id + '" data-nivel="economica" onclick="aplicarTaxa(' + c.id + ',\'economica\')">mínima</button>'
@@ -456,6 +480,32 @@
     }
 
     function pacoteDe(c) { return c; }
+
+    // Conversão ao vivo do campo de valor: sats → BTC → R$ (cotação da página).
+    // "max" soma os UTXOs confirmados menos a taxa digitada — o que o arquivo
+    // offline vai gastar de verdade.
+    window.conversaoValor = function (id) {
+        var el = document.getElementById('txConv-' + id);
+        if (!el) return;
+        var v = document.getElementById('txValor-' + id).value.trim().toLowerCase();
+        var dados = window['__carteira' + id];
+        var sats = NaN, prefixo = '';
+        if (v === 'max') {
+            if (dados && dados.utxos.length) {
+                var taxa = parseInt(document.getElementById('txTaxa-' + id).value, 10) || 0;
+                sats = dados.utxos.reduce(function (s, u) { return s + u.sats; }, 0) - taxa;
+                prefixo = 'max ≈ ' + sats.toLocaleString('pt-BR') + ' sats · ';
+            }
+        } else if (v !== '' && /^\d+$/.test(v)) {
+            sats = parseInt(v, 10);
+        }
+        if (isNaN(sats)) { el.style.display = 'none'; el.textContent = ''; return; }
+        var btc = sats / 100000000;
+        var t = prefixo + '≈ ' + btc.toFixed(8).replace('.', ',') + ' BTC';
+        if (COTACAO > 0) t += ' · R$ ' + (btc * COTACAO).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        el.textContent = t;
+        el.style.display = '';
+    };
 
     window.gerarPacote = function (id) {
         var dados = window['__carteira' + id];

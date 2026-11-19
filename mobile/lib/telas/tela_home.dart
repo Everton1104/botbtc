@@ -344,10 +344,14 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         // Saudação com o primeiro nome de quem logou ("Olá, Everton");
-        // enquanto o me() não responde, o topo segue com a marca.
-        title: Text(_usuario == null
-            ? 'BotBTC'
-            : 'Olá, ${_usuario!.nome.split(' ').first}'),
+        // enquanto o me() não responde, o topo segue com a marca. FittedBox:
+        // com os 5 botões do admin a saudação encolhe em vez de estourar.
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(_usuario == null
+              ? 'BotBTC'
+              : 'Olá, ${_usuario!.nome.split(' ').first}'),
+        ),
         actions: [
           // Ações de dinheiro: saques (solicitar/cancelar/aprovar) e
           // depósitos PIX moram na TelaAcoes, em duas abas.
@@ -364,11 +368,20 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
               tooltip: 'Admin do bot',
               onPressed: _abrirAdmin,
             ),
+          // Carteiras: atalho DIRETO pra aba de vigilância (watch-only) da
+          // suíte — sem ter que entrar no Cartão 1248 antes.
+          IconButton(
+            icon: const Icon(Icons.account_balance_wallet),
+            tooltip: 'Carteiras',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TelaSuite(abaInicial: 2)),
+            ),
+          ),
           // Cartão 1248: backup físico da seed — imagem do cartão, instruções
           // e PDF pra imprimir (o simulador interativo continua no site).
           IconButton(
             icon: const Icon(Icons.confirmation_number),
-            tooltip: 'Cartão 1248 · Gerar · Carteiras',
+            tooltip: 'Cartão 1248 · Gerar',
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const TelaSuite()),
             ),

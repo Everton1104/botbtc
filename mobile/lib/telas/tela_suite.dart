@@ -26,12 +26,18 @@ import '../tema.dart';
 import 'tela_cartao1248.dart';
 
 class TelaSuite extends StatelessWidget {
-  const TelaSuite({super.key});
+  /// Aba em que a suíte abre: 0 = Cartão 1248, 1 = Gerar, 2 = Carteiras.
+  /// A Home usa 2 no botão de Carteiras — atalho direto, sem passar pelo
+  /// cartão antes.
+  const TelaSuite({super.key, this.abaInicial = 0});
+
+  final int abaInicial;
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 3,
+      initialIndex: abaInicial,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Suíte Bitcoin'),
@@ -522,7 +528,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   void initState() {
     super.initState();
     _carregar();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _carregar());
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _carregar(silencioso: true));
   }
 
   @override
@@ -539,7 +545,14 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     super.dispose();
   }
 
-  Future<void> _carregar() async {
+  /// Busca as carteiras no servidor.
+  ///
+  /// `silencioso: true` (o relógio de 30s) engole falha de rede quando já há
+  /// dados na tela: o aparelho em standby/fora de cobertura derruba o DNS e a
+  /// exception crua ("ClientException … host lookup") vinha parar no topo da
+  /// lista sem quebrar nada — daqui a 30s ele tenta de novo sozinho. Sem
+  /// dados ainda (primeira carga/puxão manual), mostra mensagem amigável.
+  Future<void> _carregar({bool silencioso = false}) async {
     try {
       final dados = await ApiService.carteirasDados();
       if (!mounted) return;
@@ -553,9 +566,25 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
       ApiService.carteirasCotacao().then((c) {
         if (mounted && c > 0) setState(() => _cotacao = c);
       }).catchError((_) {});
-    } catch (e) {
-      if (mounted) setState(() => _erro = e.toString().replaceFirst('Exception: ', ''));
+    } on ApiException catch (e) {
+      _falhou(e.mensagem, silencioso: silencioso);
+    } catch (_) {
+      _falhou('Não foi possível conectar ao servidor.', silencioso: silencioso);
     }
+  }
+
+  /// Tratamento comum das falhas de _carregar (o mesmo padrão da Home).
+  void _falhou(String mensagem, {required bool silencioso}) {
+    if (!mounted) return;
+    // Polling com dados de pé: nada muda na tela, o próximo tic tenta de novo.
+    if (silencioso && _carteiras != null) return;
+    if (_carteiras != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mensagem), backgroundColor: Cores.vermelho),
+      );
+      return;
+    }
+    setState(() => _erro = mensagem);
   }
 
   Future<void> _importar() async {
@@ -624,19 +653,62 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     }
   }
 
-  String _fmtSats(dynamic n) {
-    final v = (n is num) ? n : int.tryParse(n.toString()) ?? 0;
+  /// Formato do saldo no card da carteira: clique no VALOR alterna
+  /// BTC → sats → R$. static: a escolha vale pro resto da sessão — voltar
+  /// na tela mantém o último formato escolhido.
+  static String _fmtSaldo = 'btc';
+
+  /// O valor da carteira no formato escolhido (uma linha).
+  String _fmtSaldoFmt(dynamic n) {
+    final v = ((n is num) ? n : int.tryParse(n.toString()) ?? 0).toInt();
     final btc = v / 100000000;
-    var txt = '${btc.toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll('.', ',')} BTC';
-    if (_cotacao > 0) {
-      final brl = btc * _cotacao;
-      txt += '\nR\$ ${brl.toStringAsFixed(2).replaceAll('.', ',')}';
+    switch (_fmtSaldo) {
+      case 'sats':
+        return '${_fmtMilhar(v)} sats';
+      case 'brl':
+        return _cotacao > 0
+            ? 'R\$ ${(btc * _cotacao).toStringAsFixed(2).replaceAll('.', ',')}'
+            : 'sem cotação agora';
+      default:
+        return '${btc.toStringAsFixed(8).replaceAll(RegExp(r'\.?0+$'), '').replaceAll('.', ',')} BTC';
     }
-    txt += '\n${v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.')} sats';
-    return txt;
   }
 
   int _vsizeDe(int nUtxos) => 11 + 68 * nUtxos + 62;
+
+  /// "≈ 0,00060000 BTC · R$ 651,23" — a linha de conversão do campo de valor
+  /// (R$ só quando a cotação já chegou).
+  String _fmtConv(int sats) {
+    final btc = sats / 100000000;
+    var t = '≈ ${btc.toStringAsFixed(8).replaceAll('.', ',')} BTC';
+    if (_cotacao > 0) {
+      t += ' · R\$ ${(btc * _cotacao).toStringAsFixed(2).replaceAll('.', ',')}';
+    }
+    return t;
+  }
+
+  /// O delta de cada linha do histórico segue o MESMO formato do total
+  /// (o toque no valor da carteira comanda os dois): "+0,0005 BTC",
+  /// "+50.000 sats" ou "+R$ 543,21".
+  String _fmtDelta(dynamic n) {
+    final v = ((n is num) ? n : int.tryParse(n.toString()) ?? 0).toInt();
+    final s = v >= 0 ? '+' : '−';
+    final abs = v.abs();
+    switch (_fmtSaldo) {
+      case 'sats':
+        return '$s${_fmtMilhar(abs)} sats';
+      case 'brl':
+        return _cotacao > 0
+            ? '$s${'R\$ ${(abs / 100000000 * _cotacao).toStringAsFixed(2).replaceAll('.', ',')}'}'
+            : '$s${_fmtMilhar(abs)} sats'; // sem cotação ainda
+      default:
+        return '$s${(abs / 100000000).toStringAsFixed(8).replaceAll(RegExp(r'\.?0+$'), '').replaceAll('.', ',')} BTC';
+    }
+  }
+
+  /// 87432 → "87.432" (separador de milhar pt-BR).
+  String _fmtMilhar(int v) =>
+      v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
 
   @override
   Widget build(BuildContext context) {
@@ -719,7 +791,20 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
               ]),
             ),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text(_fmtSats(c['saldo']), textAlign: TextAlign.right, style: const TextStyle(color: Cores.dourado, fontWeight: FontWeight.w800, fontSize: 12.5, height: 1.3)),
+              // O VALOR é botão: cada toque alterna BTC → sats → R$.
+              GestureDetector(
+                onTap: () => setState(() => _fmtSaldo = switch (_fmtSaldo) {
+                      'btc' => 'sats',
+                      'sats' => 'brl',
+                      _ => 'btc',
+                    }),
+                child: Tooltip(
+                  message: 'alternar: BTC / sats / R\$',
+                  child: Text(_fmtSaldoFmt(c['saldo']),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(color: Cores.dourado, fontWeight: FontWeight.w800, fontSize: 12.5)),
+                ),
+              ),
               if (pendente != 0)
                 Text('+$pendente sats a confirmar', style: const TextStyle(color: Cores.verde, fontSize: 10)),
             ]),
@@ -751,7 +836,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
                       ),
                     ),
                     Text(
-                      '${(t['delta'] as int) >= 0 ? '+' : ''}${t['delta']} sats',
+                      _fmtDelta(t['delta']),
                       style: TextStyle(
                         fontSize: 10.5,
                         fontWeight: FontWeight.w700,
@@ -766,7 +851,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
             Text('UTXOs disponíveis (${utxosUsaveis.length})', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
             for (final u in utxosUsaveis.take(5))
               Text(
-                '${(u['txid'] as String).substring(0, 16)}…:${u['vout']} · ${u['sats']} sats · end. nº ${u['i']}',
+                '${(u['txid'] as String).substring(0, 16)}…:${u['vout']} · ${u['sats']} sats · end. nº ${(u['i'] as num).toInt() + 1}',
                 style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Cores.textoSuave),
               ),
             const SizedBox(height: 10),
@@ -784,9 +869,15 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   Widget _pacoteWidget(Map<String, dynamic> c, List utxosUsaveis) {
     final id = c['id'] as int;
     if (!_pacoteCtrls.containsKey(id)) {
+      final valor = TextEditingController();
+      // Digitar no valor reconstrói na hora: a linha de conversão
+      // sats → BTC → R$ embaixo do campo é calculada no build.
+      valor.addListener(() {
+        if (mounted) setState(() {});
+      });
       _pacoteCtrls[id] = (
         TextEditingController(),
-        TextEditingController(),
+        valor,
         TextEditingController(),
       );
     }
@@ -795,6 +886,18 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     // taxa padrão: mínimo recomendado × tamanho
     if (_taxas != null && utxosUsaveis.isNotEmpty && taxaCtrl.text.isEmpty) {
       taxaCtrl.text = '${_taxas!['economica']! * _vsizeDe(utxosUsaveis.length)}';
+    }
+
+    // Conversão ao vivo do valor digitado: "≈ 0,00060000 BTC · R$ 651,23".
+    // "max" mostra o que sobra dos UTXOs confirmados menos a taxa.
+    final vTxt = valorCtrl.text.trim().toLowerCase();
+    String? conv;
+    if (vTxt == 'max' && utxosUsaveis.isNotEmpty) {
+      final total = utxosUsaveis.fold<int>(0, (s, u) => s + (u['sats'] as num).toInt());
+      final liquido = total - (int.tryParse(taxaCtrl.text.trim()) ?? 0);
+      conv = 'max ≈ ${_fmtMilhar(liquido)} sats · ${_fmtConv(liquido)}';
+    } else if (vTxt.isNotEmpty && RegExp(r'^\d+$').hasMatch(vTxt)) {
+      conv = _fmtConv(int.parse(vTxt));
     }
 
     return Theme(
@@ -811,6 +914,11 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
             const SizedBox(width: 8),
             Expanded(child: TextField(controller: taxaCtrl, decoration: const InputDecoration(labelText: 'Taxa (sats)', isDense: true))),
           ]),
+          if (conv != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 2),
+              child: Text(conv, style: const TextStyle(fontSize: 11, color: Cores.dourado)),
+            ),
           if (_taxas != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -818,7 +926,10 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
                 for (final e in {'mínima': 'economica', '~1h': 'hora', '~30min': 'meiaHora', 'rápida': 'rapida'}.entries)
                   ActionChip(
                     label: Text(e.key, style: const TextStyle(fontSize: 11)),
-                    onPressed: () => taxaCtrl.text = '${_taxas![e.value]! * _vsizeDe(utxosUsaveis.length)}',
+                    // setState: com valor "max" a conversão depende da taxa —
+                    // precisa reconstruir quando o chip troca a taxa.
+                    onPressed: () => setState(() =>
+                        taxaCtrl.text = '${_taxas![e.value]! * _vsizeDe(utxosUsaveis.length)}'),
                   ),
               ]),
             ),
@@ -887,7 +998,7 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(color: Cores.dourado.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(4)),
-                    child: Text('nº ' + e['i'].toString(), style: const TextStyle(fontSize: 10, color: Cores.dourado, fontWeight: FontWeight.w700)),
+                    child: Text('nº ${(e['i'] as num).toInt() + 1}', style: const TextStyle(fontSize: 10, color: Cores.dourado, fontWeight: FontWeight.w700)),
                   ),
                   const SizedBox(width: 6),
                   Expanded(
