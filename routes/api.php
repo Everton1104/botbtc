@@ -36,7 +36,11 @@ Route::get('/versao-app', function () {
         'versao_atual'  => $publicada !== '' ? $publicada : null,
         // APP_URL fixo (não o host da requisição): o app recebe sempre o
         // endereço certo do APK, de qualquer forma que a rota seja chamada.
-        'url_apk'       => rtrim((string) config('app.url'), '/') . '/app-botbtc.apk',
+        // ?v= anti-cache: o Cloudflare segura o APK por 4h (max-age=14400) e
+        // o SCP do APK novo não purga — sem a query o app receberia a versão
+        // ANTERIOR em cache (aconteceu no 1.3.15). Mesma receita do PDF (?v=).
+        'url_apk'       => rtrim((string) config('app.url'), '/') . '/app-botbtc.apk'
+            . ($publicada !== '' ? '?v=' . $publicada : ''),
     ]);
 });
 

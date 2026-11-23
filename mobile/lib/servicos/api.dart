@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.14';
+const String kAppVersao = '1.3.15';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").

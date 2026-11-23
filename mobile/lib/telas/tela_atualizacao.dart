@@ -90,9 +90,12 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
       setState(() => _apkPath = path);
     } catch (e) {
       if (!mounted) return;
+      // O texto REAL do erro na tela: o download já tem 3 tentativas com
+      // resume — se mesmo assim falha, o diagnóstico é do erro que sobrou
+      // (rede quebrada, canal nativo, storage), não de uma mensagem neutra.
       _avisar(e is HttpException
           ? '${e.message} — tente de novo ou baixe pelo site.'
-          : 'Não foi possível baixar. Verifique a internet ou baixe pelo site.');
+          : 'Não foi possível baixar ($e). Tente de novo ou baixe pelo site.');
     } finally {
       if (mounted) setState(() => _baixando = false);
     }
