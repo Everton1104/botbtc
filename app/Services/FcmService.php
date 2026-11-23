@@ -53,7 +53,13 @@ class FcmService
             // "Notificações" desligadas no app (toggle geral): silêncio TOTAL
             // na origem — nenhum tipo de push sai pra quem desligou (não
             // adianta o app filtrar: com ele fechado é o Android quem desenha).
-            $query->whereDoesntHave('user', fn ($q) => $q->where('push_ativo', false));
+            // EXCEÇÃO: pedido de SAQUE — pendência financeira do admin, o
+            // fluxo do PIX não pode quebrar por uma preferência de silêncio.
+            // (O push de saque só vai pra ADMIN_ID, então a exceção não vaza
+            // nada pra cliente com o toggle ligado.)
+            if (($dados['tipo'] ?? null) !== 'saque') {
+                $query->whereDoesntHave('user', fn ($q) => $q->where('push_ativo', false));
+            }
 
             // "Avisos de compra e venda" desligados: corta SÓ o push de trade
             // (os demais avisos seguem normais).

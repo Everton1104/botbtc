@@ -185,7 +185,7 @@ class AuthController extends Controller
         return response()->json([
             'mensagem' => $dados['ativo']
                 ? 'Notificações ligadas.'
-                : 'Notificações desligadas — nada mais chega por push (o toggle de compra e venda só vale de novo quando este estiver ligado).',
+                : 'Notificações desligadas — nada mais chega por push, exceto pedidos de saque (o fluxo do PIX não para).',
         ]);
     }
 

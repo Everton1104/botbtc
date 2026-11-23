@@ -276,7 +276,8 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
               subtitle: Text(
                 _pushAtivo!
                     ? 'Ligadas — o servidor envia tudo que pertence a você.'
-                    : 'Desligadas — nada chega por push enquanto estiver aqui.',
+                    : 'Desligadas — pedidos de saque continuam chegando pra '
+                        'você, o resto fica em silêncio.',
                 style: const TextStyle(fontSize: 11.5, height: 1.4),
               ),
               value: _pushAtivo!,
