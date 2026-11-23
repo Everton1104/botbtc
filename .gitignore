@@ -41,3 +41,4 @@ backups/
 /mobile/ios/Pods/
 /mobile/ios/.symlinks/
 *firebase-adminsdk*.json
+mobile/android/build/
