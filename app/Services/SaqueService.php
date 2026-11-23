@@ -81,9 +81,18 @@ class SaqueService
                 $precoPorCota = $totalCotas > 0 ? $patrimonioAtual / $totalCotas : 0;
                 $valorMaximo  = $invest->cotas * $precoPorCota;
 
-                $valorBruto = $valorSolicitado > 0
-                    ? min($valorSolicitado, $valorMaximo)
-                    : $valorMaximo;
+                // Recusa explícita acima do saldo (o clamp silencioso fazia o
+                // investidor achar que o saque era do valor pedido — admin
+                // incluído). 0,01 de folga para ruído de ponto flutuante.
+                if ($valorSolicitado > 0 && $valorSolicitado > $valorMaximo + 0.01) {
+                    throw new \Exception(
+                        'Saque acima do seu saldo. Máximo disponível: R$ '
+                        . number_format($valorMaximo, 2, ',', '.') . '.',
+                        422
+                    );
+                }
+
+                $valorBruto = $valorSolicitado > 0 ? $valorSolicitado : $valorMaximo;
 
                 if ($valorBruto <= 0) {
                     throw new \Exception('Valor inválido.', 422);
@@ -200,7 +209,10 @@ class SaqueService
     /**
      * Admin confirma que o PIX saiu de fato — fecha o ciclo do saque
      * ('confirmado' → 'pago') e libera o bot (que fica seguro enquanto
-     * houver saque em andamento).
+     * houver saque em andamento). Cruzamento com o extrato fiat da Binance:
+     * o PIX físico maior que o registrado drena os outros investidores
+     * (aconteceu 23/11: PIX de R$ 10.296,50 vs R$ 9.912,82 registrado) —
+     * aviso na hora, nunca mais passar batido.
      */
     public function concluir(int $saqueId): array
     {
@@ -210,14 +222,60 @@ class SaqueService
             return ['ok' => false, 'code' => 404, 'mensagem' => 'Saque não está em andamento.'];
         }
 
+        $divergencia = $this->pixFisicoDivergente($saque);
+
         $saque->status  = 'pago';
         $saque->pago_at = now();
         $saque->save();
         $this->retomarBot();
 
         Log::info("Saque [{$saqueId}] concluído pelo admin (R$ {$saque->valor_liquido} para user {$saque->user_id}).");
+        if ($divergencia !== null) {
+            Log::warning("Saque [{$saqueId}]: PIX físico ({$divergencia}) divergiu do registrado (R$ {$saque->valor_liquido}) — repor o fundo e registrar a diferença.");
+        }
 
-        return ['ok' => true, 'mensagem' => 'Saque concluído! O bot volta a operar no próximo ciclo.'];
+        $msg = 'Saque concluído! O bot volta a operar no próximo ciclo.';
+        if ($divergencia !== null) {
+            $msg .= " ⚠️ O PIX na Binance saiu de {$divergencia}, diferente do saque registrado (R$ "
+                . number_format((float) $saque->valor_liquido, 2, ',', '.')
+                . '). Deposite a diferença no fundo para repor os outros investidores.';
+        }
+
+        return ['ok' => true, 'mensagem' => $msg];
+    }
+
+    /**
+     * Compara o PIX de saída mais recente na Binance (dentro de 1h do
+     * confirmar) com o valor registrado. Retorna o valor físico como string
+     * formatada quando divergem (>= R$ 1), null quando batem ou quando a
+     * API não respondeu (nunca bloqueia a conclusão por extrato).
+     */
+    private function pixFisicoDivergente(BotWithdrawalRequest $saque): ?string
+    {
+        try {
+            $orders = $this->binance->getFiatOrders(1, \Carbon\Carbon::parse($saque->confirmado_at ?? $saque->created_at)->getTimestampMs() - 3600_000);
+            if (!isset($orders['data'])) {
+                return null;
+            }
+
+            $recentes = collect($orders['data'])
+                ->filter(fn($o) => ($o['status'] ?? '') === 'Successful')
+                ->sortByDesc(fn($o) => (int) ($o['createTime'] ?? 0));
+
+            if ($recentes->isEmpty()) {
+                return null;
+            }
+
+            $pix = $recentes->first();
+            $valorFisico = (float) ($pix['amount'] ?? 0);
+
+            return abs($valorFisico - (float) $saque->valor_liquido) >= 1.0
+                ? 'R$ ' . number_format($valorFisico, 2, ',', '.')
+                : null;
+        } catch (\Throwable $e) {
+            Log::warning('Saque [' . $saque->id . ']: falha ao cruzar extrato fiat — ' . $e->getMessage());
+            return null;
+        }
     }
 
     /**
@@ -385,11 +443,27 @@ class SaqueService
         // Verificar saldo BRL livre
         $saldos        = $this->binance->getSaldos();
         $brl           = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
+        $btc           = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
         $saldoBRLLivre = (float) ($brl['free'] ?? 0);
+        $precoAtual    = $this->binance->getPrecoBTC();
+
+        // TETO DO FUNDO — nenhum saque pode pagar mais que o total que o
+        // fundo REALMENTE tem (BRL livre + BTC que dá pra converter, com a
+        // mesma margem de 0,5% do fluxo de venda). O PIX nunca sai acima
+        // disso: o excedente sairia do bolso dos outros investidores.
+        $patrimonioLiquido = $saldoBRLLivre + (float) ($btc['free'] ?? 0) * $precoAtual;
+        if ($valorLiquido > $patrimonioLiquido * 0.995) {
+            Log::warning("Saque [{$saqueId}]: RECUSADO acima do teto do fundo — pede {$valorLiquido}, fundo tem {$patrimonioLiquido}.");
+            return [
+                'ok'       => false,
+                'code'     => 422,
+                'mensagem' => 'Saque acima do total disponível no fundo (R$ '
+                    . number_format($patrimonioLiquido * 0.995, 2, ',', '.') . '). Solicite um valor menor.',
+            ];
+        }
 
         if ($saldoBRLLivre < $valorLiquido) {
-            $falta      = $valorLiquido - $saldoBRLLivre;
-            $precoAtual = $this->binance->getPrecoBTC();
+            $falta = $valorLiquido - $saldoBRLLivre;
 
             // Cancelar todas as ordens abertas do bot
             $ordensAbertas = $this->binance->getOpenOrders('BTCBRL');

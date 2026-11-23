@@ -281,6 +281,22 @@ class BinanceController extends Controller
         return $this->enviar($endpoint, "{$params}&signature={$this->assinar($params)}");
     }
 
+    /**
+     * Histórico de ordens FIAT da Binance (PIX BRL): transactionType
+     * 0 = depósito, 1 = saque. Usado para cruzar o PIX físico com o saque
+     * registrado no sistema (o PIX de hoje saiu maior que o registrado).
+     */
+    public function getFiatOrders(int $transactionType, int $beginTimeMs): ?array
+    {
+        $params = http_build_query([
+            'transactionType' => $transactionType,
+            'beginTime'       => $beginTimeMs,
+            'timestamp'       => $this->timestamp(),
+        ]);
+
+        return $this->enviar('/sapi/v1/fiat/orders', "{$params}&signature={$this->assinar($params)}");
+    }
+
     // ============================================================
     // KLINES (velas — endpoint público, sem autenticação)
     // ============================================================
