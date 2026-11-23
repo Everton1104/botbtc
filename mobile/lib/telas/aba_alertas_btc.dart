@@ -32,10 +32,16 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
   bool _criando = false;
   int? _excluindoId; // trash com spinner do alerta sendo apagado
 
+  // Preferência "avisos de compra e venda" (vem no /api/me). null = ainda
+  // não chegou → o card do toggle não renderiza (nada de switch mentiroso).
+  bool? _pushTrades;
+  bool _salvandoPush = false;
+
   @override
   void initState() {
     super.initState();
     _carregar();
+    _carregarPreferenciaPush();
   }
 
   @override
@@ -61,6 +67,15 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
     } catch (_) {
       _falhou('Não foi possível conectar ao servidor.', silencioso: silencioso);
     }
+  }
+
+  /// Busca o estado do toggle de push de trades (campo push_trades do /api/me).
+  /// Silencioso de propósito: se falhar, a aba segue só com os alertas.
+  Future<void> _carregarPreferenciaPush() async {
+    try {
+      final u = await ApiService.me();
+      if (mounted) setState(() => _pushTrades = u.pushTrades);
+    } catch (_) {}
   }
 
   void _falhou(String mensagem, {required bool silencioso}) {
@@ -122,6 +137,27 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
     }
   }
 
+  // ── Toggle de avisos de compra e venda ─────────────────────────────────────
+
+  /// LIGA/DESLIGA o push de ordem executada. O servidor guarda a preferência
+  /// e para de ENVIAR o push de trade — silêncio na origem (com o app fechado
+  /// é o Android quem desenha a notificação, filtrar aqui não adiantaria).
+  /// Erro → o switch volta pro estado de antes (nunca fica mentindo na tela).
+  Future<void> _alternarPushTrades(bool ativo) async {
+    setState(() => _salvandoPush = true);
+    try {
+      final msg = await ApiService.salvarPushTrades(ativo);
+      if (mounted) setState(() => _pushTrades = ativo);
+      _aviso(msg);
+    } on ApiException catch (e) {
+      _aviso(e.mensagem, erro: true);
+    } catch (_) {
+      _aviso('Não foi possível conectar ao servidor.', erro: true);
+    } finally {
+      if (mounted) setState(() => _salvandoPush = false);
+    }
+  }
+
   // ── Excluir alerta ─────────────────────────────────────────────────────────
 
   Future<void> _excluir(AlertaBtc alerta) async {
@@ -168,6 +204,29 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
       children: [
+        // ── Avisos de compra e venda: o pedido de silêncio mora aqui, no
+        // topo — é a primeira coisa que quem chega incomodado quer achar.
+        if (_pushTrades != null) ...[
+          _titulo('Avisos por push', Icons.notifications_active_outlined),
+          Card(
+            margin: const EdgeInsets.only(bottom: 4),
+            child: SwitchListTile(
+              title: const Text('Compras e vendas do bot',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
+              subtitle: Text(
+                _pushTrades!
+                    ? 'Push a cada ordem executada — 🟢 compra, 🔴 venda.'
+                    : 'Silêncio nas ordens. Saques, depósitos e alertas de '
+                        'preço continuam chegando.',
+                style: const TextStyle(fontSize: 11.5, height: 1.4),
+              ),
+              value: _pushTrades!,
+              activeThumbColor: Cores.dourado,
+              onChanged: _salvandoPush ? null : _alternarPushTrades,
+            ),
+          ),
+        ],
+
         _titulo('Preço do BTC', Icons.query_stats),
 
         // Preço atual — a referência pra decidir o alvo do alerta

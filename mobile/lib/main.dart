@@ -88,7 +88,7 @@ class BotbtcApp extends StatelessWidget {
       // A porta de entrada: desatualizado → só a tela de atualização;
       // em dia → Home se já tem token, Login se não.
       home: precisaAtualizar
-          ? TelaAtualizacao(versaoMinima: versaoMinima, urlApk: urlApk)
+          ? TelaAtualizacao(versao: versaoMinima, urlApk: urlApk)
           : (iniciaLogado ? const TelaHome() : const TelaLogin()),
     );
   }

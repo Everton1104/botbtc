@@ -15,4 +15,10 @@ use Illuminate\Database\Eloquent\Model;
 class FcmToken extends Model
 {
     protected $fillable = ['user_id', 'token', 'dispositivo'];
+
+    /** Dono do aparelho — usado pra respeitar a preferência de push dele. */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 }

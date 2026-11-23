@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.8';
+const String kAppVersao = '1.3.14';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").
@@ -80,13 +80,14 @@ class ApiException implements Exception {
 ///
 /// O JSON do servidor vem assim:
 ///   {"id":1, "name":"Everton", "email":"...", "whatsapp":"55...",
-///    "whatsapp_verificado":true}
+///    "whatsapp_verificado":true, "push_trades":true}
 class Usuario {
   final int id;
   final String nome;
   final String email;
   final String? whatsapp; // null se ainda não cadastrou o número
   final bool whatsappVerificado; // true se já confirmou o código
+  final bool pushTrades; // false = avisos de compra e venda desligados
 
   /// Construtor: `required` obriga quem criar um Usuario a informar os campos.
   const Usuario({
@@ -95,6 +96,7 @@ class Usuario {
     required this.email,
     this.whatsapp,
     required this.whatsappVerificado,
+    this.pushTrades = true,
   });
 
   /// Construtor "de fábrica": cria um Usuario a partir do mapa que resulta
@@ -107,6 +109,8 @@ class Usuario {
       email: json['email'] as String,
       whatsapp: json['whatsapp'] as String?,
       whatsappVerificado: json['whatsapp_verificado'] as bool,
+      // ?? true: servidor antigo (ou resposta sem o campo) = avisos ligados
+      pushTrades: json['push_trades'] as bool? ?? true,
     );
   }
 }
@@ -614,6 +618,21 @@ class ApiService {
   /// já disparado.
   static Future<String> excluirAlertaBtc(int id) async {
     final resposta = await _requisicaoAcao('DELETE', '/api/admin/alertas-btc/$id');
+    return _mensagemDe(resposta);
+  }
+
+  /// LIGA/DESLIGA o push de compra e venda (POST /api/push-trades).
+  ///
+  /// O servidor guarda a preferência e o FcmService deixa de ENVIAR o push
+  /// de trade pra quem desligou — silêncio na origem (filtrar só no app não
+  /// funciona: com ele fechado, quem desenha a notificação é o Android).
+  /// O estado atual vem junto no Usuario (login e /api/me → push_trades).
+  static Future<String> salvarPushTrades(bool ativo) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/push-trades',
+      corpo: {'ativo': ativo},
+    );
     return _mensagemDe(resposta);
   }
 

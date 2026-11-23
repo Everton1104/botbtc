@@ -24,8 +24,16 @@ Route::post('/esqueci-senha', [AuthController::class, 'esqueciSenha'])->middlewa
 // só abre a tela de atualização. Se o servidor não responder, o app abre
 // normalmente (bloquear por falta de resposta travaria o app offline).
 Route::get('/versao-app', function () {
+    // Versão PUBLICADA (a do último APK subido) — o botão "procurar
+    // atualização" do app compara com a instalada. Vem de um txt ao lado
+    // do APK (public/apk-versao.txt), escrito no deploy junto com o APK;
+    // sem o arquivo, null → o app avisa que o servidor não soube dizer.
+    $arquivoVersao = public_path('apk-versao.txt');
+    $publicada = is_file($arquivoVersao) ? trim((string) file_get_contents($arquivoVersao)) : '';
+
     return response()->json([
         'versao_minima' => (string) config('app.versao_minima_app', '1.0.0'),
+        'versao_atual'  => $publicada !== '' ? $publicada : null,
         // APP_URL fixo (não o host da requisição): o app recebe sempre o
         // endereço certo do APK, de qualquer forma que a rota seja chamada.
         'url_apk'       => rtrim((string) config('app.url'), '/') . '/app-botbtc.apk',
@@ -51,6 +59,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // O app entrega aqui o token FCM do celular (endereço de push no Firebase).
     // Upsert por token: reinstalou o app, trocou o token, a row é atualizada.
     Route::post('/dispositivo-token', [AuthController::class, 'registrarDispositivo']);
+    // Preferência de push: liga/desliga SOMENTE os avisos de compra e venda
+    // (aba Alertas do app). O FcmService deixa de enviar trade pra quem
+    // desligou — saques, depósitos e alertas de preço seguem normais.
+    Route::post('/push-trades', [AuthController::class, 'salvarPushTrades']);
 
     // ── Saques: o fluxo do site (regra no SaqueService), agora no app ─────
     // A tela inteira vem numa chamada só (disponível, pendentes, histórico;

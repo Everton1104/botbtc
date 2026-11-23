@@ -46,9 +46,19 @@ class FcmService
             // $userId com dono = SÓ os aparelhos dele. Trades, saques e
             // depósitos são visão do admin: com clientes usando o app,
             // mandar pra todos vaza nome e valor de investidores.
-            $tokens = $userId === null
-                ? FcmToken::pluck('token')
-                : FcmToken::where('user_id', $userId)->pluck('token');
+            $query = $userId === null
+                ? FcmToken::query()
+                : FcmToken::where('user_id', $userId);
+
+            // "Avisos de compra e venda" desligados no app: o push de trade
+            // nem sai do servidor (silêncio na origem — não adianta o app
+            // filtrar, porque com ele fechado é o Android quem desenha a
+            // notificação). Os demais avisos NÃO passam por este filtro.
+            if (($dados['tipo'] ?? null) === 'trade') {
+                $query->whereDoesntHave('user', fn ($q) => $q->where('push_trades', false));
+            }
+
+            $tokens = $query->pluck('token');
             if ($tokens->isEmpty()) {
                 return false; // ninguém instalhou o app ainda — silêncio
             }

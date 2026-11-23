@@ -34,13 +34,19 @@ import 'tela_home.dart';
 import 'tela_login.dart';
 
 class TelaAtualizacao extends StatefulWidget {
-  final String versaoMinima; // a versão que o servidor está exigindo
+  final String versao; // a versão sendo oferecida (mínima ou a recém-publicada)
   final String urlApk; // APK direto (do /api/versao-app, com fallback)
+
+  /// true (padrão) = bloqueio do boot: instalada < mínima, sem esta tela não
+  /// se chega ao login. false = "procurar atualização" da Home: achou versão
+  /// nova e o usuário DECIDE — pode voltar ("Agora não") e seguir usando.
+  final bool obrigatoria;
 
   const TelaAtualizacao({
     super.key,
-    required this.versaoMinima,
+    required this.versao,
     required this.urlApk,
+    this.obrigatoria = true,
   });
 
   @override
@@ -153,6 +159,12 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
 
     final minima = (resp['versao_minima'] ?? '') as String;
     if (versaoMaiorOuIgual(kAppVersao, minima)) {
+      if (!widget.obrigatoria) {
+        // Veio pelo "procurar atualização": instalou e voltou — só volta pra
+        // Home (ela continua na pilha, embaixo desta tela).
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
       // Liberado: segue para a tela certa, como se o app tivesse acabado
       // de abrir (token salvo → Home; sem token → Login).
       final temToken = await ApiService.temTokenSalvo();
@@ -183,10 +195,11 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // PopScope canPop:false — está tela não pode ser "voltada" (ela é a
-      // home do app bloqueado; voltar = fechar, decisão do próprio Android).
+      // PopScope canPop:false no modo OBRIGATÓRIO — essa tela não pode ser
+      // "voltada" (ela é a home do app bloqueado; voltar = fechar, decisão
+      // do próprio Android). No modo opcional, voltar é permitido.
       body: PopScope(
-        canPop: false,
+        canPop: !widget.obrigatoria,
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
@@ -199,7 +212,7 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
                       size: 76, color: Cores.dourado),
                   const SizedBox(height: 16),
                   Text(
-                    'Atualização necessária',
+                    widget.obrigatoria ? 'Atualização necessária' : 'Atualização disponível',
                     textAlign: TextAlign.center,
                     style: Theme.of(context)
                         .textTheme
@@ -208,10 +221,14 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Saiu a versão ${widget.versaoMinima} do BotBTC e esta '
-                    'versão do app ($kAppVersao) não abre mais o painel.',
+                    widget.obrigatoria
+                        ? 'Saiu a versão ${widget.versao} do BotBTC e esta '
+                            'versão do app ($kAppVersao) não abre mais o painel.'
+                        : 'Saiu a versão ${widget.versao} — você está na $kAppVersao. '
+                            'O download leva menos de um minuto e seus dados '
+                            '(login, preferências) continuam salvos.',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Cores.textoSuave, fontSize: 14),
+                    style: const TextStyle(color: Cores.textoSuave, fontSize: 14, height: 1.4),
                   ),
                   const SizedBox(height: 28),
 
@@ -270,6 +287,14 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
                         ? 'Verificando...'
                         : 'Já atualizei — verificar de novo'),
                   ),
+
+                  // Modo opcional ("procurar atualização" da Home): recusar
+                  // é um direito — volta pro painel e nada muda.
+                  if (!widget.obrigatoria)
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Agora não'),
+                    ),
 
                   // Plano B: site no navegador (um por baixo do outro, sem
                   // competir com a ação principal).

@@ -30,6 +30,7 @@ import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_acoes.dart';
 import 'tela_admin.dart';
+import 'tela_atualizacao.dart';
 import 'tela_suite.dart';
 import 'tela_login.dart';
 
@@ -59,6 +60,10 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
   // instalação, a Home mostra o lembrete (sem ele, quem nega fica pra
   // sempre sem os avisos de depósito/saque/liberação).
   AuthorizationStatus? _permissaoPush;
+
+  // Rodapé "Procurar atualização": true enquanto o /api/versao-app responde
+  // (o ícone do botão vira um girassol de progresso).
+  bool _procurandoAtualizacao = false;
 
   /// Intervalo entre atualizações automáticas (o site usa 30s; 1 min basta
   /// pra um painel e pesa menos no servidor e na bateria).
@@ -594,9 +599,82 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
             ...painel.saques.map(_cardSaque),
         ],
 
-        const SizedBox(height: 48),
+        // ── Rodapé: versão instalada + procura de atualização ───────────
+        const SizedBox(height: 12),
+        Center(
+          child: TextButton.icon(
+            onPressed: _procurandoAtualizacao ? null : _procurarAtualizacao,
+            style: TextButton.styleFrom(
+              foregroundColor: Cores.textoSuave,
+              textStyle: const TextStyle(fontSize: 11.5),
+            ),
+            icon: _procurandoAtualizacao
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.system_update_alt, size: 16),
+            label: Text('BotBTC v$kAppVersao · Procurar atualização'),
+          ),
+        ),
+        const SizedBox(height: 24),
       ],
     );
+  }
+
+  /// "Procurar atualização" (rodapé da Home): pergunta o /api/versao-app e
+  /// compara a instalada com a PUBLICADA no servidor (apk-versao.txt que o
+  /// deploy sobe junto com o APK). Achou nova → a MESMA tela de atualização
+  /// do boot, agora OPCIONAL (baixa com progresso e abre o instalador —
+  /// "Agora não" volta pro painel sem culpa). Em dia → aviso verde.
+  Future<void> _procurarAtualizacao() async {
+    setState(() => _procurandoAtualizacao = true);
+    final resp = await ApiService.verificarVersaoApp();
+    if (!mounted) return;
+    setState(() => _procurandoAtualizacao = false);
+
+    if (resp == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Sem resposta do servidor — tente de novo em instantes.'),
+        backgroundColor: Cores.vermelho,
+      ));
+      return;
+    }
+
+    final urlApk = (resp['url_apk'] ?? '$kBaseUrl/app-botbtc.apk') as String;
+    final minima = (resp['versao_minima'] ?? '') as String;
+    final publicada = (resp['versao_atual'] ?? '') as String;
+
+    // Caso raro: a mínima subiu enquanto o app estava aberto — mesmo
+    // bloqueio do boot (a tela obriga a atualizar pra usar o painel).
+    if (minima.isNotEmpty && !versaoMaiorOuIgual(kAppVersao, minima)) {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => TelaAtualizacao(versao: minima, urlApk: urlApk),
+      ));
+      return;
+    }
+
+    if (publicada.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('O servidor não informou a versão publicada — tente mais tarde.'),
+        backgroundColor: Cores.vermelho,
+      ));
+      return;
+    }
+
+    if (versaoMaiorOuIgual(kAppVersao, publicada)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Você já está na última versão ($kAppVersao).'),
+        backgroundColor: Cores.verde,
+      ));
+      return;
+    }
+
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) =>
+          TelaAtualizacao(versao: publicada, urlApk: urlApk, obrigatoria: false),
+    ));
   }
 
   /// O bloco "Aguardando você" — pendências que só o admin resolve, no

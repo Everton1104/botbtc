@@ -146,6 +146,28 @@ class AuthController extends Controller
     }
 
     /**
+     * POST /api/push-trades — liga/desliga o push de COMPRA e VENDA.
+     *
+     * Preferência do usuário logado: desligado, o FcmService nem envia o
+     * push de ordem executada (silêncio na origem). Saques, depósitos e
+     * alertas de preço nunca são afetados por este toggle.
+     */
+    public function salvarPushTrades(Request $request): JsonResponse
+    {
+        $dados = $request->validate([
+            'ativo' => ['required', 'boolean'],
+        ]);
+
+        $request->user()->fill(['push_trades' => $dados['ativo']])->save();
+
+        return response()->json([
+            'mensagem' => $dados['ativo']
+                ? 'Avisos de compra e venda ligados.'
+                : 'Avisos de compra e venda desligados — saques, depósitos e alertas de preço continuam chegando.',
+        ]);
+    }
+
+    /**
      * Payload comum do usuário nas respostas da API.
      * `whatsapp_verificado` vem primeiro do que o número em si: o app usa
      * esse flag para decidir se mostra o aviso de verificação pendente.
@@ -158,6 +180,8 @@ class AuthController extends Controller
             'email'               => $user->email,
             'whatsapp'            => $user->whatsapp,
             'whatsapp_verificado' => $user->whatsappVerificado(),
+            // false = o app desligou os avisos de compra e venda (aba Alertas)
+            'push_trades'         => (bool) $user->push_trades,
         ];
     }
 }
