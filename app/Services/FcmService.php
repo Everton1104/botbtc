@@ -50,10 +50,13 @@ class FcmService
                 ? FcmToken::query()
                 : FcmToken::where('user_id', $userId);
 
-            // "Avisos de compra e venda" desligados no app: o push de trade
-            // nem sai do servidor (silêncio na origem — não adianta o app
-            // filtrar, porque com ele fechado é o Android quem desenha a
-            // notificação). Os demais avisos NÃO passam por este filtro.
+            // "Notificações" desligadas no app (toggle geral): silêncio TOTAL
+            // na origem — nenhum tipo de push sai pra quem desligou (não
+            // adianta o app filtrar: com ele fechado é o Android quem desenha).
+            $query->whereDoesntHave('user', fn ($q) => $q->where('push_ativo', false));
+
+            // "Avisos de compra e venda" desligados: corta SÓ o push de trade
+            // (os demais avisos seguem normais).
             if (($dados['tipo'] ?? null) === 'trade') {
                 $query->whereDoesntHave('user', fn ($q) => $q->where('push_trades', false));
             }

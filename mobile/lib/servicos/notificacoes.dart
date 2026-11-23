@@ -73,10 +73,11 @@ Future<void> inicializarNotificacoes() async {
     // 2. Cria o canal no Android (se já existe, o Android só ignora).
     await _prepararNotificacoesLocais();
 
-    // 3. Permissão: no Android 13+ o usuário precisa aprovar. A resposta
-    //    (aceitou/negou) não muda nosso fluxo — só com aprovação o push
-    //    aparece; negado, o app funciona normal, só sem avisos.
-    await mensageiro.requestPermission();
+    // 3. Permissão: NÃO é pedida aqui no boot (política 23/11 — o diálogo
+    //    do Android na instalação era insistência). Ela é pedida no ato do
+    //    desejo: ligar o switch de notificações na aba Alertas
+    //    (pedirPermissaoPush). Sem aprovação o push não aparece, mas o app
+    //    funciona normal — avisos são acessório, nunca obrigação.
 
     // 4. Pega o token deste celular e entrega ao Laravel.
     await _registrarToken(mensageiro);

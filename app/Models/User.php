@@ -14,7 +14,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'whatsapp', 'whatsapp_code', 'whatsapp_code_expires_at', 'whatsapp_verified_at', 'chave_pix', 'push_trades', 'password'])]
+#[Fillable(['name', 'email', 'whatsapp', 'whatsapp_code', 'whatsapp_code_expires_at', 'whatsapp_verified_at', 'chave_pix', 'push_trades', 'push_ativo', 'password'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -33,6 +33,7 @@ class User extends Authenticatable
             'whatsapp_verified_at'       => 'datetime',
             'whatsapp_code_expires_at'   => 'datetime',
             'push_trades'                => 'boolean',
+            'push_ativo'                 => 'boolean',
             'password'                   => 'hashed',
         ];
     }

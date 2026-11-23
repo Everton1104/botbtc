@@ -67,6 +67,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // (aba Alertas do app). O FcmService deixa de enviar trade pra quem
     // desligou — saques, depósitos e alertas de preço seguem normais.
     Route::post('/push-trades', [AuthController::class, 'salvarPushTrades']);
+    // Toggle GERAL de notificações (aba Alertas): false = silêncio total na
+    // origem, todos os tipos. O push-trades só vale quando este está ligado.
+    Route::post('/push-ativo', [AuthController::class, 'salvarPushAtivo']);
 
     // ── Saques: o fluxo do site (regra no SaqueService), agora no app ─────
     // A tela inteira vem numa chamada só (disponível, pendentes, histórico;

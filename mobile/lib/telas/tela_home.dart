@@ -20,12 +20,10 @@
 
 import 'dart:async'; // Timer: o "relógio" que dispara a atualização de 1 em 1 min
 
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import '../modelos/painel.dart';
 import '../servicos/api.dart';
-import '../servicos/notificacoes.dart';
 import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_acoes.dart';
@@ -56,11 +54,6 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
   // ── Relógio da atualização automática ────────────────────────────────────
   Timer? _timerAuto;
 
-  // Permissão de push: null = ainda não consultou. Se o usuário NEGOU na
-  // instalação, a Home mostra o lembrete (sem ele, quem nega fica pra
-  // sempre sem os avisos de depósito/saque/liberação).
-  AuthorizationStatus? _permissaoPush;
-
   // Rodapé "Procurar atualização": true enquanto o /api/versao-app responde
   // (o ícone do botão vira um girassol de progresso).
   bool _procurandoAtualizacao = false;
@@ -77,22 +70,7 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _carregar(); // primeira carga (com loader)
     _carregarUsuario(); // nome do topo (sem await — não segura o painel)
-    _checarPermissaoPush(); // lembrete pra quem negou as notificações
     _iniciarTimer(); // liga o relógio de 1 minuto
-  }
-
-  /// Consulta a permissão de push UMA vez por sessão — só pra decidir se
-  /// o lembrete aparece. Silencioso por natureza.
-  Future<void> _checarPermissaoPush() async {
-    final status = await statusPermissaoPush();
-    if (mounted) setState(() => _permissaoPush = status);
-  }
-
-  /// Toque em "Ativar agora": re-pede a permissão (o Android mostra o
-  /// diálogo de novo enquanto não estiver "não perguntar de novo").
-  Future<void> _pedirPermissaoPush() async {
-    final status = await pedirPermissaoPush();
-    if (mounted) setState(() => _permissaoPush = status);
   }
 
   @override
@@ -411,58 +389,10 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
       // não encostar na borda/gesture bar do aparelho.
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
-        // ── Push desligado: aviso de depósito/saque/liberação não chega.
-        // O pedido original acontece na instalação; este lembrete é o
-        // resgate pra quem negou (ou pro usuário novo do Android 13+).
-        if (_permissaoPush == AuthorizationStatus.denied)
-          Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            color: Cores.dourado.withValues(alpha: 0.10),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.notifications_off_outlined,
-                          color: Cores.dourado, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Notificações desligadas',
-                          style: TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
-                              color: Cores.dourado),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Ative pra receber avisos de depósitos, saques e liberação '
-                    'de ativos.',
-                    style: TextStyle(
-                        fontSize: 12, color: Cores.textoSuave, height: 1.4),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.tonalIcon(
-                      onPressed: _pedirPermissaoPush,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Cores.superficie2,
-                      ),
-                      icon: const Icon(Icons.notifications_active_outlined,
-                          size: 16),
-                      label: const Text('Ativar agora', style: TextStyle(fontSize: 12.5)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        // ── Push desligado: SEM card de lembrete (política 23/11 — pedir
+        // notificação do Android no boot era insistência). O lugar certo do
+        // opt-in agora é a aba Alertas: ligar o switch geral pede a
+        // permissão no ato do desejo.
 
         // ── ADMIN: pendências no TOPO — só o admin dá continuidade a
         // saques e depósitos, então eles ficam grudados aqui até resolver.

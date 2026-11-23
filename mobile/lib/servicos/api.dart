@@ -38,7 +38,7 @@ const String kBaseUrl = 'https://botbtc.com.br';
 /// (é atualizada junto no mesmo bump). O servidor devolve a versão
 /// mínima aceita em GET /api/versao-app; se esta aqui for menor,
 /// o app só abre a tela de atualização obrigatória.
-const String kAppVersao = '1.3.16';
+const String kAppVersao = '1.3.17';
 
 /// Compara versões "1.2.9" vs "1.2.10" numericamente, componente a
 /// componente — comparar como String daria erro ("10" < "9").
@@ -88,6 +88,7 @@ class Usuario {
   final String? whatsapp; // null se ainda não cadastrou o número
   final bool whatsappVerificado; // true se já confirmou o código
   final bool pushTrades; // false = avisos de compra e venda desligados
+  final bool pushAtivo; // false = toggle geral: NADA chega por push
 
   /// Construtor: `required` obriga quem criar um Usuario a informar os campos.
   const Usuario({
@@ -97,6 +98,7 @@ class Usuario {
     this.whatsapp,
     required this.whatsappVerificado,
     this.pushTrades = true,
+    this.pushAtivo = true,
   });
 
   /// Construtor "de fábrica": cria um Usuario a partir do mapa que resulta
@@ -111,6 +113,7 @@ class Usuario {
       whatsappVerificado: json['whatsapp_verificado'] as bool,
       // ?? true: servidor antigo (ou resposta sem o campo) = avisos ligados
       pushTrades: json['push_trades'] as bool? ?? true,
+      pushAtivo: json['push_ativo'] as bool? ?? true,
     );
   }
 }
@@ -631,6 +634,19 @@ class ApiService {
     final resposta = await _requisicaoAcao(
       'POST',
       '/api/push-trades',
+      corpo: {'ativo': ativo},
+    );
+    return _mensagemDe(resposta);
+  }
+
+  /// LIGA/DESLIGA as notificações INTEIRAS (POST /api/push-ativo).
+  ///
+  /// O toggle geral: false = o FcmService não envia NADA (silêncio na
+  /// origem, todos os tipos — inclusive saque). Estado no /api/me → push_ativo.
+  static Future<String> salvarPushAtivo(bool ativo) async {
+    final resposta = await _requisicaoAcao(
+      'POST',
+      '/api/push-ativo',
       corpo: {'ativo': ativo},
     );
     return _mensagemDe(resposta);

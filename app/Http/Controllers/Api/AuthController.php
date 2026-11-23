@@ -168,6 +168,28 @@ class AuthController extends Controller
     }
 
     /**
+     * POST /api/push-ativo — o toggle GERAL de notificações (aba Alertas).
+     *
+     * false = o FcmService não envia NADA (silêncio total na origem, todos
+     * os tipos — inclusive saque; o WhatsApp segue como plano B do admin).
+     * Default true: ninguém perde push na migração.
+     */
+    public function salvarPushAtivo(Request $request): JsonResponse
+    {
+        $dados = $request->validate([
+            'ativo' => ['required', 'boolean'],
+        ]);
+
+        $request->user()->fill(['push_ativo' => $dados['ativo']])->save();
+
+        return response()->json([
+            'mensagem' => $dados['ativo']
+                ? 'Notificações ligadas.'
+                : 'Notificações desligadas — nada mais chega por push (o toggle de compra e venda só vale de novo quando este estiver ligado).',
+        ]);
+    }
+
+    /**
      * Payload comum do usuário nas respostas da API.
      * `whatsapp_verificado` vem primeiro do que o número em si: o app usa
      * esse flag para decidir se mostra o aviso de verificação pendente.
@@ -182,6 +204,8 @@ class AuthController extends Controller
             'whatsapp_verificado' => $user->whatsappVerificado(),
             // false = o app desligou os avisos de compra e venda (aba Alertas)
             'push_trades'         => (bool) $user->push_trades,
+            // false = toggle GERAL: nada chega por push (aba Alertas)
+            'push_ativo'          => (bool) $user->push_ativo,
         ];
     }
 }

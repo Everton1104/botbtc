@@ -7,10 +7,13 @@
 // — o mesmo padrão das outras abas: carrega, trata 401, puxão atualiza.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'package:firebase_messaging/firebase_messaging.dart'
+    show AuthorizationStatus;
 import 'package:flutter/material.dart';
 
 import '../modelos/admin.dart';
 import '../servicos/api.dart';
+import '../servicos/notificacoes.dart' show pedirPermissaoPush, statusPermissaoPush;
 import '../tema.dart';
 import '../util/formatar.dart';
 import 'tela_login.dart';
@@ -37,6 +40,13 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
   bool? _pushTrades;
   bool _salvandoPush = false;
 
+  // Toggle GERAL de notificações (vem no /api/me) + permissão do ANDROID
+  // (o app não pede mais no boot: a permissão é pedida no ato do desejo,
+  // quando o usuário liga este switch). null = ainda não carregou.
+  bool? _pushAtivo;
+  AuthorizationStatus? _permissaoAndroid; // firebase_messaging
+  bool _salvandoGeral = false;
+
   @override
   void initState() {
     super.initState();
@@ -48,6 +58,33 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
   void dispose() {
     _ctrAlvo.dispose();
     super.dispose();
+  }
+
+  /// LIGA/DESLIGA o toggle geral. Ao LIGAR, se o Android ainda não deu
+  /// permissão de notificação, pede AQUI — o desejo explícito do usuário é
+  /// o momento certo do diálogo (nunca mais no boot).
+  Future<void> _alternarPushAtivo(bool ativo) async {
+    setState(() => _salvandoGeral = true);
+    try {
+      final msg = await ApiService.salvarPushAtivo(ativo);
+      if (mounted) setState(() => _pushAtivo = ativo);
+      _aviso(msg);
+
+      // Desejo expresso + aparelho sem permissão = hora do diálogo do Android.
+      if (ativo && _permissaoAndroid == AuthorizationStatus.denied) {
+        final status = await pedirPermissaoPush();
+        if (mounted) setState(() => _permissaoAndroid = status);
+        if (status != AuthorizationStatus.authorized) {
+          _aviso('Ative as notificações do BotBTC nas configurações do aparelho.');
+        }
+      }
+    } on ApiException catch (e) {
+      _aviso(e.mensagem, erro: true);
+    } catch (_) {
+      _aviso('Não foi possível conectar ao servidor.', erro: true);
+    } finally {
+      if (mounted) setState(() => _salvandoGeral = false);
+    }
   }
 
   Future<void> _carregar({bool silencioso = false}) async {
@@ -69,12 +106,32 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
     }
   }
 
-  /// Busca o estado do toggle de push de trades (campo push_trades do /api/me).
-  /// Silencioso de propósito: se falhar, a aba segue só com os alertas.
+  /// Re-pede a permissão do Android (toque no aviso discreto do card geral).
+  /// Enquanto não estiver "não perguntar de novo", o diálogo aparece; depois
+  /// disso, só nas configurações do aparelho.
+  Future<void> _alternarPermissaoAndroid() async {
+    final status = await pedirPermissaoPush();
+    if (mounted) setState(() => _permissaoAndroid = status);
+    if (status == AuthorizationStatus.authorized) {
+      _aviso('Notificações do aparelho ativadas.');
+    } else {
+      _aviso('Ative o BotBTC nas configurações de notificação do aparelho.');
+    }
+  }
+
+  /// Busca o estado dos toggles de push (campos push_ativo/push_trades do
+  /// /api/me) e a permissão de notificação deste aparelho. Silencioso de
+  /// propósito: se falhar, a aba segue só com os alertas.
   Future<void> _carregarPreferenciaPush() async {
     try {
       final u = await ApiService.me();
-      if (mounted) setState(() => _pushTrades = u.pushTrades);
+      if (!mounted) return;
+      setState(() {
+        _pushTrades = u.pushTrades;
+        _pushAtivo = u.pushAtivo;
+      });
+      _permissaoAndroid = await statusPermissaoPush();
+      if (mounted) setState(() {});
     } catch (_) {}
   }
 
@@ -204,27 +261,76 @@ class _AbaAlertasBtcState extends State<AbaAlertasBtc> {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
       children: [
-        // ── Avisos de compra e venda: o pedido de silêncio mora aqui, no
-        // topo — é a primeira coisa que quem chega incomodado quer achar.
-        if (_pushTrades != null) ...[
+        // ── Avisos por push: o controle mora aqui, no topo — é a primeira
+        // coisa que quem chega incomodado (ou com fome de avisos) quer achar.
+        if (_pushAtivo != null) ...[
           _titulo('Avisos por push', Icons.notifications_active_outlined),
+
+          // Toggle GERAL: false = o servidor não envia NADA (silêncio na
+          // origem — todos os tipos, inclusive saque).
           Card(
             margin: const EdgeInsets.only(bottom: 4),
             child: SwitchListTile(
-              title: const Text('Compras e vendas do bot',
+              title: const Text('Notificações',
                   style: TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(
-                _pushTrades!
-                    ? 'Push a cada ordem executada — 🟢 compra, 🔴 venda.'
-                    : 'Silêncio nas ordens. Saques, depósitos e alertas de '
-                        'preço continuam chegando.',
+                _pushAtivo!
+                    ? 'Ligadas — o servidor envia tudo que pertence a você.'
+                    : 'Desligadas — nada chega por push enquanto estiver aqui.',
                 style: const TextStyle(fontSize: 11.5, height: 1.4),
               ),
-              value: _pushTrades!,
+              value: _pushAtivo!,
               activeThumbColor: Cores.dourado,
-              onChanged: _salvandoPush ? null : _alternarPushTrades,
+              onChanged: _salvandoGeral ? null : _alternarPushAtivo,
             ),
           ),
+
+          // A permissão do ANDROID é opt-in (o app não pede no boot): se o
+          // geral está ligado mas o aparelho bloqueia, um botão discreto
+          // resolve — sem card chamando atenção na Home.
+          if (_pushAtivo! &&
+              _permissaoAndroid == AuthorizationStatus.denied)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4, left: 8, right: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _alternarPermissaoAndroid,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Cores.textoSuave,
+                    textStyle: const TextStyle(fontSize: 11.5),
+                  ),
+                  icon: const Icon(Icons.notifications_off_outlined, size: 14),
+                  label: const Text('Este aparelho bloqueia notificações — ativar'),
+                ),
+              ),
+            ),
+
+          // Sub-toggle: só faz sentido com o geral ligado (desabilitado e
+          // explicativo quando desligado — nunca um switch mentindo).
+          if (_pushTrades != null)
+            Card(
+              margin: const EdgeInsets.only(bottom: 4),
+              child: SwitchListTile(
+                title: const Text('Compras e vendas do bot',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(
+                  !_pushAtivo!
+                      ? 'Ligue as notificações primeiro.'
+                      : _pushTrades!
+                          ? 'Push a cada ordem executada — 🟢 compra, 🔴 venda.'
+                          : 'Silêncio nas ordens. Saques, depósitos e alertas de '
+                              'preço continuam chegando.',
+                  style: const TextStyle(fontSize: 11.5, height: 1.4),
+                ),
+                value: _pushAtivo! && _pushTrades!,
+                activeThumbColor: Cores.dourado,
+                // Sem geral ligado, este switch não responde (visual puxa o estado).
+                onChanged: _pushAtivo! && !_salvandoPush
+                    ? (v) => _alternarPushTrades(v)
+                    : null,
+              ),
+            ),
         ],
 
         _titulo('Preço do BTC', Icons.query_stats),
