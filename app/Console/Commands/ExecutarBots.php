@@ -164,7 +164,9 @@ class ExecutarBots extends Command
      * + updateOrCreate) e protegido por flag de cache: só o primeiro ciclo do
      * dia paga as requests à Binance; se algo falhar, a flag não é setada e o
      * ciclo seguinte tenta de novo. `total` segue o critério do patrimonio_bot
-     * de bot_withdrawal_requests (BRL + BTC×preço) — BNB fica informativo.
+     * de bot_withdrawal_requests: BRL + BTC×preço + BNB×preço (política 23/11 —
+     * o pool de taxas é patrimônio das cotas; os snapshots anteriores não têm
+     * BNB no total: salto de ~1-4% no gráfico do dia 24/11, já esperado).
      */
     private function persistirPatrimonioDiario(): void
     {
@@ -203,7 +205,9 @@ class ExecutarBots extends Command
                 'btc_price'     => (float) $precos['BTCBRL'],
                 'bnb_qty'       => $bnbQty,
                 'bnb_price'     => (float) ($precos['BNBBRL'] ?? 0),
-                'total'         => ($brlLivre + $brlBloq) + ($btcQty * (float) $precos['BTCBRL']),
+                'total'         => ($brlLivre + $brlBloq)
+                                + ($btcQty * (float) $precos['BTCBRL'])
+                                + ($bnbQty * (float) ($precos['BNBBRL'] ?? 0)),
             ]
         );
 

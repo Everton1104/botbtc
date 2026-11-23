@@ -234,6 +234,29 @@ class BinanceController extends Controller
         ]);
     }
 
+    /** Preço spot do BNBBRL (o pool de taxas — ver BnbPoolService). */
+    public function getPrecoBNB(): float
+    {
+        return (float) (Http::timeout(10)->connectTimeout(5)
+            ->get("{$this->baseUrl}/api/v3/ticker/price?symbol=BNBBRL")->json()['price'] ?? 0);
+    }
+
+    /**
+     * Compra BNB a mercado gastando R$ [valorBrl] (market BUY com
+     * quoteOrderQty — o valor no quote é o formato do market BUY do par).
+     * Mantém o pool de taxas vivo (BnbPoolService::manter).
+     */
+    public function buyMarketBNB(float $valorBrl): array
+    {
+        return $this->enviarPost('/api/v3/order', [
+            'symbol'        => 'BNBBRL',
+            'side'          => 'BUY',
+            'type'          => 'MARKET',
+            'quoteOrderQty' => number_format($valorBrl, 2, '.', ''),
+            'timestamp'     => $this->timestamp(),
+        ]);
+    }
+
     // ============================================================
     // MY TRADES (histórico de fills — endpoint autenticado)
     // ============================================================

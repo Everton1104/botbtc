@@ -22,7 +22,7 @@ class BotConfig extends Model
         'modo_subida_auto_habilitado', 'spread_minimo_pct', 'taxa_total_pct',
         'camadas_atr_habilitado', 'rsi_maximo_compra', 'rsi_minimo_venda',
         'adapt_histerese_pct', 'adapt_cooldown_min', 'adapt_persistencia_min',
-        'patrimonio_inicial', 'btc_inicial', 'brl_inicial', 'base_iniciada_em',
+        'patrimonio_inicial', 'btc_inicial', 'brl_inicial', 'bnb_inicial', 'base_iniciada_em',
         // Estratégia "spread fixo" (feature reversível — default 'atr')
         'estrategia_grid', 'fixo_valor_ordem', 'fixo_gatilho_pct', 'fixo_espera_min',
     ];
@@ -43,6 +43,7 @@ class BotConfig extends Model
         'adapt_histerese_pct' => 'float',
         'adapt_cooldown_min' => 'integer', 'adapt_persistencia_min' => 'integer',
         'patrimonio_inicial' => 'float', 'btc_inicial' => 'float', 'brl_inicial' => 'float',
+        'bnb_inicial' => 'float',
         'base_iniciada_em' => 'datetime',
         'estrategia_grid' => 'string',
         'fixo_valor_ordem' => 'float', 'fixo_gatilho_pct' => 'float',

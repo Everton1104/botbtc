@@ -52,12 +52,18 @@ class SaqueService
 
         $saldos = $this->binance->getSaldos();
         $preco  = $this->binance->getPrecoBTC();
+        $precoBnb = $this->binance->getPrecoBNB();
 
         $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
         $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
+        $bnb = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BNB');
 
+        // BNB entra no patrimônio (política 23/11): o pool de taxas é
+        // patrimônio das cotas — a reposição interna dele (BRL→BNB) é
+        // neutra ao preço da cota e o pool não "esvazia" invisível.
         $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
-                         + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
+                         + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco)
+                         + (((float)($bnb['free'] ?? 0) + (float)($bnb['locked'] ?? 0)) * $precoBnb);
 
         // Depósitos condicionais já transferidos esperando gatilho: estão
         // no saldo mas não são capital do FUNDO — o preço da cota (base do
@@ -380,13 +386,17 @@ class SaqueService
             }
 
             $saldos = $this->binance->getSaldos();
-            $preco  = $this->binance->getPrecoBTC();
+            $preco    = $this->binance->getPrecoBTC();
+            $precoBnb = $this->binance->getPrecoBNB();
 
             $brl = collect($saldos['balances'])->firstWhere('asset', 'BRL');
             $btc = collect($saldos['balances'])->firstWhere('asset', 'BTC');
+            $bnb = collect($saldos['balances'])->firstWhere('asset', 'BNB');
 
+            // BNB = patrimônio das cotas (mesma política do solicitar()).
             $patrimonioAtual = ((float)($brl['free'] ?? 0) + (float)($brl['locked'] ?? 0))
-                             + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco);
+                             + (((float)($btc['free'] ?? 0) + (float)($btc['locked'] ?? 0)) * $preco)
+                             + (((float)($bnb['free'] ?? 0) + (float)($bnb['locked'] ?? 0)) * $precoBnb);
 
             $totalCotas = (float) BotInvestment::sum('cotas');
             return $totalCotas > 0 ? $invest->cotas * ($patrimonioAtual / $totalCotas) : 0.0;

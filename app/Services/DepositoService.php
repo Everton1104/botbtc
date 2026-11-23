@@ -543,11 +543,16 @@ class DepositoService
     {
         $saldos = $this->binance->getSaldos();
         $preco  = $this->binance->getPrecoBTC();
+        $precoBnb = $this->binance->getPrecoBNB();
 
         $brl = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BRL');
         $btc = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BTC');
+        $bnb = collect($saldos['balances'])->first(fn($b) => $b['asset'] === 'BNB');
 
+        // BNB = patrimônio das cotas (política 23/11): o pool de taxas soma
+        // no preço da cota, então a reposição interna dele é neutra.
         return ((float) ($brl['free'] ?? 0) + (float) ($brl['locked'] ?? 0))
-             + (((float) ($btc['free'] ?? 0) + (float) ($btc['locked'] ?? 0)) * $preco);
+             + (((float) ($btc['free'] ?? 0) + (float) ($btc['locked'] ?? 0)) * $preco)
+             + (((float) ($bnb['free'] ?? 0) + (float) ($bnb['locked'] ?? 0)) * $precoBnb);
     }
 }

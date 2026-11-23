@@ -165,6 +165,15 @@ class BotExecutor
             return "Saque em andamento: bot seguro até concluir ou cancelar.";
         }
 
+        // ============================================================
+        // POOL DE BNB (transversal às estratégias) — mantém o estoque de
+        // taxas entre R$ 150-300 comprando com o BRL LIVRE quando estoura
+        // o piso. Idempotente: na faixa, nada a fazer. Roda ANTES da
+        // estratégia porque a reposição consome caixa livre — o par de
+        // compra do ciclo nasce com o que sobrar (perna menor, aceito).
+        // ============================================================
+        app(BnbPoolService::class)->manter();
+
         // Estratégia fixa (pausas manuais/saque acima já são transversais):
         // a partir daqui o ciclo inteiro pertence ao SpreadFixoService.
         if ($estrategiaFixa) {

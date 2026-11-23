@@ -590,12 +590,16 @@ class PnlService
      * contagem de operações (bot_trades) e P&L realizado acumulado (FIFO já
      * cacheado do realizado() — não roda o FIFO de novo por painel aberto).
      */
-    public function performance(float $saldoBrl, float $saldoBtc, float $precoAtual): array
+    public function performance(float $saldoBrl, float $saldoBtc, float $precoAtual, float $saldoBnb = 0.0, float $precoBnb = 0.0): array
     {
         $config = BotConfig::atual();
 
         $valorBtc   = $saldoBtc * $precoAtual;
-        $patrimonio = $valorBtc + $saldoBrl;
+        $valorBnb   = $saldoBnb * $precoBnb;
+        // BNB entra no patrimônio (política 23/11 — pool de taxas = "BRL2").
+        // A base da época não tinha BNB contabilizado: bnb_inicial (migration
+        // 2026_11_23) repõe a parte que faltava pra não pular de graça.
+        $patrimonio = $valorBtc + $saldoBrl + $valorBnb;
         $pctBtc     = $patrimonio > 0 ? ($valorBtc / $patrimonio) * 100 : 50.0;
 
         $temBase = $config->base_iniciada_em !== null && (float) $config->patrimonio_inicial > 0;
@@ -607,7 +611,7 @@ class PnlService
         // Série diária desde a base (snapshot do cron em bot_patrimonio),
         // caminhando pico/drawdown ponto a ponto.
         $serie     = [];
-        $picoValor = $temBase ? (float) $config->patrimonio_inicial : $patrimonio;
+        $picoValor = $temBase ? (float) $config->patrimonio_inicial + (float) ($config->bnb_inicial ?? 0) : $patrimonio;
         $picoEm    = $temBase ? $config->base_iniciada_em->timezone(self::TZ)->format('d/m/Y') : 'agora';
         $ddMax     = 0.0;
 
@@ -649,9 +653,10 @@ class PnlService
 
         return [
             'base' => [
-                'patrimonio_inicial' => $temBase ? round((float) $config->patrimonio_inicial, 2) : null,
+                'patrimonio_inicial' => $temBase ? round((float) $config->patrimonio_inicial + (float) ($config->bnb_inicial ?? 0), 2) : null,
                 'btc_inicial'        => $temBase ? (float) $config->btc_inicial : null,
                 'brl_inicial'        => $temBase ? round((float) $config->brl_inicial, 2) : null,
+                'bnb_inicial'        => $temBase ? round((float) ($config->bnb_inicial ?? 0), 2) : null,
                 'em'                 => $temBase ? $config->base_iniciada_em->timezone(self::TZ)->format('d/m/Y H:i') : null,
             ],
             'atual' => [
@@ -659,10 +664,13 @@ class PnlService
                 'saldo_brl'  => round($saldoBrl, 2),
                 'saldo_btc'  => round($saldoBtc, 8),
                 'valor_btc'  => round($valorBtc, 2),
+                'saldo_bnb'  => round($saldoBnb, 8),
+                'valor_bnb'  => round($valorBnb, 2),
                 'patrimonio' => round($patrimonio, 2),
                 'pct_btc'    => round($pctBtc, 2),
-                'pct_brl'    => round(100.0 - $pctBtc, 2),
-                'variacao_patrimonio_pct' => $temBase ? $variacao((float) $config->patrimonio_inicial, $patrimonio) : null,
+                'pct_bnb'    => $patrimonio > 0 ? round($valorBnb / $patrimonio * 100, 2) : 0.0,
+                'pct_brl'    => $patrimonio > 0 ? round($saldoBrl / $patrimonio * 100, 2) : 0.0,
+                'variacao_patrimonio_pct' => $temBase ? $variacao((float) $config->patrimonio_inicial + (float) ($config->bnb_inicial ?? 0), $patrimonio) : null,
                 'variacao_btc_pct'        => $temBase ? $variacao((float) $config->btc_inicial, $saldoBtc) : null,
                 'variacao_brl_pct'        => $temBase ? $variacao((float) $config->brl_inicial, $saldoBrl) : null,
             ],

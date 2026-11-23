@@ -160,18 +160,20 @@ class AdminApiController extends Controller
         try {
             $saldos = $binance->getSaldos();
             $preco  = (float) $binance->getPrecoBTC();
+            $precoBnb = (float) $binance->getPrecoBNB();
 
             if (isset($saldos['balances']) && $preco > 0) {
                 $b   = collect($saldos['balances']);
                 $brl = (float) ($b->firstWhere('asset', 'BRL')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BRL')['locked'] ?? 0);
                 $btc = (float) ($b->firstWhere('asset', 'BTC')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BTC')['locked'] ?? 0);
+                $bnb = (float) ($b->firstWhere('asset', 'BNB')['free'] ?? 0) + (float) ($b->firstWhere('asset', 'BNB')['locked'] ?? 0);
 
                 // Performance do FUNDO: retidos esperando gatilho não são
                 // capital operacional (o bot nem os enxerga) — fora da base.
                 $retidos = app(\App\Services\DepositoService::class)->retidosNaBinance();
                 $brl     = max(0.0, $brl - $retidos);
 
-                $performance = $this->pnl->performance($brl, $btc, $preco);
+                $performance = $this->pnl->performance($brl, $btc, $preco, $bnb, $precoBnb);
             }
         } catch (\Throwable) {
             // mantém null — o app mostra o aviso
