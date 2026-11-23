@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -38,9 +40,30 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // ASSINATURA DE RELEASE FIXA (key.properties + botbtc-release.jks,
+            // ambos fora do git): a keystore é a identidade permanente do app
+            // — o Android só aceita atualização por cima de APK com a MESMA
+            // assinatura. Antes de 23/11 o release usava a debug key do
+            // ambiente (TODO do template), então cada máquina/proot gerava
+            // um APK incompatível com o instalado ("App não instalado").
+            // Fallback: sem key.properties (build em outra máquina), assina
+            // com a debug key como antes — o APK saído daqui NÃO publicar.
+            val keystoreProps = Properties()
+            val keystoreFile = rootProject.file("key.properties")
+            if (keystoreFile.exists()) {
+                keystoreProps.load(keystoreFile.inputStream())
+                signingConfigs {
+                    create("botbtcRelease") {
+                        storeFile = file(keystoreProps["storeFile"] as String)
+                        storePassword = keystoreProps["storePassword"] as String
+                        keyAlias = keystoreProps["keyAlias"] as String
+                        keyPassword = keystoreProps["keyPassword"] as String
+                    }
+                }
+                signingConfig = signingConfigs.getByName("botbtcRelease")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }

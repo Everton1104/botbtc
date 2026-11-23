@@ -60,10 +60,6 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
   int _total = 0; // tamanho total em bytes (0 = desconhecido)
   String? _apkPath; // baixado e pronto pra instalar
 
-  /// Página de download do SITE (plano B): exige login com WhatsApp
-  /// verificado — sem sessão no navegador, o cliente loga ali uma vez.
-  String get _urlDownload => '$kBaseUrl/download';
-
   /// BAIXA o APK novo de dentro do app (com progresso) e deixa pronto o
   /// botão de instalar. Erros voltam como SnackBar — o plano B (site)
   /// segue disponível embaixo.
@@ -128,11 +124,15 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
     }
   }
 
-  /// Plano B: a página de download do site no navegador.
-  Future<void> _baixarPeloSite() async {
+  /// Plano B: o NAVEGADOR baixa o APK — o DownloadManager do Android tem
+  /// resume nativo e lida com rede instável melhor que qualquer cliente
+  /// HTTP dentro do app (caso 23/11: o download interno de 21 MB morria).
+  /// Um toque, sem login: a URL vai com ?v= (anti-cache) e o toque no
+  /// arquivo baixado abre o instalador do sistema.
+  Future<void> _baixarPeloNavegador() async {
     try {
       final abriu = await launchUrl(
-        Uri.parse(_urlDownload),
+        Uri.parse(widget.urlApk),
         mode: LaunchMode.externalApplication,
       );
       if (!abriu && mounted) _avisar('Não foi possível abrir o navegador.');
@@ -299,18 +299,20 @@ class _TelaAtualizacaoState extends State<TelaAtualizacao> {
                       child: const Text('Agora não'),
                     ),
 
-                  // Plano B: site no navegador (um por baixo do outro, sem
-                  // competir com a ação principal).
+                  // Plano B: o navegador baixa com o DownloadManager do
+                  // Android (resume nativo — rede ruim não derruba, caso
+                  // 23/11). Sem login: o toque no arquivo baixado abre o
+                  // instalador do sistema.
                   const SizedBox(height: 12),
                   Text(
-                    'Prefere baixar pelo site?',
+                    'Não deu certo dentro do app?',
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 11, color: Cores.textoSuave),
                   ),
                   TextButton.icon(
-                    onPressed: _baixarPeloSite,
-                    icon: const Icon(Icons.language, size: 16),
-                    label: const Text('Abrir página de download'),
+                    onPressed: _baixarPeloNavegador,
+                    icon: const Icon(Icons.open_in_browser, size: 16),
+                    label: const Text('Baixar pelo navegador'),
                   ),
                 ],
               ),
