@@ -476,7 +476,8 @@ class DepositoService
     /**
      * Valor LÍQUIDO a creditar — regra que vivia no JS da blade, agora no
      * servidor (fonte única): InfinitePay já computou a taxa no
-     * valor_liquido; legado MercadoPago desconta 1% (admin isento).
+     * valor_liquido; legado MercadoPago desconta 1% de todos (admin incluso —
+     * sem isenção: depósito de admin é igual ao de usuário comum).
      */
     public function valorACreditar(PixPayment $pix): float
     {
@@ -485,7 +486,7 @@ class DepositoService
             return $liquido;
         }
 
-        return $pix->user_id === 1 ? (float) $pix->valor : round((float) $pix->valor * 0.99, 2);
+        return round((float) $pix->valor * 0.99, 2);
     }
 
     /**

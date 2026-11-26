@@ -9,7 +9,14 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CANAL = "botbtc/instalador"
+        private const val CANAL_ARQ = "botbtc/arquivos"
+        private const val REQ_SALVAR = 4711
     }
+
+    // "Salvar como" (SAF): conteúdo pendente + resultado do canal enquanto o
+    // seletor de armazenamento (pendrive/pasta interna) está aberto.
+    private var salvarConteudo: String? = null
+    private var salvarResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
@@ -51,5 +58,61 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Salvar arquivo via SELETOR do sistema (ACTION_CREATE_DOCUMENT): o
+        // usuário escolhe pendrive/armazenamento interno e o nome final. Sem
+        // permissão de armazenamento — o SAF entrega um URI gravável.
+        MethodChannel(engine.dartExecutor.binaryMessenger, CANAL_ARQ)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "salvarComo" -> {
+                        val nome = call.argument<String>("nome") ?: "arquivo.txt"
+                        val mime = call.argument<String>("mime") ?: "application/octet-stream"
+                        val conteudo = call.argument<String>("conteudo")
+                        if (conteudo == null) {
+                            result.error("sem_conteudo", "Conteúdo ausente", null)
+                            return@setMethodCallHandler
+                        }
+                        salvarConteudo = conteudo
+                        salvarResult = result
+                        try {
+                            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                setType(mime)
+                                putExtra(Intent.EXTRA_TITLE, nome)
+                            }
+                            startActivityForResult(intent, REQ_SALVAR)
+                        } catch (e: Exception) {
+                            salvarConteudo = null
+                            salvarResult = null
+                            result.error("falhou", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_SALVAR) return
+        val result = salvarResult
+        val conteudo = salvarConteudo
+        salvarResult = null
+        salvarConteudo = null
+        if (result == null) return
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(false) // usuário cancelou o seletor
+            return
+        }
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                out.write(conteudo?.toByteArray(Charsets.UTF_8) ?: ByteArray(0))
+            }
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("falhou", e.message, null)
+        }
     }
 }

@@ -101,7 +101,10 @@
   }
   function ckdPriv(kHex, cHex, indice) {
     var endurecido = indice >= 0x80000000;
-    var idx = (endurecido ? indice - 0x80000000 : indice).toString(16).padStart(8, '0');
+    // BIP-32: ser32(i) serializa o índice COMPLETO — o bit endurecido vai nos
+    // bytes do HMAC (0x80000054), não só na escolha do dado. Sem isso a conta
+    // derivada não é a m/84'/0'/0' padrão e a zpub não bate com outras carteiras.
+    var idx = indice.toString(16).padStart(8, '0');
     var dados = endurecido ? '00' + kHex + idx : pubDe(kHex) + idx;
     var I = hmacSha512(dados, cHex);
     var IL = I.slice(0, 64), IR = I.slice(64);
@@ -215,12 +218,16 @@
     var conta44 = caminho([44, 0, 0]);
 
     var end84 = [], end44 = [];
+    // cadeias externas (receber): m/84'/0'/0'/0 e m/44'/0'/0'/0 — o nível "/0"
+    // é obrigatório (BIP-44/84); sem ele o endereço não bate com outras carteiras
+    var ext84 = ckdPriv(conta84.k, conta84.c, 0);
+    var ext44 = ckdPriv(conta44.k, conta44.c, 0);
     for (var i = 0; i < qtd; i++) {
-      var c84 = ckdPriv(conta84.k, conta84.c, i);
+      var c84 = ckdPriv(ext84.k, ext84.c, i);
       var h84 = hash160(pubDe(c84.k));
       end84.push({ i: i, endereco: segwitEndereco(hexToBytes(h84)), wif: wifDe(c84.k) });
 
-      var c44 = ckdPriv(conta44.k, conta44.c, i);
+      var c44 = ckdPriv(ext44.k, ext44.c, i);
       var h44 = hash160(pubDe(c44.k));
       end44.push({ i: i, endereco: base58check('00' + h44) });
     }
@@ -265,10 +272,11 @@
     var chain = corpo.substr(26, 64);   // versão(4) depth(1) fpr(4) child(4) → chaincode(32)
     var pub = corpo.substr(90, 66);     // chave pública comprimida (33)
     var receber = [], troco = [];
-    var noInt = ckdPub(pub, chain, 1);  // cadeia interna (troco) = conta/1 — um nível só
+    var noExt = ckdPub(pub, chain, 0);  // cadeia externa (receber) = conta/0
+    var noInt = ckdPub(pub, chain, 1);  // cadeia interna (troco) = conta/1
     for (var i = 0; i < Math.max(qtdReceber, qtdTroco); i++) {
       if (i < qtdReceber) {
-        var e = ckdPub(pub, chain, i);  // cada índice deriva DIRETO da conta
+        var e = ckdPub(noExt.pub, noExt.c, i);  // conta/0/i
         receber.push({ i: i, endereco: segwitEndereco(hexToBytes(hash160(e.pub))) });
       }
       if (i < qtdTroco) {
@@ -280,6 +288,12 @@
   }
   function pad2(n) { return (n + 0x100).toString(16).slice(1); }
   function pad4(n) { return (n + 0x10000).toString(16).slice(1); }
+  // vout: UInt32 LITTLE-ENDIAN completo (o pad4 antigo emitia 2 bytes BE e
+  // corrompia a tx e o sighash)
+  function pad4le(n) {
+    var h = (n >>> 0).toString(16).padStart(8, '0');
+    return h.substr(6, 2) + h.substr(4, 2) + h.substr(2, 2) + h.substr(0, 2);
+  }
   function leU64(sats) { // inteiro decimal → 8 bytes little-endian
     var h = BigInt(sats).toString(16).padStart(16, '0'), out = '';
     for (var i = h.length - 2; i >= 0; i -= 2) out += h.substr(i, 2);
@@ -402,7 +416,7 @@
   function bip143Sighash(inputs, idx, outputs, valorSats, scriptCodeHex, pubKeyHex) {
     function outsPrev() {
       var h = '';
-      inputs.forEach(function (u) { h += leHex(u.txid) + pad4(u.vout); });
+      inputs.forEach(function (u) { h += leHex(u.txid) + pad4le(u.vout); });
       return h;
     }
     function outsSeq() {
@@ -417,7 +431,7 @@
     }
     var pre = '02000000'                                    // versão
       + sha256d(outsPrev()) + sha256d(outsSeq())
-      + leHex(inputs[idx].txid) + pad4(inputs[idx].vout)
+      + leHex(inputs[idx].txid) + pad4le(inputs[idx].vout)
       + varint(scriptCodeHex.length / 2) + scriptCodeHex
       + leU64(valorSats) + 'ffffffff'
       + sha256d(outs())
@@ -475,9 +489,19 @@
 
     var trocoValor = total - enviar - taxaSats;
 
+    // valor + taxa não pode passar do total dos UTXOs — antes o troco
+    // negativo era ignorado em silêncio e a tx saía com taxa ZERO.
+    if (taxaSats < 141n) taxaSats = BigInt(2 * (11 + 68 * utxos.length + 62));
+    trocoValor = total - enviar - taxaSats;
+    if (trocoValor < 0n) {
+      throw new Error('valor + taxa (' + (enviar + taxaSats) + ' sats) excede o total dos UTXOs (' + total + ' sats) — use valor "max"');
+    }
+
     // troco: cadeia INTERNA do BIP-84 → m/84'/0'/0'/1/0 (não endurecido)
     var chain1 = ckdPriv(conta84.k, conta84.c, 1);
     var keyTroco = ckdPriv(chain1.k, chain1.c, 0);
+    // cadeia externa: cada UTXO vive em m/84'/0'/0'/0/índice
+    var extAssin = ckdPriv(conta84.k, conta84.c, 0);
     var pubTroco = pubDe(keyTroco.k);
     var trocoEndereco = segwitEndereco(hexToBytes(hash160(pubTroco)));
 
@@ -489,9 +513,9 @@
     // assina cada entrada (p2wpkh da nossa carteira)
     var witnesses = [];
     utxos.forEach(function (u, i) {
-      var key = ckdPriv(conta84.k, conta84.c, u.indice);
+      var key = ckdPriv(extAssin.k, extAssin.c, u.indice);
       var pub = pubDe(key.k);
-      var scriptCode = '1976a914' + hash160(pub) + '88ac';
+      var scriptCode = '76a914' + hash160(pub) + '88ac';
       var z = bip143Sighash(utxos, i, outputs, u.sats, scriptCode, pub);
       var sigDer = assinarECDSA(z, key.k) + '01'; // + SIGHASH_ALL
       witnesses.push({ sig: sigDer, pub: pub });
@@ -500,7 +524,7 @@
     // serializa a transação (SegWit)
     var hex = '02000000' + '0001' + varint(utxos.length);
     utxos.forEach(function (u) {
-      hex += leHex(u.txid) + pad4(u.vout) + '00' + 'ffffffff';
+      hex += leHex(u.txid) + pad4le(u.vout) + '00' + 'ffffffff';
     });
     hex += varint(outputs.length);
     outputs.forEach(function (o) {

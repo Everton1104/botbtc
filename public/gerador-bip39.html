@@ -348,9 +348,25 @@
         </div>
     </div>
 
-    
+    <div class="card mb-4" id="cardLegado" style="display:none">
+        <div class="card-body d-flex align-items-start gap-3 py-3">
+            <input class="form-check-input mt-1" type="checkbox" id="modoLegado">
+            <div>
+                <label for="modoLegado" style="font-weight:700; cursor:pointer;">
+                    Modo compatibilidade — carteira criada antes de 25/11/2026
+                </label>
+                <div class="text-muted" style="font-size:.78rem; line-height:1.5;">
+                    A versão antiga deste gerador derivava os endereços de forma diferente do padrão BIP-84.
+                    Marque para <strong class="text-light">derivar e assinar com a derivação daquela versão</strong> — use
+                    para gastar UTXOs de carteiras antigas. Carteiras novas: deixe desligado.
+                </div>
+            </div>
+        </div>
+    </div>
+
+
     <div class="card mb-4" id="cardTransacao" style="display:none">
-        <div class="card-header"><i class="fa-solid fa-signature me-2 text-gold"></i>Criar e assinar transação</div>
+        <div class="card-header"><i class="fa-solid fa-signature me-2 text-gold"></i>Assinar transação (pacote do site/app)</div>
         <div class="card-body">
 
             
@@ -364,37 +380,33 @@
             </label>
             <p class="text-muted mt-2 mb-0" style="font-size:.74rem;">
                 Arquivo <strong class="text-light">.json</strong>, <strong class="text-light">.txt</strong> ou <strong class="text-light">.pac</strong> gerado em
-                Carteiras ▸ "Gerar pacote de assinatura" — os campos de criação abaixo preenchem sozinhos com o destino, valor e taxa do pacote.
+                Carteiras (site ou app) ▸ "Gerar pacote" — a criação da transação e a taxa sugerida pelo mempool
+                ficam por conta de lá; aqui você só ASSINA o pacote.
             </p>
             <div class="text-center"><span id="assErro" style="font-size:.8rem; color:var(--red);"></span></div>
 
-            <hr class="my-4" style="border-color:var(--border); opacity:.6;">
-
-            
-            <p class="mb-2" style="font-size:.95rem; color:var(--text);">
-                <i class="fa-solid fa-pen-ruler me-1 text-gold"></i><strong>Criar transação</strong>
-                <span class="text-muted" style="font-size:.78rem;">— preencha à mão (ou deixe o UPLOAD preencher)</span>
-            </p>
-            <div class="row g-2">
-                <div class="col-12">
-                    <label class="form-label mb-1">UTXOs a gastar <span class="text-muted" style="font-weight:400; font-size:.76rem;">— uma por linha: txid, vout, satoshis, nº do endereço</span></label>
-                    <textarea id="assUtxos" class="form-control font-monospace" rows="3" placeholder="txid,0,50000,0&#10;txid,1,30000,3"></textarea>
-                </div>
-                <div class="col-md-5">
-                    <label class="form-label mb-1">Endereço de destino (bc1q…)</label>
-                    <input type="text" id="assDestino" class="form-control" placeholder="bc1q…" autocomplete="off">
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label mb-1">Valor em satoshis</label>
-                    <input type="text" id="assValor" class="form-control" placeholder="ex.: 60000 ou max" autocomplete="off">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label mb-1">Taxa (satoshis)</label>
-                    <input type="text" id="assTaxa" class="form-control" placeholder="vazio ≈ 2 sat/vB" autocomplete="off">
+            <!-- Campos preenchidos pelo UPLOAD (não editáveis à mão): a criação
+                 de transação saiu do HTML — taxa calculada com consulta ao
+                 mempool só no site/app. O formulário segue no DOM porque o
+                 assinador e o leitor de pacote leem dele. -->
+            <div id="assFormManual" style="display:none;" aria-hidden="true">
+                <div class="row g-2">
+                    <div class="col-12">
+                        <textarea id="assUtxos" class="form-control font-monospace" rows="3"></textarea>
+                    </div>
+                    <div class="col-md-5">
+                        <input type="text" id="assDestino" class="form-control" autocomplete="off">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" id="assValor" class="form-control" autocomplete="off">
+                    </div>
+                    <div class="col-md-3">
+                        <input type="text" id="assTaxa" class="form-control" autocomplete="off">
+                    </div>
                 </div>
             </div>
             <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-                <button class="btn btn-gold btn-sm fw-bold" id="btnAssinar"><i class="fa-solid fa-signature me-1"></i>Assinar transação</button>
+                <button class="btn btn-gold btn-sm fw-bold" id="btnAssinar"><i class="fa-solid fa-signature me-1"></i>Assinar pacote</button>
             </div>
             <div id="assResultado" class="d-none mt-3 flex-column gap-2">
                 <div>
@@ -566,9 +578,22 @@ const BIP39 = {
     var I = hmacSha512(seedHex, '426974636f696e2073656564'); // "Bitcoin seed"
     return { k: I.slice(0, 64), c: I.slice(64) };
   }
+  // MODO LEGADO: carteiras criadas antes de 25/11/2026 derivam com o ser32
+  // antigo (bit endurecido omitido) e SEM o nível "/0" da cadeia externa —
+  // este gerador replicava o BIP-32/84 de forma errada. O checkbox liga a
+  // derivação exatamente igual à daquela versão, para recuperar/gastar UTXOs
+  // de carteiras antigas. Carteiras novas: manter DESLIGADO.
+  function legado() {
+    var el = document.getElementById('modoLegado');
+    return !!(el && el.checked);
+  }
   function ckdPriv(kHex, cHex, indice) {
     var endurecido = indice >= 0x80000000;
-    var idx = (endurecido ? indice - 0x80000000 : indice).toString(16).padStart(8, '0');
+    // BIP-32: ser32(i) serializa o índice COMPLETO — o bit endurecido vai nos
+    // bytes do HMAC (0x80000054), não só na escolha do dado. Sem isso a conta
+    // derivada não é a m/84'/0'/0' padrão e a zpub não bate com outras carteiras.
+    var n = legado() && endurecido ? indice - 0x80000000 : indice;
+    var idx = n.toString(16).padStart(8, '0');
     var dados = endurecido ? '00' + kHex + idx : pubDe(kHex) + idx;
     var I = hmacSha512(dados, cHex);
     var IL = I.slice(0, 64), IR = I.slice(64);
@@ -682,12 +707,17 @@ const BIP39 = {
     var conta44 = caminho([44, 0, 0]);
 
     var end84 = [], end44 = [];
+    // cadeias externas (receber): m/84'/0'/0'/0 e m/44'/0'/0'/0 — o nível "/0"
+    // é obrigatório (BIP-44/84); sem ele o endereço não bate com outras carteiras
+    // (legado: a versão antiga derivava direto da conta — replica aqui)
+    var ext84 = legado() ? { k: conta84.k, c: conta84.c } : ckdPriv(conta84.k, conta84.c, 0);
+    var ext44 = legado() ? { k: conta44.k, c: conta44.c } : ckdPriv(conta44.k, conta44.c, 0);
     for (var i = 0; i < qtd; i++) {
-      var c84 = ckdPriv(conta84.k, conta84.c, i);
+      var c84 = ckdPriv(ext84.k, ext84.c, i);
       var h84 = hash160(pubDe(c84.k));
       end84.push({ i: i, endereco: segwitEndereco(hexToBytes(h84)), wif: wifDe(c84.k) });
 
-      var c44 = ckdPriv(conta44.k, conta44.c, i);
+      var c44 = ckdPriv(ext44.k, ext44.c, i);
       var h44 = hash160(pubDe(c44.k));
       end44.push({ i: i, endereco: base58check('00' + h44) });
     }
@@ -732,10 +762,12 @@ const BIP39 = {
     var chain = corpo.substr(26, 64);   // versão(4) depth(1) fpr(4) child(4) → chaincode(32)
     var pub = corpo.substr(90, 66);     // chave pública comprimida (33)
     var receber = [], troco = [];
-    var noInt = ckdPub(pub, chain, 1);  // cadeia interna (troco) = conta/1 — um nível só
+    var noExt = ckdPub(pub, chain, 0);  // cadeia externa (receber) = conta/0
+    var noInt = ckdPub(pub, chain, 1);  // cadeia interna (troco) = conta/1
     for (var i = 0; i < Math.max(qtdReceber, qtdTroco); i++) {
       if (i < qtdReceber) {
-        var e = ckdPub(pub, chain, i);  // cada índice deriva DIRETO da conta
+        // legado: endereços derivavam DIRETO da conta (zpub antiga do gerador)
+        var e = legado() ? ckdPub(pub, chain, i) : ckdPub(noExt.pub, noExt.c, i);
         receber.push({ i: i, endereco: segwitEndereco(hexToBytes(hash160(e.pub))) });
       }
       if (i < qtdTroco) {
@@ -747,6 +779,13 @@ const BIP39 = {
   }
   function pad2(n) { return (n + 0x100).toString(16).slice(1); }
   function pad4(n) { return (n + 0x10000).toString(16).slice(1); }
+  // vout (e afins): UInt32 LITTLE-ENDIAN completo — o protocolo exige 4 bytes
+  // invertidos. O pad4 antigo emitia 2 bytes big-endian: vout 7 virava "0007",
+  // engolia um byte da sequence e corrompia a tx E o sighash (rejeitadas).
+  function pad4le(n) {
+    var h = (n >>> 0).toString(16).padStart(8, '0');
+    return h.substr(6, 2) + h.substr(4, 2) + h.substr(2, 2) + h.substr(0, 2);
+  }
   function leU64(sats) { // inteiro decimal → 8 bytes little-endian
     var h = BigInt(sats).toString(16).padStart(16, '0'), out = '';
     for (var i = h.length - 2; i >= 0; i -= 2) out += h.substr(i, 2);
@@ -869,7 +908,7 @@ const BIP39 = {
   function bip143Sighash(inputs, idx, outputs, valorSats, scriptCodeHex, pubKeyHex) {
     function outsPrev() {
       var h = '';
-      inputs.forEach(function (u) { h += leHex(u.txid) + pad4(u.vout); });
+      inputs.forEach(function (u) { h += leHex(u.txid) + pad4le(u.vout); });
       return h;
     }
     function outsSeq() {
@@ -884,7 +923,7 @@ const BIP39 = {
     }
     var pre = '02000000'                                    // versão
       + sha256d(outsPrev()) + sha256d(outsSeq())
-      + leHex(inputs[idx].txid) + pad4(inputs[idx].vout)
+      + leHex(inputs[idx].txid) + pad4le(inputs[idx].vout)
       + varint(scriptCodeHex.length / 2) + scriptCodeHex
       + leU64(valorSats) + 'ffffffff'
       + sha256d(outs())
@@ -942,11 +981,23 @@ const BIP39 = {
 
     var trocoValor = total - enviar - taxaSats;
 
+    // valor + taxa não pode passar do total dos UTXOs — antes o troco
+    // negativo era ignorado em silêncio e a tx saía com taxa ZERO
+    // (rejeitada pelo mempool). Também não existe taxa 0: mínimo 1 sat/vB.
+    if (taxaSats < 141n) taxaSats = BigInt(2 * (11 + 68 * utxos.length + 62));
+    trocoValor = total - enviar - taxaSats;
+    if (trocoValor < 0n) {
+      throw new Error('valor + taxa (' + (enviar + taxaSats) + ' sats) excede o total dos UTXOs (' + total + ' sats) — use valor "max"');
+    }
+
     // troco: cadeia INTERNA do BIP-84 → m/84'/0'/0'/1/0 (não endurecido)
     var chain1 = ckdPriv(conta84.k, conta84.c, 1);
     var keyTroco = ckdPriv(chain1.k, chain1.c, 0);
     var pubTroco = pubDe(keyTroco.k);
     var trocoEndereco = segwitEndereco(hexToBytes(hash160(pubTroco)));
+    // cadeia externa: cada UTXO vive em m/84'/0'/0'/0/índice (legado: direto
+    // da conta, como a versão antiga)
+    var extAssin = legado() ? { k: conta84.k, c: conta84.c } : ckdPriv(conta84.k, conta84.c, 0);
 
     // saídas
     var outputs = [{ valor: enviar, script: '0014' + destH160 }];
@@ -956,9 +1007,12 @@ const BIP39 = {
     // assina cada entrada (p2wpkh da nossa carteira)
     var witnesses = [];
     utxos.forEach(function (u, i) {
-      var key = ckdPriv(conta84.k, conta84.c, u.indice);
+      var key = ckdPriv(extAssin.k, extAssin.c, u.indice);
       var pub = pubDe(key.k);
-      var scriptCode = '1976a914' + hash160(pub) + '88ac';
+      // scriptCode P2WPKH = script P2PKH (25 bytes, SEM o varint — o bip143
+      // abaixo serializa com varint próprio; duplicar o 0x19 corrompia o
+      // sighash e invalidava TODA assinatura deste gerador)
+      var scriptCode = '76a914' + hash160(pub) + '88ac';
       var z = bip143Sighash(utxos, i, outputs, u.sats, scriptCode, pub);
       var sigDer = assinarECDSA(z, key.k) + '01'; // + SIGHASH_ALL
       witnesses.push({ sig: sigDer, pub: pub });
@@ -967,7 +1021,7 @@ const BIP39 = {
     // serializa a transação (SegWit)
     var hex = '02000000' + '0001' + varint(utxos.length);
     utxos.forEach(function (u) {
-      hex += leHex(u.txid) + pad4(u.vout) + '00' + 'ffffffff';
+      hex += leHex(u.txid) + pad4le(u.vout) + '00' + 'ffffffff';
     });
     hex += varint(outputs.length);
     outputs.forEach(function (o) {
@@ -1086,6 +1140,27 @@ const BIP39 = {
   // hook: o gerador da página chama isto a cada mudança de frase
   window.__c1248Mudou = renderCartoes;
 
+  // Modo compatibilidade: marcar/desmarcar RE-DERIVA a lista na hora. Sem
+  // isso a tela seguia mostrando os endereços calculados antes do clique
+  // (a assinatura lia o checkbox na hora, mas a lista não mudava — confuso).
+  (function () {
+    var chk = document.getElementById('modoLegado');
+    var card = document.getElementById('cardLegado');
+    function aplicaEstado() {
+      if (card) {
+        card.style.borderLeft = chk && chk.checked ? '4px solid #f0b90b' : '';
+        card.style.background = chk && chk.checked ? 'rgba(240,185,11,.06)' : '';
+      }
+    }
+    if (chk) {
+      chk.addEventListener('change', function () {
+        aplicaEstado();
+        if (typeof derivarAgora === 'function') derivarAgora();
+      });
+      aplicaEstado();
+    }
+  })();
+
   // assinatura de transação SÓ no modo offline (arquivo baixado): no site
   // fica apenas o aviso apontando pro download. Detecta file:// ou a flag
   // C1248_OFFLINE injetada no build da versão offline.
@@ -1095,22 +1170,46 @@ const BIP39 = {
   if (modoOffline) {
     var cardGerar = document.getElementById('cardGerar');
     var cardImp = document.getElementById('cardImportar');
+    var cardLeg = document.getElementById('cardLegado');
     var cardTx = document.getElementById('cardTransacao');
     if (cardGerar && cardImp && cardTx && cardGerar.parentNode) {
       cardGerar.parentNode.insertBefore(cardImp, cardGerar);
+      if (cardLeg) cardGerar.parentNode.insertBefore(cardLeg, cardGerar);
       cardGerar.parentNode.insertBefore(cardTx, cardGerar);
     }
   }
 
   // Card "Criar e assinar transação": só no offline, e só com carteira ativa
+  // (o aviso de modo compatibilidade acompanha a mesma visibilidade)
   function atualizarCardTransacao() {
     var card = document.getElementById('cardTransacao');
+    var leg = document.getElementById('cardLegado');
     if (!card) return;
     var ativa = window.C1248Ger && window.C1248Ger.frase() && window.C1248Ger.frase().length;
-    card.style.display = (modoOffline && ativa) ? '' : 'none';
+    var mostrar = (modoOffline && ativa) ? '' : 'none';
+    card.style.display = mostrar;
+    if (leg) leg.style.display = mostrar;
   }
 
   // Importar (Card 1): frase OU números das posições do Cartão 1248
+  // ── Importação por chave estendida (zprv/zpub): deriva direto da conta,
+  // sem frase — pra recuperar/gastar UTXOs de uma conta exportada. A zprv
+  // (privada) também ASSINA; a zpub (pública) só deriva endereços.
+  function importarEstendida(str) {
+    var s = str.trim();
+    var priv = /^zprv/i.test(s), pub = /^zpub/i.test(s);
+    if (!priv && !pub) throw 'use zprv… ou zpub… (conta SegWit nativo m/84h/0h/0h)';
+    var dec = base58checkDecode(s);
+    var versao = dec.substr(0, 8);
+    if (versao !== (priv ? '04b2430c' : '04b24746')) {
+      throw 'versão inesperada (' + versao + ') — esperada ' + (priv ? 'zprv' : 'zpub');
+    }
+    window.__contaImp = priv
+      ? { k: dec.substr(90, 64), c: dec.substr(26, 64), pub: false }
+      : { pubHex: dec.substr(90, 66), c: dec.substr(26, 64), pub: true };
+    return priv ? 'conta importada por zprv (privada — deriva e ASSINA)' : 'conta importada por zpub (pública — só deriva endereços)';
+  }
+
   document.getElementById('btnUsarColada').addEventListener('click', function () {
     var erro = document.getElementById('colarErro');
     erro.style.color = 'var(--red)';
@@ -1118,6 +1217,25 @@ const BIP39 = {
     var bruto = document.getElementById('colarFrase').value.trim().toLowerCase().replace(/[\s,;]+/g, ' ');
     if (!bruto) { erro.textContent = 'cole a frase ou os números.'; return; }
     var tokens = bruto.split(' ').filter(Boolean);
+
+    // chave estendida colada (zprv/zpub): importa a conta direto (usa o
+    // valor CRU do campo — base58 é sensível a maiúsculas e o lowercase
+    // acima quebraria o checksum)
+    if (tokens.length === 1 && /^(zprv|zpub)/i.test(tokens[0])) {
+      try {
+        var msgImp = importarEstendida(document.getElementById('colarFrase').value.trim());
+        erro.style.color = 'var(--green)';
+        erro.textContent = '✓ ' + msgImp;
+        document.getElementById('colarFrase').value = '';
+        derivarAgora();
+        atualizarCardTransacao();
+      } catch (eImp) {
+        erro.style.color = 'var(--red)';
+        erro.textContent = '✗ ' + (eImp.message || eImp);
+      }
+      return;
+    }
+    window.__contaImp = null; // frase/números: volta ao fluxo por seed
 
     try {
       var arr, lingua;
@@ -1153,7 +1271,7 @@ const BIP39 = {
         var ir = document.createElement('button');
         ir.id = 'btnIrTransacao';
         ir.className = 'btn btn-gold btn-sm fw-bold mt-2';
-        ir.innerHTML = '<i class="fa-solid fa-signature me-1"></i>Criar transação';
+        ir.innerHTML = '<i class="fa-solid fa-signature me-1"></i>Assinar pacote';
         ir.addEventListener('click', function () {
           var c = document.getElementById('cardTransacao');
           if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1195,8 +1313,9 @@ const BIP39 = {
   }
   function derivarAgora() {
     var fraseArr = window.C1248Ger ? window.C1248Ger.frase() : null;
+    var contaImp = window.__contaImp;
     var box = document.getElementById('derivResultado');
-    if (!fraseArr || !fraseArr.length) {
+    if ((!fraseArr || !fraseArr.length) && !contaImp) {
       box.classList.add('d-none');
       box.style.display = 'none';
       return;
@@ -1206,8 +1325,32 @@ const BIP39 = {
     box.innerHTML = '<span class="text-muted" style="font-size:.85rem;"><i class="fa-solid fa-circle-notch fa-spin me-2"></i>Derivando zpub e endereços…</span>';
     setTimeout(function () {
       try {
-        var texto = fraseArr.map(function (p) { return p.palavra; }).join(' ');
-        var r = derivarTudo(texto, document.getElementById('passFrase').value);
+        var r;
+        if (contaImp) {
+          // conta importada por zprv/zpub: deriva da própria conta (o modo
+          // compatibilidade decide entre conta/i antiga e conta/0/i nova)
+          var base = contaImp.pub
+            ? (legado() ? { pubHex: contaImp.pubHex, c: contaImp.c } : ckdPub(contaImp.pubHex, contaImp.c, 0))
+            : (legado() ? { k: contaImp.k, c: contaImp.c } : ckdPriv(contaImp.k, contaImp.c, 0));
+          var ends = [];
+          for (var j = 0; j < 10; j++) {
+            var no = contaImp.pub ? ckdPub(base.pubHex, base.c, j) : ckdPriv(base.k, base.c, j);
+            ends.push({
+              i: j,
+              endereco: segwitEndereco(hexToBytes(hash160(contaImp.pub ? no.pub : pubDe(no.k)))),
+              wif: contaImp.pub ? '(conta pública)' : wifDe(no.k),
+            });
+          }
+          r = {
+            zpub: contaImp.pub ? '(a própria zpub importada)'
+              : base58check('04b24746' + '03' + '00000000' + '00000000' + contaImp.c + pubDe(contaImp.k)),
+            seed: '— (conta importada por chave estendida)', xprv: '—', zprv: '—', xpub: '—',
+            end84: ends, end44: [],
+          };
+        } else {
+          var texto = fraseArr.map(function (p) { return p.palavra; }).join(' ');
+          r = derivarTudo(texto, document.getElementById('passFrase').value);
+        }
         box.classList.remove('d-none');
         box.style.display = 'flex';
         box.innerHTML =
@@ -1310,7 +1453,7 @@ const BIP39 = {
     res.style.display = 'none';
 
     var fraseArr = window.C1248Ger ? window.C1248Ger.frase() : null;
-    if (!fraseArr || !fraseArr.length) {
+    if ((!fraseArr || !fraseArr.length) && !window.__contaImp) {
       erro.textContent = 'Gere ou importe a carteira primeiro.';
       return;
     }
@@ -1324,7 +1467,7 @@ const BIP39 = {
         if (p.length !== 4) throw 'linha de UTXO precisa de 4 campos: txid,vout,sats,índice';
         pacote.utxos.push({ txid: p[0].trim().toLowerCase(), vout: +p[1], sats: p[2].trim(), indice: +p[3] });
       });
-      if (!pacote.utxos.length) throw 'informe ao menos um UTXO (ou preencha com o pacote do site).';
+      if (!pacote.utxos.length) throw 'faça o UPLOAD do pacote gerado no site/app primeiro — a criação de transação saiu daqui.';
       pacote.destino = document.getElementById('assDestino').value.trim();
       if (!pacote.destino) throw 'informe o endereço de destino.';
       pacote.valor = document.getElementById('assValor').value.trim() || 'max';
@@ -1339,11 +1482,17 @@ const BIP39 = {
     btn.innerHTML = '<i class="fa-solid fa-hourglass-half me-1"></i>Assinando…';
     setTimeout(function () {
       try {
-        var texto = fraseArr.map(function (p) { return p.palavra; }).join(' ');
-        var seed = seedBip39(texto, document.getElementById('passFrase').value);
-        var mestra = chaveMestra(seed);
-        var conta = mestra;
-        [84, 0, 0].forEach(function (n) { conta = ckdPriv(conta.k, conta.c, n + 0x80000000); });
+        var conta;
+        if (window.__contaImp) {
+          if (window.__contaImp.pub) throw 'a conta importada é zpub (pública) — importe a zprv para assinar';
+          conta = { k: window.__contaImp.k, c: window.__contaImp.c };
+        } else {
+          var texto = fraseArr.map(function (p) { return p.palavra; }).join(' ');
+          var seed = seedBip39(texto, document.getElementById('passFrase').value);
+          var mestra = chaveMestra(seed);
+          conta = mestra;
+          [84, 0, 0].forEach(function (n) { conta = ckdPriv(conta.k, conta.c, n + 0x80000000); });
+        }
 
         var r = assinarTransacao(pacote.utxos, pacote.destino, pacote.valor, pacote.taxa, conta);
 

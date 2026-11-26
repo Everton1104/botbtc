@@ -248,77 +248,7 @@
         </div>
     </div>
 
-    {{-- Transferências diretas do admin na Binance --}}
-    <div class="sec-maisinfo">
-    <div class="section-title mt-2"><i class="fa-solid fa-right-left me-2"></i>Transferências Diretas (Binance)</div>
-    <div class="card mb-4">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table mb-0">
-                    <thead>
-                        <tr>
-                            <th>Tipo</th>
-                            <th>Moeda</th>
-                            <th>Valor</th>
-                            <th>Taxa</th>
-                            <th>Data</th>
-                            <th>Destino</th>
-                            <th>Origem</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tabela-transfers">
-                        <tr><td colspan="7" class="text-center text-muted py-3">Carregando...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        <div class="card-body pt-0" style="font-size:.76rem;color:#888;">
-            <i class="fa-solid fa-circle-info me-1"></i>
-            Depósitos e saques feitos <strong>direto na conta Binance</strong> (fora do fluxo de investidores — aqueles estão em Saques Pendentes/Depósitos PIX). Sincronizados automaticamente (API Binance expõe 90 dias; mais antigo entra como lançamento manual).
-        </div>
-    </div>
-
-    {{-- Depósitos PIX confirmados --}}
-    </div>{{-- /sec-maisinfo Transferências --}}
-    <div class="sec-maisinfo">
-    <div class="section-title mt-2">
-        <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
-        <span id="badge-depositos-pix" class="ms-2" style="display:none;background:#32bcad;color:#000;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;"></span>
-    </div>
-    {{-- Passo a passo do registro: o cálculo das cotas assume que o valor
-         do PIX JÁ foi transferido da InfinitePay para a Binance — registrar
-         antes emite cotas a mais (dilui o preço da cota de todos). --}}
-    <div class="mb-2" style="background:rgba(240,185,11,.07);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.6rem 1rem;font-size:.76rem;color:#f0b90b;line-height:1.6;">
-        <i class="fa-solid fa-list-check me-1"></i>
-        <strong>Passo a passo do registro:</strong>
-        1) Transfira o valor do PIX da InfinitePay para a <strong>Binance</strong> (depósito BRL).
-        2) Com o valor já no saldo da Binance, clique <strong>Registrar</strong> — as cotas do cliente são liberadas na hora.
-        <span style="opacity:.85;">Registrar antes da transferência emite cotas a mais e dilui o preço da cota de todos.</span>
-    </div>
-    <div class="card mb-4">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table mb-0">
-                    <thead>
-                        <tr>
-                            <th>Usuário</th>
-                            <th>Pago em</th>
-                            <th>Valor Pago</th>
-                            <th>Líquido no Bot</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="tabela-depositos-pix">
-                        <tr><td colspan="6" class="text-center text-muted py-3">Nenhum depósito confirmado.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
     {{-- Configuração do bot --}}
-    </div>{{-- /sec-maisinfo Depósitos PIX --}}
     <div class="sec-maisinfo">
     <div class="section-title mt-2"><i class="fa-solid fa-sliders me-2"></i>Configuração do Bot</div>
     <div class="card mb-5">
@@ -728,17 +658,21 @@
                         <span id="estrategia-badge" class="badge bg-secondary ms-1">—</span>
                     </div>
                     <div style="font-size:.78rem;color:#aaa;margin-top:.4rem;">
-                        <strong>ATR dinâmico</strong>: grid com salto pela volatilidade, níveis progressivos e proteções de tendência (o bot de sempre). <strong>Spread fixo</strong>: ordens de valor fixo a ±gatilho% da base — a valorização paga a taxa e gera lucro igual a ela, sem bloqueios. A troca <strong>cancela as ordens abertas</strong> na hora; o próximo ciclo (≤1 min) cria o par no formato novo. Os parâmetros do fixo (valor/gatilho/espera) ficam no form de Configuração.
+                        <strong>ATR dinâmico</strong>: grid com salto pela volatilidade, níveis progressivos e proteções de tendência (o bot de sempre). <strong>Spread fixo</strong>: ordens de valor fixo a ±gatilho% da base — a valorização paga a taxa e gera lucro igual a ela, sem bloqueios. A troca <strong>cancela as ordens abertas</strong> na hora; o próximo ciclo (≤1 min) cria o par no formato novo. <strong>Gatilho e valor da ordem editam direto aqui</strong> (faixa R$ 50–50.000); mudou, o par é recriado no novo valor em ≤1 min. A espera de saldo fica no form de Configuração.
                     </div>
                 </div>
                 <div class="d-flex align-items-center gap-2 flex-wrap">
                     {{-- Edição rápida do gatilho — só faz sentido no modo fixo.
                          Mesmo endpoint do form (/bot/config): piso 0,15% (taxa
                          total) no backend + efeito imediato (recria o par). --}}
-                    <div id="estrategia-editar" class="d-flex align-items-center gap-2" style="display:none;">
-                        <div class="input-group input-group-sm" style="width:150px;" title="Gatilho por perna (%) — mínimo = taxa total (0,15%)">
-                            <input type="number" id="estrategia-gatilho" class="form-control" min="0.15" max="5" step="0.05" placeholder="0.30">
+                    <div id="estrategia-editar" class="d-flex align-items-center gap-2 flex-wrap" style="display:none;">
+                        <div class="input-group input-group-sm" style="width:130px;" title="Gatilho por perna (%) — mínimo = taxa total (0,15%)">
+                            <input type="number" id="estrategia-gatilho" class="form-control" min="0.15" max="5" step="0.05" placeholder="0.50">
                             <span class="input-group-text" style="font-size:.75rem;">%</span>
+                        </div>
+                        <div class="input-group input-group-sm" style="width:165px;" title="Valor de cada ordem (R$) — faixa 50 a 50.000, limitado ao saldo disponível de cada perna">
+                            <span class="input-group-text" style="font-size:.75rem;">R$</span>
+                            <input type="number" id="estrategia-valor" class="form-control" min="50" max="50000" step="100" placeholder="2000">
                         </div>
                         <button id="btn-gatilho-aplicar" class="btn btn-sm btn-outline-warning px-3" type="button">
                             <i class="fa-solid fa-check me-1"></i>Aplicar
@@ -763,6 +697,7 @@
         const card   = document.getElementById('card-estrategia');
         const editar = document.getElementById('estrategia-editar');
         const inputG = document.getElementById('estrategia-gatilho');
+        const inputV = document.getElementById('estrategia-valor');
         const btnApl = document.getElementById('btn-gatilho-aplicar');
         let fixo = false;
 
@@ -782,6 +717,9 @@
                 fixo = d.estrategia_grid === 'fixo';
                 if (inputG && d.fixo_gatilho_pct !== undefined && d.fixo_gatilho_pct !== null) {
                     inputG.value = d.fixo_gatilho_pct;
+                }
+                if (inputV && d.fixo_valor_ordem !== undefined && d.fixo_valor_ordem !== null) {
+                    inputV.value = d.fixo_valor_ordem;
                 }
                 render();
             }).catch(()=>{ msg.innerHTML = '<span style="color:#dc3545;">Não foi possível carregar o estado.</span>'; });
@@ -805,26 +743,47 @@
             });
         });
         function aplicarGatilho(){
-            const val = parseFloat(inputG.value);
-            if (isNaN(val)) {
-                msg.innerHTML = '<span style="color:#dc3545;">Informe um gatilho válido (mínimo 0,15%).</span>';
+            const payload = {};
+            if (inputG && inputG.value !== '') {
+                const g = parseFloat(inputG.value);
+                if (isNaN(g)) {
+                    msg.innerHTML = '<span style="color:#dc3545;">Informe um gatilho válido (mínimo 0,15%).</span>';
+                    return;
+                }
+                payload.fixo_gatilho_pct = g;
+            }
+            if (inputV && inputV.value !== '') {
+                const v = parseFloat(inputV.value);
+                if (isNaN(v) || v < 50) {
+                    msg.innerHTML = '<span style="color:#dc3545;">Valor da ordem inválido (faixa R$ 50 a 50.000).</span>';
+                    return;
+                }
+                payload.fixo_valor_ordem = v;
+            }
+            if (!Object.keys(payload).length) {
+                msg.innerHTML = '<span style="color:#dc3545;">Preencha gatilho e/ou valor da ordem.</span>';
                 return;
             }
             btnApl.disabled = true;
-            axios.post('/bot/config', { fixo_gatilho_pct: val }).then(r => {
+            axios.post('/bot/config', payload).then(r => {
                 msg.innerHTML = '<span style="color:#ffc107;"><i class="fa-solid fa-check me-1"></i></span>' +
-                    ((r.data && r.data.mensagem) || 'Gatilho salvo.');
-                // Re-sincroniza o input com o valor aplicado (backend pode
-                // ter clampado pro piso da taxa total).
+                    ((r.data && r.data.mensagem) || 'Parâmetros salvos.');
+                // Re-sincroniza os inputs com o valor aplicado (backend pode
+                // ter clampado pro piso da taxa / faixa da ordem).
                 axios.get('/bot/config').then(rr => {
-                    if (rr.data && rr.data.fixo_gatilho_pct !== undefined) inputG.value = rr.data.fixo_gatilho_pct;
+                    const d = rr.data || {};
+                    if (d.fixo_gatilho_pct !== undefined) inputG.value = d.fixo_gatilho_pct;
+                    if (d.fixo_valor_ordem !== undefined) inputV.value = d.fixo_valor_ordem;
                 });
             }).catch(()=>{
-                msg.innerHTML = '<span style="color:#dc3545;">Erro ao salvar o gatilho.</span>';
+                msg.innerHTML = '<span style="color:#dc3545;">Erro ao salvar os parâmetros.</span>';
             }).finally(()=>{ btnApl.disabled = false; });
         }
         btnApl.addEventListener('click', aplicarGatilho);
         inputG.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); aplicarGatilho(); }
+        });
+        if (inputV) inputV.addEventListener('keydown', e => {
             if (e.key === 'Enter') { e.preventDefault(); aplicarGatilho(); }
         });
         carregar();
@@ -1002,36 +961,10 @@
         </div>
     </div>
 
-    {{-- Depósito: admin credita direto nas cotas; usuário comum via PIX --}}
+    {{-- Depósito: todos pelo mesmo PIX (admin incluso — "adicionar direto" saiu;
+         fluxo de crédito direto sem gateway será repensado em separado) --}}
     </div>{{-- /BTC por aporte --}}
     <div class="@if(auth()->user()->id == 1)sec-inicio @endif">
-    @if(auth()->user()->id == 1)
-    <div class="mb-3">
-        <div class="card" style="border-color:rgba(0,214,143,.25);">
-            <div class="card-body">
-                <div class="section-title mb-3"><i class="fa-solid fa-circle-plus me-2" style="color:#00d68f;"></i>Adicionar Fundos (Admin)</div>
-                <div class="row g-2 align-items-end">
-                    <div class="col-12 col-md-5">
-                        <label class="form-label">Valor a adicionar (R$)</label>
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text">R$</span>
-                            <input type="number" id="deposito-valor" class="form-control" min="1" step="0.01" placeholder="0,00" oninput="atualizarPreviewDeposito()">
-                        </div>
-                        <div class="mt-1" style="font-size:.78rem;color:var(--muted);">
-                            Valor creditado no bot: <strong id="deposito-liquido-preview" class="text-green">—</strong>
-                            <span style="color:var(--muted);"> (crédito direto nas cotas, sem gateway de pagamento)</span>
-                        </div>
-                    </div>
-                    <div class="col-12 col-md-3">
-                        <button class="btn w-100" onclick="adicionarFundosDireto()" style="background:#00d68f;border:none;color:#000;font-weight:600;">
-                            <i class="fa-solid fa-bolt me-1"></i>Adicionar Diretamente
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    @else
     <div class="mb-3">
         <div class="card" style="border-color:rgba(0,214,143,.25);">
             <div class="card-body">
@@ -1068,7 +1001,6 @@
             </div>
         </div>
     </div>
-    @endif
 
     {{-- Saque --}}
     </div>{{-- /Adicionar Fundos --}}
@@ -1163,6 +1095,77 @@
         </div>
     </div>
     </div>{{-- /Avisos --}}
+
+    {{-- ── Fim da página (só admin): transferências diretas e depósitos PIX ── --}}
+    @if(auth()->user()->id == 1)
+    <div class="sec-maisinfo">
+    <div class="section-title mt-2"><i class="fa-solid fa-right-left me-2"></i>Transferências Diretas (Binance)</div>
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Moeda</th>
+                            <th>Valor</th>
+                            <th>Taxa</th>
+                            <th>Data</th>
+                            <th>Destino</th>
+                            <th>Origem</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-transfers">
+                        <tr><td colspan="7" class="text-center text-muted py-3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-body pt-0" style="font-size:.76rem;color:#888;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            Depósitos e saques feitos <strong>direto na conta Binance</strong> (fora do fluxo de investidores — aqueles estão em Saques Pendentes/Depósitos PIX). Sincronizados automaticamente (API Binance expõe 90 dias; mais antigo entra como lançamento manual).
+        </div>
+    </div>
+    </div>{{-- /sec-maisinfo Transferências --}}
+
+    <div class="sec-maisinfo">
+    <div class="section-title mt-2">
+        <i class="fa-brands fa-pix me-2" style="color:#32bcad;"></i>Depósitos PIX Confirmados
+        <span id="badge-depositos-pix" class="ms-2" style="display:none;background:#32bcad;color:#000;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;vertical-align:middle;"></span>
+    </div>
+    {{-- Passo a passo do registro: o cálculo das cotas assume que o valor
+         do PIX JÁ foi transferido da InfinitePay para a Binance — registrar
+         antes emite cotas a mais (dilui o preço da cota de todos). --}}
+    <div class="mb-2" style="background:rgba(240,185,11,.07);border:1px solid rgba(240,185,11,.25);border-radius:10px;padding:.6rem 1rem;font-size:.76rem;color:#f0b90b;line-height:1.6;">
+        <i class="fa-solid fa-list-check me-1"></i>
+        <strong>Passo a passo do registro:</strong>
+        1) Transfira o valor do PIX da InfinitePay para a <strong>Binance</strong> (depósito BRL).
+        2) Com o valor já no saldo da Binance, clique <strong>Registrar</strong> — as cotas do cliente são liberadas na hora.
+        <span style="opacity:.85;">Registrar antes da transferência emite cotas a mais e dilui o preço da cota de todos.</span>
+    </div>
+    <div class="card mb-5">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>Pago em</th>
+                            <th>Valor Pago</th>
+                            <th>Líquido no Bot</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-depositos-pix">
+                        <tr><td colspan="6" class="text-center text-muted py-3">Nenhum depósito confirmado.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    </div>{{-- /sec-maisinfo Depósitos PIX --}}
+    @endif
 
 </div>{{-- /container --}}
 
@@ -1952,12 +1955,12 @@ function carregarDepositosPix() {
         let html = '';
         deps.forEach(d => {
             // Líquido a creditar: InfinitePay já computa por método (PIX grátis,
-            // cartão 1-6x desconta taxa). Legado MP (sem valor_liquido): 1% não-admin.
+            // cartão 1-6x desconta taxa). Legado MP (sem valor_liquido): 1% de todos.
             let liquido;
             if (d.valor_liquido != null) {
                 liquido = parseFloat(d.valor_liquido);
             } else {
-                liquido = d.user_id === 1 ? d.valor : d.valor * 0.99;
+                liquido = d.valor * 0.99;
             }
             const metodo = d.capture_method === 'credit_card'
                 ? `Cartão${d.installments > 1 ? ' ' + d.installments + 'x' : ''}`
@@ -2052,24 +2055,8 @@ function registrarDepositoNoBot(pixId, userId, valorLiquido, nome) {
         .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao registrar depósito.'));
 }
 
-// ── Adicionar fundos direto (admin, sem PIX) ───────────
-function adicionarFundosDireto() {
-    const valor = parseFloat(document.getElementById('deposito-valor').value);
-    if (!valor || valor < 1) { alert('Informe um valor de pelo menos R$ 1,00.'); return; }
-
-    const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valor);
-    if (!confirm(`Adicionar R$ ${fmtVal} diretamente às suas cotas?\n\nO valor é creditado no bot sem passar por gateway de pagamento.`)) return;
-
-    axios.post('/bot/investir-manual', { valor })
-        .then(res => {
-            alert(res.data.mensagem ?? 'Fundos adicionados com sucesso!');
-            document.getElementById('deposito-valor').value = '';
-            atualizarPreviewDeposito();
-            atualizarPainel();
-            carregarTabela();
-        })
-        .catch(err => alert(err?.response?.data?.mensagem ?? 'Erro ao adicionar fundos.'));
-}
+// ── Adicionar fundos direto (admin, sem PIX): REMOVIDO — admin deposita pelo
+//    PIX como qualquer usuário. Crédito direto sem gateway será repensado.
 
 function confirmarSaque(id, nome, valorLiquido) {
     const fmtVal = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(valorLiquido);
@@ -2294,7 +2281,7 @@ const ehAdmin = {{ auth()->user()->id == 1 ? 'true' : 'false' }};
 // integral); no Mercado Pago legado desconta 1%. Taxa de SAQUE é outra
 // coisa (regra própria do site) e continua aplicando nos dois.
 const ehInfinitePay = {{ config('services.infinitepay.gateway_padrao', 'mercadopago') === 'infinitepay' ? 'true' : 'false' }};
-const fatorDeposito = ehAdmin ? 1 : (ehInfinitePay ? 1 : 0.99);
+const fatorDeposito = ehInfinitePay ? 1 : 0.99;
 
 function atualizarPainel() {
     axios.get("/bot/valor-atual").then(res => {

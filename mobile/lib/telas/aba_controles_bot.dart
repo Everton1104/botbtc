@@ -42,10 +42,15 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
   final _ctrHisterese = TextEditingController();
   final _ctrPersistencia = TextEditingController();
   final _ctrCooldown = TextEditingController();
+  final _ctrFixoGatilho = TextEditingController();
+  final _ctrFixoValor = TextEditingController();
 
   double _alvoBtc = 50; // slider 5-95
   bool _subidaAuto = false;
   bool _camadasAtr = false;
+
+  /// Estratégia de grid ativa na config carregada ('fixo' vs 'atr').
+  bool get _ehFixo => _dados?.config.estrategiaGrid == 'fixo';
 
   @override
   void initState() {
@@ -73,6 +78,8 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
     _ctrHisterese.dispose();
     _ctrPersistencia.dispose();
     _ctrCooldown.dispose();
+    _ctrFixoGatilho.dispose();
+    _ctrFixoValor.dispose();
     super.dispose();
   }
 
@@ -120,6 +127,8 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
     _alvoBtc = c.targetBtcPct.roundToDouble();
     _subidaAuto = c.modoSubidaAutoHabilitado;
     _camadasAtr = c.camadasAtrHabilitado;
+    _ctrFixoGatilho.text = _semZeros(c.fixoGatilhoPct);
+    _ctrFixoValor.text = c.fixoValorOrdem.round().toString();
   }
 
   /// 0.2 → "0.2" (o toString do Dart já limpa; garantia contra "0.20000").
@@ -261,9 +270,95 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
         adaptHisteresePct: _lerDouble(_ctrHisterese, atual.adaptHisteresePct),
         adaptCooldownMin: _lerInt(_ctrCooldown, atual.adaptCooldownMin),
         adaptPersistenciaMin: _lerInt(_ctrPersistencia, atual.adaptPersistenciaMin),
+        // O form geral NÃO troca a estratégia — viaja o estado atual; os
+        // parâmetros do fixo saem dos inputs do card (se o admin editou lá).
+        estrategiaGrid: atual.estrategiaGrid,
+        fixoGatilhoPct: _lerDouble(_ctrFixoGatilho, atual.fixoGatilhoPct),
+        fixoValorOrdem: _lerDouble(_ctrFixoValor, atual.fixoValorOrdem),
+        fixoEsperaMin: atual.fixoEsperaMin,
       );
 
       final msg = await ApiService.salvarConfigBot(nova);
+      _aviso(msg);
+      await _carregar(silencioso: true);
+    } on ApiException catch (e) {
+      _aviso(e.mensagem, erro: true);
+    } finally {
+      if (mounted) setState(() => _salvando = false);
+    }
+  }
+
+  // ── Estratégia do grid (ATR × Spread fixo) ────────────────────────────────
+
+  /// Alterna ATR ↔ Spread fixo com confirmação — a troca cancela as ordens
+  /// abertas na hora; o próximo ciclo (≤1 min) cria o par no formato novo.
+  Future<void> _alternarEstrategia(bool ativo) async {
+    final atual = _dados?.config;
+    if (atual == null) return;
+
+    final indoFixo = ativo; // switch ligado = spread fixo
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(indoFixo ? 'Ativar spread fixo' : 'Reativar ATR dinâmico'),
+        content: Text(
+          indoFixo
+              ? 'DESATIVAR O ATR e ligar o SPREAD FIXO?\n\n'
+                  'As ordens abertas serão canceladas e o próximo ciclo (≤1 min) '
+                  'cria o par fixo (gatilho e valor atuais).\n'
+                  'Proteções de tendência, níveis progressivos e modo subida '
+                  'deixam de valer enquanto o fixo estiver ativo.'
+              : 'REATIVAR O ATR DINÂMICO?\n\n'
+                  'As ordens do spread fixo serão canceladas e o próximo ciclo '
+                  '(≤1 min) recria o grid com salto por volatilidade, níveis e '
+                  'proteções de sempre.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Voltar')),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirmar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _alterando = true);
+    try {
+      final msg = await ApiService.salvarConfigBot(
+        atual.comFixo(estrategia: indoFixo ? 'fixo' : 'atr'),
+      );
+      _aviso(msg);
+      await _carregar(silencioso: true);
+    } on ApiException catch (e) {
+      _aviso(e.mensagem, erro: true);
+    } catch (_) {
+      _aviso('Não foi possível alternar a estratégia.', erro: true);
+    } finally {
+      if (mounted) setState(() => _alterando = false);
+    }
+  }
+
+  /// Aplica gatilho + valor da ordem do spread fixo. Com o fixo ATIVO, o
+  /// servidor recria o par na hora (ritual do boost); inativo, valem pra
+  /// próxima ativação.
+  Future<void> _aplicarFixo() async {
+    final atual = _dados?.config;
+    if (atual == null) return;
+
+    final gatilho = _lerDouble(_ctrFixoGatilho, atual.fixoGatilhoPct);
+    final valor = _lerDouble(_ctrFixoValor, atual.fixoValorOrdem);
+    if (gatilho < 0.15 || valor < 50) {
+      _aviso('Faixa: gatilho ≥ 0,15% · ordem ≥ R\$ 50.', erro: true);
+      return;
+    }
+
+    setState(() => _salvando = true);
+    try {
+      final msg = await ApiService.salvarConfigBot(
+        atual.comFixo(gatilho: gatilho, valor: valor),
+      );
       _aviso(msg);
       await _carregar(silencioso: true);
     } on ApiException catch (e) {
@@ -404,6 +499,88 @@ class _AbaControlesBotState extends State<AbaControlesBot> {
                     onPressed: _resetarBase,
                     icon: const Icon(Icons.restart_alt, size: 16),
                     label: const Text('Resetar base', style: TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Estratégia do grid: ATR × Spread fixo (reversível)
+        Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.swap_horiz, size: 18, color: Cores.textoSuave),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text('Estratégia do grid', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _ehFixo ? Cores.dourado : Cores.verde,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        _ehFixo ? 'SPREAD FIXO' : 'ATR DINÂMICO',
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.black),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Spread fixo: ordens de valor fixo a ±gatilho% da base, sem ATR '
+                  'nem níveis. A troca cancela as ordens abertas na hora; o próximo '
+                  'ciclo (≤1 min) cria o par no formato novo.',
+                  style: TextStyle(fontSize: 11.5, color: Cores.textoSuave, height: 1.4),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(
+                    _ehFixo ? 'Spread fixo ativo' : 'ATR dinâmico ativo',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    _ehFixo
+                        ? 'Gatilho ±${_semZeros(_dados!.config.fixoGatilhoPct)}% · ordens de R\$ ${_dados!.config.fixoValorOrdem.round()}'
+                        : 'Grid com salto por volatilidade e proteções.',
+                    style: const TextStyle(fontSize: 11, color: Cores.textoSuave),
+                  ),
+                  value: _ehFixo,
+                  activeThumbColor: Cores.dourado,
+                  onChanged: _alterando ? null : _alternarEstrategia,
+                ),
+                const Divider(height: 18),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: _campo('Gatilho por perna (%)', _ctrFixoGatilho, '%')),
+                    const SizedBox(width: 10),
+                    Expanded(child: _campo('Valor da ordem (R\$)', _ctrFixoValor, 'R\$')),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Faixa do gatilho: 0,15–5% · faixa da ordem: R\$ 50–50.000 '
+                  '(limitada ao saldo de cada perna). Mudou com o fixo ativo: o par '
+                  'é recriado em ≤1 min.',
+                  style: TextStyle(fontSize: 10.5, color: Cores.textoSuave, height: 1.4),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _salvando ? null : _aplicarFixo,
+                    icon: const Icon(Icons.check, size: 16),
+                    label: const Text('Aplicar parâmetros', style: TextStyle(fontSize: 12.5)),
                   ),
                 ),
               ],

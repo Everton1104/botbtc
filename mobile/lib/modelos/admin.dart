@@ -42,6 +42,10 @@ class ConfigBot {
   final double rsiMaximoCompra, rsiMinimoVenda;
   final double adaptHisteresePct;
   final int adaptCooldownMin, adaptPersistenciaMin;
+  final String estrategiaGrid; // 'atr' | 'fixo'
+  final double fixoGatilhoPct; // gatilho por perna (%)
+  final double fixoValorOrdem; // valor de cada ordem (R$)
+  final int fixoEsperaMin; // espera de saldo antes do rebase
 
   const ConfigBot({
     required this.nivel1,
@@ -71,6 +75,10 @@ class ConfigBot {
     required this.adaptHisteresePct,
     required this.adaptCooldownMin,
     required this.adaptPersistenciaMin,
+    this.estrategiaGrid = 'atr',
+    this.fixoGatilhoPct = 0.5,
+    this.fixoValorOrdem = 2000,
+    this.fixoEsperaMin = 30,
   });
 
   factory ConfigBot.fromJson(Map<String, dynamic> j) => ConfigBot(
@@ -101,6 +109,10 @@ class ConfigBot {
         adaptHisteresePct: _num(j['adapt_histerese_pct']),
         adaptCooldownMin: (j['adapt_cooldown_min'] as num?)?.toInt() ?? 0,
         adaptPersistenciaMin: (j['adapt_persistencia_min'] as num?)?.toInt() ?? 0,
+        estrategiaGrid: (j['estrategia_grid'] as String?) ?? 'atr',
+        fixoGatilhoPct: _num(j['fixo_gatilho_pct']),
+        fixoValorOrdem: _num(j['fixo_valor_ordem']),
+        fixoEsperaMin: (j['fixo_espera_min'] as num?)?.toInt() ?? 30,
       );
 
   /// O corpo de POST /api/admin/config — as chaves EXATAS que o servidor lê.
@@ -132,7 +144,47 @@ class ConfigBot {
         'adapt_histerese_pct': adaptHisteresePct,
         'adapt_persistencia_min': adaptPersistenciaMin,
         'adapt_cooldown_min': adaptCooldownMin,
+        'estrategia_grid': estrategiaGrid,
+        'fixo_gatilho_pct': fixoGatilhoPct,
+        'fixo_valor_ordem': fixoValorOrdem,
+        'fixo_espera_min': fixoEsperaMin,
       };
+
+  /// Cópia com os parâmetros do spread fixo (o card de estratégia salva
+  /// por aqui — o restante do form viaja com os valores atuais).
+  ConfigBot comFixo({String? estrategia, double? gatilho, double? valor}) => ConfigBot(
+        nivel1: nivel1,
+        nivel2: nivel2,
+        nivel3: nivel3,
+        nivel4: nivel4,
+        nivel5: nivel5,
+        nivel6: nivel6,
+        nivel7: nivel7,
+        nivelFinal: nivelFinal,
+        allinThreshold: allinThreshold,
+        minNotional: minNotional,
+        pisoOrdemPct: pisoOrdemPct,
+        boostPct: boostPct,
+        targetBtcPct: targetBtcPct,
+        deltaAlertaPct: deltaAlertaPct,
+        deltaBloqueioPct: deltaBloqueioPct,
+        pisoAltaDeltaPct: pisoAltaDeltaPct,
+        pisoBaixaDeltaPct: pisoBaixaDeltaPct,
+        guardMetaPct: guardMetaPct,
+        modoSubidaAutoHabilitado: modoSubidaAutoHabilitado,
+        spreadMinimoPct: spreadMinimoPct,
+        taxaTotalPct: taxaTotalPct,
+        camadasAtrHabilitado: camadasAtrHabilitado,
+        rsiMaximoCompra: rsiMaximoCompra,
+        rsiMinimoVenda: rsiMinimoVenda,
+        adaptHisteresePct: adaptHisteresePct,
+        adaptCooldownMin: adaptCooldownMin,
+        adaptPersistenciaMin: adaptPersistenciaMin,
+        estrategiaGrid: estrategia ?? estrategiaGrid,
+        fixoGatilhoPct: gatilho ?? fixoGatilhoPct,
+        fixoValorOrdem: valor ?? fixoValorOrdem,
+        fixoEsperaMin: fixoEsperaMin,
+      );
 }
 
 /// Flags operacionais do bot (bot_state) + pausa automática dos saques.

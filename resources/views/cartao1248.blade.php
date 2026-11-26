@@ -299,7 +299,7 @@
 </style>
 
 <script src="{{ asset('js/bip39.js') }}"></script>
-<script src="{{ asset('js/carteira1248.js') }}?v=1"></script>
+<script src="{{ asset('js/carteira1248.js') }}?v=5"></script>
 <script>
 (function () {
     // Colunas: [topo, base] por casa — igual ao cartão impresso

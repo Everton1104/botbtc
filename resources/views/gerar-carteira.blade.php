@@ -88,7 +88,7 @@
                 <li>Ligue o computador pelo pendrive (menu de boot, geralmente F12) — o Tails sobe direto da RAM, sem instalar nada.</li>
                 <li><strong class="text-light">Desconectado da internet</strong>, crie a carteira e assine transações no <strong>nosso gerador HTML</strong> (baixe no botão abaixo e leve no pendrive) — um arquivo só faz tudo.</li>
             </ol>
-            <a href="{{ asset('gerador-bip39.html') }}" download class="btn btn-outline-muted btn-sm fw-bold mb-2 d-inline-flex align-items-center gap-2">
+            <a href="{{ asset('gerador-bip39.html') }}?v=24" download class="btn btn-outline-muted btn-sm fw-bold mb-2 d-inline-flex align-items-center gap-2">
                 <i class="fa-solid fa-download"></i>Baixar gerador de carteira (HTML offline)
             </a>
             <p class="text-muted mb-0" style="font-size:.78rem;">
@@ -239,7 +239,7 @@
 </style>
 
 <script src="{{ asset('js/bip39.js') }}"></script>
-<script src="{{ asset('js/carteira1248.js') }}?v=14"></script>
+<script src="{{ asset('js/carteira1248.js') }}?v=18"></script>
 <script>
 (function () {
     // ── Gerador de frase BIP-39 (mesmo algoritmo do Ian Coleman) ──

@@ -1,12 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// SUÍTE BITCOIN — Cartão 1248 · Gerar Carteira · Carteiras, em 3 abas.
+// SUÍTE BITCOIN — Carteiras (watch-only).
 //
-// A mesma suíte do site, nativa:
-//   • Cartão 1248: o que é, simulador de furos e PDF pra imprimir
-//   • Gerar Carteira: frase nova/importada (palavras ou NÚMEROS das
-//     posições), cartões por palavra, zpub e Avançado com todas as chaves
-//   • Carteiras: watch-only ao vivo (saldo pendente, confirmações, UTXOs),
-//     taxas sugeridas, pacote de assinatura e broadcast
+// A suíte em uma aba só: carteiras registradas, endereços, UTXOs, criação de
+// pacote de assinatura (salva ARQUIVO via seletor do Android — pendrive ou
+// armazenamento interno) e broadcast. O gerar/1248 agora é o arquivo offline:
+// um botão baixa o gerador-bip39.html do site e abre o seletor pra salvar.
 //
 // A cripto é a de servicos/bitcoin.dart — testada contra os vetores oficiais.
 // A ASSINATURA de transações fica só no arquivo offline (Tails), por design.
@@ -17,484 +15,79 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http2;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../servicos/api.dart';
+import '../servicos/arquivos.dart';
 import '../servicos/bitcoin.dart';
-import '../servicos/bip39_palavras.dart';
 import '../tema.dart';
-import 'tela_cartao1248.dart';
 
 class TelaSuite extends StatelessWidget {
-  /// Aba em que a suíte abre: 0 = Cartão 1248, 1 = Gerar, 2 = Carteiras.
-  /// A Home usa 2 no botão de Carteiras — atalho direto, sem passar pelo
-  /// cartão antes.
-  const TelaSuite({super.key, this.abaInicial = 0});
-
-  final int abaInicial;
+  const TelaSuite({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      initialIndex: abaInicial,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Suíte Bitcoin'),
-          bottom: const TabBar(
-            labelColor: Cores.dourado,
-            unselectedLabelColor: Cores.textoSuave,
-            indicatorColor: Cores.dourado,
-            tabs: [
-              Tab(icon: Icon(Icons.confirmation_number), text: 'Cartão 1248'),
-              Tab(icon: Icon(Icons.key), text: 'Gerar'),
-              Tab(icon: Icon(Icons.wallet), text: 'Carteiras'),
-            ],
-          ),
-        ),
-        body: const TabBarView(children: [
-          TelaCartao1248(),
-          AbaGerarCarteira(),
-          AbaCarteiras(),
-        ]),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Carteiras'),
+        actions: const [_BtnBaixarGerador()],
       ),
+      body: const AbaCarteiras(),
     );
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ABA GERAR CARTEIRA
-// ═══════════════════════════════════════════════════════════════════════════
-
-class AbaGerarCarteira extends StatefulWidget {
-  const AbaGerarCarteira({super.key});
+/// Baixa o gerador offline (gerador-bip39.html — gerar/1248/assinar) do site
+/// e abre o SELETOR DE ARQUIVOS do Android pra salvar onde o usuário quiser
+/// (pendrive OTG ou armazenamento interno). O ?v acompanha a versão publicada
+/// do gerador — bumpar junto quando o site mudar.
+class _BtnBaixarGerador extends StatefulWidget {
+  const _BtnBaixarGerador();
 
   @override
-  State<AbaGerarCarteira> createState() => _AbaGerarCarteiraState();
+  State<_BtnBaixarGerador> createState() => _BtnBaixarGeradorState();
 }
 
-class _AbaGerarCarteiraState extends State<AbaGerarCarteira> {
-  int _nPalavras = 24;
-  String _lang = 'en';
-  final _senhaCtrl = TextEditingController();
-  final _importarCtrl = TextEditingController();
+class _BtnBaixarGeradorState extends State<_BtnBaixarGerador> {
+  bool _baixando = false;
 
-  /// frase ativa: [{pos, n, palavra}]
-  List<Map<String, dynamic>>? _frase;
-  String _origem = '';
-  Derivacao? _deriv;
-  String? _derivandoErro;
-  bool _carregando = false;
-  bool _avisoConversao = false;
-
-  @override
-  void dispose() {
-    _senhaCtrl.dispose();
-    _importarCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _gerar() async {
-    final indices = gerarFraseIndices(_nPalavras);
-    final palavras = indices.map((i) => listaDe(_lang)[i]).toList();
-    _definir(palavras.map((w) => {'palavra': w, 'n': listaDe(_lang).indexOf(w) + 1}).toList(), 'gerada');
-  }
-
-  Future<void> _importar() async {
-    final bruto = _importarCtrl.text.trim().toLowerCase().replaceAll(RegExp(r'[\s,;]+'), ' ');
-    if (bruto.isEmpty) return;
-    final tokens = bruto.split(' ').where((t) => t.isNotEmpty).toList();
+  Future<void> _baixar() async {
+    if (_baixando) return;
+    setState(() => _baixando = true);
     try {
-      final soNumeros = tokens.every((t) => RegExp(r'^\d{1,4}$').hasMatch(t));
-      if (soNumeros) {
-        if (tokens.length != 12 && tokens.length != 24) throw 'precisam ser 12 ou 24 números';
-        final lista = listaDe(_lang);
-        final arr = <Map<String, dynamic>>[];
-        for (var i = 0; i < tokens.length; i++) {
-          final ix = int.parse(tokens[i]);
-          if (ix < 1 || ix > 2048) throw 'número fora da faixa (1-2048): ${tokens[i]}';
-          arr.add({'palavra': lista[ix - 1], 'n': ix});
-        }
-        final v = validarFrase(arr.map((e) => e['palavra'] as String).toList());
-        if (!v.ok) throw 'checksum inválido — confira os números (e o idioma $_lang)';
-        _definir(arr, 'importada (números)');
-      } else {
-        final v = validarFrase(tokens);
-        if (!v.ok) throw v.erro!;
-        _definir(
-          tokens.asMap().entries.map((e) => {'palavra': e.value, 'n': v.indices[e.key]}).toList(),
-          'importada',
-        );
-      }
-      _importarCtrl.clear();
+      final resp = await http2.get(Uri.parse('$kBaseUrl/gerador-bip39.html?v=24'));
+      if (resp.statusCode != 200) throw Exception('site respondeu ${resp.statusCode}');
+      final ok = await Arquivos.salvarComo(
+        nome: 'gerador-bitcoin-offline.html',
+        mime: 'text/html',
+        conteudo: resp.body,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? 'Gerador salvo ✓ — abra no Tails/máquina limpa pra gerar ou assinar'
+            : 'Download cancelado.'),
+        backgroundColor: ok ? Cores.verde : Cores.textoSuave,
+      ));
     } catch (e) {
-      _msg(e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
-  void _definir(List<Map<String, dynamic>> frase, String origem) {
-    setState(() {
-      for (var i = 0; i < frase.length; i++) {
-        frase[i]['pos'] = i + 1;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Falha ao baixar: $e'), backgroundColor: Cores.vermelho));
       }
-      _frase = frase;
-      _origem = origem;
-      _deriv = null;
-      _carregando = true;
-    });
-    _derivar();
-  }
-
-  Future<void> _derivar() async {
-    if (_frase == null) return;
-    try {
-      final texto = (_frase!).map((p) => p['palavra']).join(' ');
-      final d = await Future.sync(() => derivarTudo(texto, _senhaCtrl.text, qtd: 5));
-      setState(() {
-        _deriv = d;
-        _derivandoErro = null;
-        _carregando = false;
-      });
-    } catch (e) {
-      setState(() {
-        _derivandoErro = e.toString().replaceFirst('Exception: ', '');
-        _carregando = false;
-      });
+    } finally {
+      if (mounted) setState(() => _baixando = false);
     }
-  }
-
-  void _msg(String t) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t), backgroundColor: Cores.vermelho));
-  }
-
-  /// Converte as palavras da frase pro OUTRO idioma, preservando o nº de
-  /// cada posição. Aviso BIP-39: a seed vem das PALAVRAS — a carteira muda.
-  void _converterIdioma() {
-    if (_frase == null) return;
-    final alvo = _lang == 'en' ? 'pt' : 'en';
-    final lista = listaDe(alvo);
-    final convertida = _frase!
-        .map((p) => {'pos': p['pos'], 'n': p['n'], 'palavra': lista[(p['n'] as int) - 1]})
-        .toList();
-    setState(() {
-      _lang = alvo;
-      _avisoConversao = true;
-    });
-    _definir(convertida, 'convertida');
-  }
-
-  void _copiar(String t, String rotulo) {
-    Clipboard.setData(ClipboardData(text: t));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$rotulo copiad$rotulo!'), backgroundColor: Cores.verde));
   }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _avisoTeste(),
-        const SizedBox(height: 12),
-
-        // ── CARTÃO 1248 (cartões por palavra) ──
-        if (_frase != null) ...[
-          _titulo('CARTÃO 1248', Icons.confirmation_number),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _frase!.map(_cartaozinho).toList(),
-          ),
-          const SizedBox(height: 16),
-        ],
-
-        // ── controles ──
-        _card(child: Column(children: [
-          Wrap(spacing: 10, runSpacing: 8, children: [
-            _seletor(['12', '24'], _nPalavras == 12 ? '12' : '24', (v) => setState(() => _nPalavras = int.parse(v))),
-            _seletor(['Inglês', 'Português'], _lang == 'en' ? 'Inglês' : 'Português', (v) => setState(() => _lang = v == 'Inglês' ? 'en' : 'pt')),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: TextField(
-              controller: _senhaCtrl,
-              decoration: const InputDecoration(labelText: 'Passphrase', isDense: true, hintText: 'opcional'),
-              onChanged: (_) { if (_frase != null) _derivar(); },
-            )),
-            const SizedBox(width: 10),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Cores.dourado, foregroundColor: Colors.black),
-              onPressed: _gerar,
-              child: const Text('Gerar frase', style: TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ]),
-          const SizedBox(height: 4),
-          const Text('A "25ª palavra": mesma frase + senha diferente = carteira diferente.',
-              style: TextStyle(fontSize: 10.5, color: Cores.textoSuave)),
-        ])),
-        const SizedBox(height: 12),
-
-        // ── importar ──
-        _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Importar carteira', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          const Text('Cole a frase (12/24 palavras) ou os números das posições do Cartão 1248.',
-              style: TextStyle(fontSize: 11.5, color: Cores.textoSuave)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _importarCtrl,
-            maxLines: 2,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            decoration: const InputDecoration(isDense: true, hintText: 'palavras…  ou  1723 45 987 …'),
-          ),
-          const SizedBox(height: 8),
-          Row(children: [
-            OutlinedButton(onPressed: _importar, child: const Text('Importar')),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.language, size: 16),
-              label: Text(_frase == null ? 'Converter' : (_lang == 'en' ? 'p/ Português' : 'p/ Inglês')),
-              onPressed: _frase == null ? null : _converterIdioma,
-            ),
-          ]),
-          if (_avisoConversao)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'Convertido: os números das posições são os mesmos, mas a seed nasce das palavras escritas — trocar o idioma gera uma carteira DIFERENTE (a zpub já é a nova).',
-                style: TextStyle(fontSize: 10.5, color: Color(0xFFe6b84c), height: 1.4),
-              ),
-            ),
-        ])),
-        const SizedBox(height: 16),
-
-        // ── zpub + avançado ──
-        if (_frase != null && _carregando)
-          const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator(color: Cores.dourado))),
-        if (_derivandoErro != null)
-          Text('✗ $_derivandoErro', style: const TextStyle(color: Cores.vermelho, fontSize: 12)),
-        if (_deriv != null) ...[
-          _titulo('zpub', Icons.visibility),
-          _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('A chave pública da carteira: vigia saldo/histórico e monta transações — mas nunca executa. Quem assina é a cold wallet offline.',
-                style: const TextStyle(fontSize: 11.5, color: Cores.textoSuave)),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Cores.dourado.withValues(alpha: 0.12),
-                border: Border.all(color: Cores.dourado),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SelectableText(_deriv!.zpub, style: const TextStyle(fontSize: 11, color: Cores.dourado)),
-            ),
-            const SizedBox(height: 6),
-            Row(children: [
-              OutlinedButton.icon(
-                onPressed: () => _copiar(_deriv!.zpub, 'a zpub'),
-                icon: const Icon(Icons.copy, size: 16),
-                label: const Text('Copiar zpub'),
-              ),
-              const SizedBox(width: 8),
-              const Text('use na aba Carteiras', style: TextStyle(fontSize: 11, color: Cores.textoSuave)),
-            ]),
-          ])),
-          const SizedBox(height: 12),
-          _avancado(),
-        ],
-      ]),
+    return IconButton(
+      icon: _baixando
+          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Cores.dourado))
+          : const Icon(Icons.download),
+      tooltip: 'Baixar gerador offline (HTML)',
+      onPressed: _baixando ? null : _baixar,
     );
   }
-
-  Widget _avisoTeste() => Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: const Color(0x33e6b84c),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0x66e6b84c)),
-        ),
-        child: const Row(children: [
-          Icon(Icons.science_outlined, color: Color(0xFFe6b84c), size: 18),
-          SizedBox(width: 8),
-          Expanded(child: Text(
-            'Esta geração é apenas para teste. Pra criar uma carteira de verdade, use o arquivo offline no Tails OS (veja a aba Cartão 1248).',
-            style: TextStyle(fontSize: 11.5, color: Color(0xFFe6b84c)),
-          )),
-        ]),
-      );
-
-  Widget _cartaozinho(Map<String, dynamic> p) {
-    const casas = [
-      [1, 2], [1, 4], [2, 8], [1, 4], [2, 8], [1, 4], [2, 8]
-    ];
-    const colIni = [0, 1, 3, 5];
-    const valores = [
-      [1, 2], [1, 4, 2, 8], [1, 4, 2, 8], [1, 4, 2, 8]
-    ];
-    String s = p['n'].toString().padLeft(4, '0');
-    final furos = <int>{};
-    for (var g = 0; g < 4; g++) {
-      final t = int.parse(s[g]);
-      for (var i = 0; i < valores[g].length; i++) {
-        if (t & valores[g][i] != 0) {
-          furos.add(colIni[g] * 2 + (i < 2 ? i : 1));
-        }
-      }
-    }
-    final tamPal = (p['palavra'] as String).length;
-    return Container(
-      width: 225,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black, width: 2),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(children: [
-        Container(
-          width: 66,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: const BoxDecoration(border: Border(right: BorderSide(color: Colors.black, width: 2))),
-          child: Column(children: [
-            Text('${p['pos']}º', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.black)),
-            const SizedBox(height: 3),
-            Text(p['palavra'],
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: tamPal <= 4 ? 13.0 : tamPal <= 6 ? 10.5 : 8.5,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.black,
-                )),
-            const SizedBox(height: 3),
-            Text('nº ${p['n']}', style: const TextStyle(fontSize: 8.5, color: Colors.black54, fontWeight: FontWeight.w700)),
-          ]),
-        ),
-        Expanded(
-          child: Row(children: [
-            for (var i = 0; i < 7; i++)
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      left: (i == 1 || i == 3 || i == 5)
-                          ? const BorderSide(color: Colors.black, width: 3)
-                          : const BorderSide(color: Colors.black, width: 1.4),
-                    ),
-                  ),
-                  child: Column(children: [
-                    for (var j = 0; j < 2; j++)
-                      Container(
-                        height: 46,
-                        decoration: BoxDecoration(border: Border(top: j == 1 ? const BorderSide(color: Colors.black, width: 1.4) : BorderSide.none)),
-                        child: Center(
-                          child: Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: furos.contains(i * 2 + j) ? Colors.black : null,
-                            ),
-                            child: Center(
-                              child: Text(
-                                '${casas[i][j]}',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                  color: furos.contains(i * 2 + j) ? Colors.white : Colors.black,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ]),
-                ),
-              ),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _avancado() => Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          iconColor: Cores.dourado,
-          title: const Text('Avançado — todas as chaves da carteira', style: TextStyle(fontSize: 13)),
-          children: [
-            _dado('Seed (512 bits) — o número mestre', _deriv!.seed),
-            _dado('xprv raiz — com ela se reconstrói tudo', _deriv!.xprv),
-            _dado('zprv da conta — o privado da zpub', _deriv!.zprv),
-            _dado('xpub raiz — deriva tudo sem mover moedas', _deriv!.xpub),
-            const Padding(
-              padding: EdgeInsets.only(top: 6, bottom: 4),
-              child: Text('Endereços e WIF (m/84\'/0\'/0\'/0/i)', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
-            ),
-            for (final e in _deriv!.end84)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: SelectableText(
-                  "m/84'/0'/0'/0/${e['i']}  ${e['endereco']}\nWIF ${e['wif']}",
-                  style: const TextStyle(fontSize: 10.5, color: Cores.dourado),
-                ),
-              ),
-          ],
-        ),
-      );
-
-  Widget _dado(String rotulo, String valor) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(rotulo, style: const TextStyle(fontSize: 11, color: Cores.textoSuave)),
-          const SizedBox(height: 2),
-          SelectableText(valor, style: const TextStyle(fontSize: 10.5, color: Cores.texto)),
-        ]),
-      );
-
-  Widget _seletor(List<String> opcoes, String atual, void Function(String) aoMudar) {
-    return Wrap(spacing: 0, children: [
-      for (final op in opcoes)
-        InkWell(
-          onTap: () => aoMudar(op),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border.all(color: op == atual ? Cores.dourado : Cores.borda),
-              color: op == atual ? Cores.dourado.withValues(alpha: 0.14) : null,
-              borderRadius: BorderRadius.horizontal(
-                left: op == opcoes.first ? const Radius.circular(6) : Radius.zero,
-                right: op == opcoes.last ? const Radius.circular(6) : Radius.zero,
-              ),
-            ),
-            child: Text(op,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: op == atual ? FontWeight.w700 : FontWeight.w400,
-                  color: op == atual ? Cores.dourado : Cores.textoSuave,
-                )),
-          ),
-        ),
-    ]);
-  }
-
-  Widget _titulo(String t, IconData i) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(children: [
-          Icon(i, color: Cores.dourado, size: 17),
-          const SizedBox(width: 6),
-          Text(t, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
-        ]),
-      );
-
-  Widget _card({required Widget child}) => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Cores.cartao,
-          border: Border.all(color: Cores.borda),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: child,
-      );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -523,6 +116,10 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   /// build seriam refeitos a cada polling de 30s, apagando o que o usuário
   /// digitou. Aqui eles vivem no State e só são descartados no dispose.
   final Map<int, (TextEditingController, TextEditingController, TextEditingController)> _pacoteCtrls = {};
+
+  /// Última taxa que o APP escreveu no campo (auto/chips). Se o texto atual
+  /// é diferente disso, o usuário digitou manualmente — aí a gente não mexe.
+  final Map<int, int> _taxaAuto = {};
 
   @override
   void initState() {
@@ -710,6 +307,9 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
   String _fmtMilhar(int v) =>
       v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
 
+  /// 5 → "05" (pro nome do arquivo do pacote).
+  String _dois(int n) => n.toString().padLeft(2, '0');
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -883,9 +483,17 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
     }
     final (destCtrl, valorCtrl, taxaCtrl) = _pacoteCtrls[id]!;
 
-    // taxa padrão: mínimo recomendado × tamanho
-    if (_taxas != null && utxosUsaveis.isNotEmpty && taxaCtrl.text.isEmpty) {
-      taxaCtrl.text = '${_taxas!['economica']! * _vsizeDe(utxosUsaveis.length)}';
+    // Taxa AUTOMÁTICA acompanha o nº de UTXOs (cada uso da carteira engorda
+    // a transação: vsize = 11 + 68×n + 62). Recalcula sozinha quando a lista
+    // de UTXOs muda — SÓ enquanto o usuário não digitar um valor manualmente
+    // (o flag guarda o último número que a gente mesmo escreveu no campo).
+    final taxaCalc = (_taxas != null && utxosUsaveis.isNotEmpty)
+        ? _taxas!['economica']! * _vsizeDe(utxosUsaveis.length)
+        : null;
+    if (taxaCalc != null &&
+        (taxaCtrl.text.isEmpty || int.tryParse(taxaCtrl.text.trim()) == (_taxaAuto[id] ?? -1))) {
+      _taxaAuto[id] = taxaCalc;
+      taxaCtrl.text = '$taxaCalc';
     }
 
     // Conversão ao vivo do valor digitado: "≈ 0,00060000 BTC · R$ 651,23".
@@ -928,17 +536,19 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
                     label: Text(e.key, style: const TextStyle(fontSize: 11)),
                     // setState: com valor "max" a conversão depende da taxa —
                     // precisa reconstruir quando o chip troca a taxa.
-                    onPressed: () => setState(() =>
-                        taxaCtrl.text = '${_taxas![e.value]! * _vsizeDe(utxosUsaveis.length)}'),
+                    onPressed: () => setState(() {
+                          _taxaAuto[id] = _taxas![e.value]! * _vsizeDe(utxosUsaveis.length);
+                          taxaCtrl.text = '${_taxaAuto[id]}';
+                        }),
                   ),
               ]),
             ),
           const SizedBox(height: 8),
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: Cores.dourado, foregroundColor: Colors.black),
-            icon: const Icon(Icons.description, size: 16),
+            icon: const Icon(Icons.save_alt, size: 16),
             label: const Text('Gerar pacote', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
-            onPressed: () {
+            onPressed: () async {
               if (utxosUsaveis.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Sem UTXO confirmado pra gastar.'), backgroundColor: Cores.vermelho));
@@ -955,10 +565,18 @@ class _AbaCarteirasState extends State<AbaCarteiras> {
                     .toList(),
               };
               final texto = const JsonEncoder.withIndent(' ').convert(pacote);
-              Clipboard.setData(ClipboardData(text: texto));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Pacote copiado ✓ — leve pro assinador offline (Tails)'),
-                  backgroundColor: Cores.verde));
+              // O pacote vira ARQUIVO na hora: o seletor do Android abre pra
+              // escolher pendrive/armazenamento interno — de lá vai pro
+              // assinador offline (Tails).
+              final agora = DateTime.now();
+              final nome = 'pacote-${agora.year}${_dois(agora.month)}${_dois(agora.day)}-${_dois(agora.hour)}${_dois(agora.minute)}.json';
+              final ok = await Arquivos.salvarComo(nome: nome, mime: 'application/json', conteudo: texto);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(ok
+                      ? 'Pacote salvo ✓ — leve o arquivo pro assinador offline (Tails)'
+                      : 'Pacote não salvo (seletor cancelado).'),
+                  backgroundColor: ok ? Cores.verde : Cores.textoSuave));
             },
           ),
         ],

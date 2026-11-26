@@ -429,10 +429,14 @@ EnderecosZpub zpubEnderecos(String zpub, int qtdReceber, int qtdTroco) {
   final pub = corpo.substring(90);
   final receber = <Map<String, dynamic>>[];
   final troco = <Map<String, dynamic>>[];
+  // BIP-84: receber = conta/0/i (cadeia EXTERNA — o nível /0 é obrigatório;
+  // sem ele os endereços não batem com Blue/Electrum — mesmo bug corrigido
+  // no js/carteira1248.js). Troco = conta/1/i.
+  final noExt = ckdPub(NoPub(pub, chain), 0);
   final noInt = ckdPub(NoPub(pub, chain), 1);
   for (var i = 0; i < max(qtdReceber, qtdTroco); i++) {
     if (i < qtdReceber) {
-      final e = ckdPub(NoPub(pub, chain), i);
+      final e = ckdPub(noExt, i);
       receber.add({'i': i, 'endereco': segwitEndereco(h2b(hash160(e.pub)))});
     }
     if (i < qtdTroco) {

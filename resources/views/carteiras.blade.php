@@ -125,7 +125,7 @@
                 <li><strong class="text-light">Prepare o pendrive:</strong> com o <a href="https://www.ventoy.net" target="_blank" rel="noopener" class="text-gold">Ventoy</a> ou
                     <a href="https://rufus.ie" target="_blank" rel="noopener" class="text-gold">Rufus</a> (roda o instalador, escolhe o pendrive e/ou .iso e pronto), grave a imagem do
                     <a href="https://tails.net" target="_blank" rel="noopener" class="text-gold">Tails</a> (Linux que roda da <strong>memória RAM</strong> — nada toca o HD, nada fica gravado) e leve também o
-                    <a href="{{ asset('gerador-bip39.html') }}?v=18" download class="text-gold">gerador offline</a>.</li>
+                    <a href="{{ asset('gerador-bip39.html') }}?v=19" download class="text-gold">gerador offline</a>.</li>
                 <li><strong class="text-light">Assine:</strong> no Tails, <strong>desconectado da internet</strong>, abra o gerador offline, cole a frase da carteira e o pacote copiado no passo 2 — assine e baixe o arquivo .tx.</li>
                 <li><strong class="text-light">Transmita:</strong> volte aqui em qualquer aparelho conectado, faça upload do arquivo .tx (ou cole o hex) em "Transmitir transação assinada" — a chave privada nunca viu internet.</li>
             </ol>
@@ -145,7 +145,7 @@
 </style>
 
 <script src="{{ asset('js/bip39.js') }}"></script>
-<script src="{{ asset('js/carteira1248.js') }}?v=14"></script>
+<script src="{{ asset('js/carteira1248.js') }}?v=15"></script>
 <script>
 (function () {
     var csrf = document.querySelector('meta[name=csrf-token]').content;

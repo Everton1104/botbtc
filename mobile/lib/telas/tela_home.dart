@@ -351,20 +351,11 @@ class _TelaHomeState extends State<TelaHome> with WidgetsBindingObserver {
               tooltip: 'Admin do bot',
               onPressed: _abrirAdmin,
             ),
-          // Carteiras: atalho DIRETO pra aba de vigilância (watch-only) da
-          // suíte — sem ter que entrar no Cartão 1248 antes.
+          // Carteiras: vigilância watch-only + pacote de assinatura. O
+          // gerar/1248 ficou no gerador offline (botão de download lá dentro).
           IconButton(
             icon: const Icon(Icons.account_balance_wallet),
             tooltip: 'Carteiras',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const TelaSuite(abaInicial: 2)),
-            ),
-          ),
-          // Cartão 1248: backup físico da seed — imagem do cartão, instruções
-          // e PDF pra imprimir (o simulador interativo continua no site).
-          IconButton(
-            icon: const Icon(Icons.confirmation_number),
-            tooltip: 'Cartão 1248 · Gerar',
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const TelaSuite()),
             ),

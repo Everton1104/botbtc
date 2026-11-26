@@ -271,6 +271,9 @@ class CarteirasController extends Controller
                     $txs[] = [
                         'txid'   => $tx['txid'],
                         'quando' => $conf ? date('d/m/Y H:i', (int) $tx['status']['block_time']) : 'na mempool',
+                        // timestamp pra ORDENAR — comparar a string "d/m/Y"
+                        // quebrava entre meses ("31/10" > "25/11" como texto)
+                        'ts'     => $conf ? (int) $tx['status']['block_time'] : PHP_INT_MAX,
                         'delta'  => $entrada - $saida,
                         'conf'   => $conf,
                         'confirmacoes' => ($conf && $tip && $alt) ? $tip - $alt + 1 : 0,
@@ -279,7 +282,7 @@ class CarteirasController extends Controller
             }
         }
 
-        usort($txs, fn ($a, $b) => strcmp($b['quando'], $a['quando']));
+        usort($txs, fn ($a, $b) => $b['ts'] <=> $a['ts']);
 
         return [
             'id'      => $w->id,
