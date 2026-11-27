@@ -256,6 +256,9 @@
                         <li class="nav-item">
                             <a class="nav-link" href="/1248"><i class="fa-solid fa-ticket me-1"></i>Cartão 1248</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/ambiente-offline"><i class="fa-solid fa-compact-disc me-1"></i>Ambiente Offline</a>
+                        </li>
                         <li class="nav-item dropdown">
                             <a id="navbarDropdown" class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
                                 <i class="fa-regular fa-circle-user me-1"></i>{{ Auth::user()->name }}

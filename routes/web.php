@@ -22,6 +22,13 @@ Route::view('/1248', 'cartao1248')->name('cartao1248');
 // assinador offline (só na versão baixada). Pública como o próprio 1248.
 Route::view('/gerar-carteira', 'gerar-carteira')->name('gerar-carteira');
 
+// ── Ambiente Offline (ISO WinPE + Sparrow) ───────────────────────────────────
+// Página pública: download da ISO oficial (storage/app/public, servida via
+// public/storage), SHA-256 pra conferir e passo a passo de gravação no
+// pendrive (Rufus ou Ventoy) — padrão do site pra criar, importar e
+// gerenciar cold wallets fora do navegador.
+Route::view('/ambiente-offline', 'ambiente-offline')->name('ambiente-offline');
+
 // ── Carteiras (watch-only) ───────────────────────────────────────────────────
 // Aba do painel: importa zpub (chave PÚBLICA), acompanha saldo/histórico em
 // tempo real (mempool.space), monta transação NÃO assinada e transmite a

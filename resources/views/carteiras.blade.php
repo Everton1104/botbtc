@@ -84,12 +84,12 @@
     <div class="card mb-4">
         <div class="card-header"><i class="fa-solid fa-paper-plane me-2 text-gold"></i>Transmitir transação assinada</div>
         <div class="card-body">
-            <textarea id="envHex" class="form-control font-monospace" style="font-size:.75rem;" rows="3" placeholder="Cole aqui o hex da transação assinada — ou faça upload do arquivo .tx abaixo…"></textarea>
+            <textarea id="envHex" class="form-control font-monospace" style="font-size:.75rem;" rows="3" placeholder="Cole aqui o hex da transação assinada — ou faça upload do arquivo .txn/.tx abaixo…"></textarea>
             <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                 <button class="btn btn-gold btn-sm fw-bold" id="btnEnviar"><i class="fa-solid fa-paper-plane me-1"></i>Enviar pra mempool</button>
                 <label class="btn btn-outline-muted btn-sm mb-0">
-                    <i class="fa-solid fa-file-arrow-up me-1"></i>Upload do arquivo assinado (.tx)
-                    <input type="file" id="envArquivo" accept=".tx,.txt,.hex,.json,text/plain,application/json" hidden>
+                    <i class="fa-solid fa-file-arrow-up me-1"></i>Upload do arquivo assinado (.txn/.tx)
+                    <input type="file" id="envArquivo" accept=".txn,.tx,.txt,.hex,.json,text/plain,application/json" hidden>
                 </label>
                 <span id="envResultado" style="font-size:.8rem;"></span>
             </div>
@@ -121,13 +121,14 @@
         <div class="card-body">
             <ol class="mb-3" style="font-size:.82rem; color:var(--muted); padding-left:1.25rem; line-height:1.9;">
                 <li><strong class="text-light">Vigie:</strong> importe a zpub da sua carteira aqui em cima — saldo, histórico e UTXOs aparecem em tempo real, sem risco (watch-only).</li>
-                <li><strong class="text-light">Monte:</strong> em "Criar transação não assinada", informe destino, valor e taxa — e copie o pacote de assinatura gerado.</li>
-                <li><strong class="text-light">Prepare o pendrive:</strong> com o <a href="https://www.ventoy.net" target="_blank" rel="noopener" class="text-gold">Ventoy</a> ou
-                    <a href="https://rufus.ie" target="_blank" rel="noopener" class="text-gold">Rufus</a> (roda o instalador, escolhe o pendrive e/ou .iso e pronto), grave a imagem do
-                    <a href="https://tails.net" target="_blank" rel="noopener" class="text-gold">Tails</a> (Linux que roda da <strong>memória RAM</strong> — nada toca o HD, nada fica gravado) e leve também o
-                    <a href="{{ asset('gerador-bip39.html') }}?v=19" download class="text-gold">gerador offline</a>.</li>
-                <li><strong class="text-light">Assine:</strong> no Tails, <strong>desconectado da internet</strong>, abra o gerador offline, cole a frase da carteira e o pacote copiado no passo 2 — assine e baixe o arquivo .tx.</li>
-                <li><strong class="text-light">Transmita:</strong> volte aqui em qualquer aparelho conectado, faça upload do arquivo .tx (ou cole o hex) em "Transmitir transação assinada" — a chave privada nunca viu internet.</li>
+                <li><strong class="text-light">Monte:</strong> em "Criar transação não assinada", informe destino, valor e taxa — e baixe o <strong>PSBT</strong> gerado (botão "Gerar PSBT").</li>
+                <li><strong class="text-light">Prepare o pendrive:</strong> grave a nossa
+                    <a href="/ambiente-offline" class="text-gold">ISO do Ambiente Offline</a> (WinPE + Sparrow, roda da <strong>memória RAM</strong> — nada toca o HD, nada fica gravado) com o
+                    <a href="https://www.ventoy.net" target="_blank" rel="noopener" class="text-gold">Ventoy</a> ou <a href="https://rufus.ie" target="_blank" rel="noopener" class="text-gold">Rufus</a> —
+                    nela você cria, importa, gerencia <strong class="text-light">e assina</strong> a carteira.</li>
+                <li><strong class="text-light">Assine:</strong> baixe o PSBT gerado no passo 2, leve no pendrive e, no Ambiente Offline (Sparrow ▸ File ▸ Import PSBT), revise, assine e exporte a transação (.txn).
+                    <span class="text-muted">Alternativa antiga: o <a href="{{ asset('gerador-bip39.html') }}?v=19" download class="text-gold">gerador HTML</a> assina o "pacote" em qualquer navegador desconectado.</span></li>
+                <li><strong class="text-light">Transmita:</strong> volte aqui em qualquer aparelho conectado, faça upload do arquivo .txn (ou cole o hex) em "Transmitir transação assinada" — a chave privada nunca viu internet.</li>
             </ol>
             <p class="mb-0 text-muted" style="font-size:.76rem;">
                 Boot pelo pendrive: ligue o computador e aperte a tecla de boot (geralmente F12) escolhendo o USB.
@@ -146,6 +147,7 @@
 
 <script src="{{ asset('js/bip39.js') }}"></script>
 <script src="{{ asset('js/carteira1248.js') }}?v=15"></script>
+<script src="{{ asset('js/psbt1248.js') }}?v=1"></script>
 <script>
 (function () {
     var csrf = document.querySelector('meta[name=csrf-token]').content;
@@ -447,7 +449,7 @@
 
             // criar transação não assinada
             h += '<hr style="border-color:var(--border); opacity:.6;">'
-              + '<div class="form-label mb-1">Criar transação <strong class="text-light">não assinada</strong> <span class="text-muted" style="font-weight:400; font-size:.74rem;">— o pacote pronto pro arquivo offline</span></div>'
+              + '<div class="form-label mb-1">Criar transação <strong class="text-light">não assinada</strong> <span class="text-muted" style="font-weight:400; font-size:.74rem;">— PSBT pronto pro Sparrow do Ambiente Offline</span></div>'
               + '<div class="row g-2">'
               +   '<div class="col-md-5"><input type="text" class="form-control form-control-sm" id="txDest-' + c.id + '" placeholder="destino bc1q…"></div>'
               +   '<div class="col-md-4"><input type="text" class="form-control form-control-sm" id="txValor-' + c.id + '" placeholder="valor em sats (ou max)" oninput="conversaoValor(' + c.id + ')"></div>'
@@ -463,14 +465,18 @@
               +   '<span id="txEstimativa-' + c.id + '" class="text-muted" style="font-size:.72rem;"></span>'
               + '</div>'
               + '<div class="d-flex flex-wrap gap-2 mt-2">'
-              +   '<button class="btn btn-gold btn-sm fw-bold" onclick="gerarPacote(' + c.id + ')"><i class="fa-solid fa-file-signature me-1"></i>Gerar pacote de assinatura</button>'
-              +   '<button class="btn btn-outline-muted btn-sm" onclick="copiarPacote(' + c.id + ')"><i class="fa-regular fa-copy me-1"></i>Copiar pacote</button>'
+              +   '<button class="btn btn-gold btn-sm fw-bold" onclick="gerarPsbt(' + c.id + ')"><i class="fa-solid fa-file-signature me-1"></i>Gerar PSBT (p/ Sparrow)</button>'
+              +   '<button class="btn btn-outline-muted btn-sm" onclick="baixarPsbt(' + c.id + ')"><i class="fa-solid fa-download me-1"></i>Baixar .psbt</button>'
+              +   '<button class="btn btn-outline-muted btn-sm" onclick="copiarPsbt(' + c.id + ')"><i class="fa-regular fa-copy me-1"></i>Copiar base64</button>'
+              +   '<button class="btn btn-outline-muted btn-sm" onclick="gerarPacote(' + c.id + ')" title="Fluxo antigo: gerador HTML offline"><i class="fa-solid fa-code me-1"></i>Pacote p/ gerador HTML</button>'
               + '</div>'
               + '<div class="pacote-box mt-2 d-none" id="pacote-' + c.id + '"></div>'
+              + '<div class="pacote-box mt-2 d-none" id="psbt-' + c.id + '"></div>'
               + '</div></div>';
 
-            // guarda os dados pro gerador de pacote
-            h += '<script>window.__carteira' + c.id + ' = ' + JSON.stringify({ utxos: utxosUsaveis }) + '<\/script>';
+            // guarda os dados pro gerador de pacote/PSBT (zpub incluída — o
+            // PSBT deriva as chaves públicas dela, no navegador)
+            h += '<script>window.__carteira' + c.id + ' = ' + JSON.stringify({ utxos: utxosUsaveis, zpub: c.zpub }) + '<\/script>';
         });
         box.innerHTML = h;
         // taxa padrão: o MÍNIMO recomendado do mempool, já preenchido
@@ -505,6 +511,50 @@
         if (COTACAO > 0) t += ' · R$ ' + (btc * COTACAO).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         el.textContent = t;
         el.style.display = '';
+    };
+
+    // ── PSBT (BIP-174): o formato que o Sparrow Wallet do Ambiente Offline
+    // (ISO WinPE) importa e assina nativamente. Montado no navegador a
+    // partir da zpub — o troco já sai derivado no próximo índice livre.
+    window.gerarPsbt = function (id) {
+        var box = document.getElementById('psbt-' + id);
+        try {
+            var r = C1248Psbt.construir({
+                zpub:    window['__carteira' + id].zpub,
+                utxos:   window['__carteira' + id].utxos,
+                destino: document.getElementById('txDest-' + id).value.trim(),
+                valor:   document.getElementById('txValor-' + id).value.trim() || 'max',
+                taxa:    document.getElementById('txTaxa-' + id).value.trim()
+            });
+            window['__psbt' + id] = r;
+            var btc = Number(r.enviar) / 100000000;
+            box.innerHTML = '<div class="mb-1"><strong style="color:var(--gold);">PSBT gerado</strong>'
+              + ' — enviar <strong class="text-light">' + btc.toFixed(8).replace('.', ',') + ' BTC</strong>'
+              + ' · taxa ' + Number(r.taxa).toLocaleString('pt-BR') + ' sats (~' + (Number(r.taxa) / r.vsize).toFixed(1) + ' sat/vB)'
+              + (r.troco ? '<br>troco <strong class="text-light">' + Number(r.troco.sats).toLocaleString('pt-BR') + ' sats</strong> no endereço interno nº ' + r.troco.i : '')
+              + '</div>'
+              + '<div class="mb-1" style="word-break:break-all; user-select:all;">' + esc(r.base64) + '</div>'
+              + '<div class="text-muted" style="font-size:.72rem; line-height:1.6;">'
+              + 'No <a href="/ambiente-offline" class="text-gold">Ambiente Offline</a>: Sparrow ▸ File ▸ <strong class="text-light">Import PSBT</strong> ▸ assine ▸ '
+              + 'File ▸ <strong class="text-light">Export Transaction</strong> (salva o .txn no pendrive) — depois transmita o arquivo aqui embaixo.</div>';
+        } catch (e) {
+            box.innerHTML = '<span style="color:var(--red);">✗ ' + esc(e.message) + '</span>';
+        }
+        box.classList.remove('d-none');
+    };
+    window.baixarPsbt = function (id) {
+        var r = window['__psbt' + id];
+        if (!r) { window.gerarPsbt(id); r = window['__psbt' + id]; if (!r) return; }
+        var nome = 'psbt-' + new Date().toISOString().slice(0, 10) + '.psbt';
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([r.base64], { type: 'application/octet-stream' }));
+        a.download = nome;
+        document.body.appendChild(a); a.click(); a.remove();
+    };
+    window.copiarPsbt = function (id) {
+        var r = window['__psbt' + id];
+        if (!r) { window.gerarPsbt(id); r = window['__psbt' + id]; if (!r) return; }
+        navigator.clipboard.writeText(r.base64);
     };
 
     window.gerarPacote = function (id) {

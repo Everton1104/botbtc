@@ -19,7 +19,7 @@
 
             <p class="mb-3" style="font-size:.78rem; color:#e6b84c;">
                 <i class="fa-solid fa-flask me-1"></i>
-                Esta geração é <strong>apenas para teste</strong>. Pra criar uma carteira de verdade, siga o passo a passo com Tails OS no fim deste card.
+                Esta geração é <strong>apenas para teste</strong>. Pra criar uma carteira de verdade, use o Ambiente Offline no fim deste card.
             </p>
 
             {{-- ── CARTÃO 1248 ───────────────────────────────────────────────── --}}
@@ -78,22 +78,24 @@
             <hr class="my-3" style="border-color:var(--border); opacity:.6;">
 
             <p class="mb-2" style="font-size:.85rem; color:var(--text);">
-                <i class="fa-solid fa-microchip me-1 text-gold"></i>
-                A melhor forma de criar uma seed <strong>100% segura</strong> é com o <a href="https://tails.net" target="_blank" rel="noopener" class="text-gold">Tails OS</a> —
-                um sistema Linux que roda inteiro a partir da <strong>memória RAM</strong>: nada toca o HD e, ao desligar, não sobra rastro nenhum.
+                <i class="fa-solid fa-compact-disc me-1 text-gold"></i>
+                A forma padrão de criar uma seed <strong>100% segura</strong> é o nosso
+                <a href="/ambiente-offline" class="text-gold">Ambiente Offline</a>: uma ISO com WinPE limpo e a
+                <strong>Sparrow Wallet</strong>, que roda inteira a partir da <strong>memória RAM</strong> —
+                nada toca o HD e, ao desligar, não sobra rastro nenhum.
             </p>
             <ol class="mb-3" style="font-size:.82rem; color:var(--muted); padding-left:1.25rem; line-height:1.9;">
-                <li>Prepare o pendrive com o <a href="https://www.ventoy.net" target="_blank" rel="noopener" class="text-gold">Ventoy</a> ou <a href="https://rufus.ie" target="_blank" rel="noopener" class="text-gold">Rufus</a> (roda o instalador, escolhe o pendrive e/ou .iso e pronto).</li>
-                <li>Baixe a imagem do <a href="https://tails.net" target="_blank" rel="noopener" class="text-gold">Tails</a> e coloque no pendrive conforme a ferramenta que escolheu — no Ventoy é só arrastar o arquivo; no Rufus, selecione a imagem e grave.</li>
-                <li>Ligue o computador pelo pendrive (menu de boot, geralmente F12) — o Tails sobe direto da RAM, sem instalar nada.</li>
-                <li><strong class="text-light">Desconectado da internet</strong>, crie a carteira e assine transações no <strong>nosso gerador HTML</strong> (baixe no botão abaixo e leve no pendrive) — um arquivo só faz tudo.</li>
+                <li>Baixe a ISO e grave num pendrive de 8 GB+ com o <a href="https://www.ventoy.net" target="_blank" rel="noopener" class="text-gold">Ventoy</a> ou <a href="https://rufus.ie" target="_blank" rel="noopener" class="text-gold">Rufus</a> — passo a passo completo na página do <a href="/ambiente-offline" class="text-gold">Ambiente Offline</a>.</li>
+                <li><strong class="text-light">Desconecte a internet</strong> (cabo e Wi-Fi) e ligue o computador pelo pendrive (menu de boot, geralmente F12).</li>
+                <li>No WinPE, abra a Sparrow Wallet e crie a carteira — anote a frase no seu <a href="/1248" class="text-gold">Cartão 1248</a>.</li>
+                <li>Copie a zpub e cadastre em <a href="/carteiras" class="text-gold">Carteiras</a> no site: ele vigia saldo e monta transações, mas quem assina é só você, offline.</li>
             </ol>
-            <a href="{{ asset('gerador-bip39.html') }}?v=24" download class="btn btn-outline-muted btn-sm fw-bold mb-2 d-inline-flex align-items-center gap-2">
-                <i class="fa-solid fa-download"></i>Baixar gerador de carteira (HTML offline)
+            <a href="{{ asset('storage/Sparrow-WinPE-v1.0.iso') }}?v=1" download class="btn btn-gold btn-sm fw-bold mb-2 d-inline-flex align-items-center gap-2">
+                <i class="fa-solid fa-download"></i>Baixar ISO do Ambiente Offline (691 MB)
             </a>
             <p class="text-muted mb-0" style="font-size:.78rem;">
-                O projeto original é de Ian Coleman e está no GitHub:
-                <a href="https://github.com/iancoleman/bip39" target="_blank" rel="noopener" class="text-gold">github.com/iancoleman/bip39</a>.
+                SHA-256 pra conferir o download e instruções de Rufus/Ventoy na página
+                <a href="/ambiente-offline" class="text-gold">/ambiente-offline</a>.
             </p>
         </div>
     </div>
