@@ -15,6 +15,16 @@ class BotExecutor
 {
     protected BinanceController $binance;
 
+    /**
+     * Log de detalhe do ciclo (DEBUG-*, bloqueios, salto/ATR) — só entra no
+     * log quando BOT_DEBUG=true. Eventos de negócio (fills, pausas, recriação
+     * de par, QUEDA/SUBIDA) continuam em Log::info sempre.
+     */
+    private function logDetalhe(string $msg, array $ctx = []): void
+    {
+        if (config('bot.debug')) Log::info($msg, $ctx);
+    }
+
     private const SYMBOL  = 'BTCBRL';
     private const ALLIN_CAP = 0.95;
 
@@ -338,11 +348,11 @@ class BotExecutor
                 $valorCompraOk = $saldoBRLChk >= $this->minNotionalEfetivo($configChk);
 
                 if ($side === 'BUY' && !$valorVendaOk) {
-                    Log::info("BotExecutor [{$userId}]: só perna BUY, mas BTC insuficiente (< min_notional) pra vender — posição unilateral mantida (sem churn). BTC={$saldoBTCChk}.");
+                    $this->logDetalhe("BotExecutor [{$userId}]: só perna BUY, mas BTC insuficiente (< min_notional) pra vender — posição unilateral mantida (sem churn). BTC={$saldoBTCChk}.");
                     return "Posição unilateral (só BUY): sem BTC pra vender. Perna mantida.";
                 }
                 if ($side === 'SELL' && !$valorCompraOk) {
-                    Log::info("BotExecutor [{$userId}]: só perna SELL, mas BRL insuficiente (< min_notional) pra comprar — posição unilateral mantida (sem churn). BRL={$saldoBRLChk}.");
+                    $this->logDetalhe("BotExecutor [{$userId}]: só perna SELL, mas BRL insuficiente (< min_notional) pra comprar — posição unilateral mantida (sem churn). BRL={$saldoBRLChk}.");
                     return "Posição unilateral (só SELL): sem BRL pra comprar. Perna mantida.";
                 }
 
@@ -367,7 +377,7 @@ class BotExecutor
                         || (($alocChk['bloquear_venda_normal'] || ($tendencia['rsi'] ?? 50) <= (float) $configChk->rsi_minimo_venda)
                             && !($allinChk && $dirChk === 'up'));
                     if ($vendaBloqueada) {
-                        Log::info("BotExecutor [{$userId}]: só perna BUY, venda bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
+                        $this->logDetalhe("BotExecutor [{$userId}]: só perna BUY, venda bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
                         return "Posição unilateral (só BUY): venda bloqueada. Perna mantida.";
                     }
                 } elseif ($side === 'SELL') {
@@ -375,7 +385,7 @@ class BotExecutor
                         || (($alocChk['bloquear_compra_normal'] || ($tendencia['rsi'] ?? 50) >= (float) $configChk->rsi_maximo_compra)
                             && !($allinChk && $dirChk === 'down'));
                     if ($compraBloqueada) {
-                        Log::info("BotExecutor [{$userId}]: só perna SELL, compra bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
+                        $this->logDetalhe("BotExecutor [{$userId}]: só perna SELL, compra bloqueada por alocação/tendência — posição unilateral mantida (sem churn). pctBTC={$alocChk['pct_btc']}%.");
                         return "Posição unilateral (só SELL): compra bloqueada. Perna mantida.";
                     }
                 }
@@ -1669,7 +1679,7 @@ class BotExecutor
         $tendencia = $tendencia ?? $this->analisarTendencia($precoAtual);
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-TENDENCIA', [
+        $this->logDetalhe('DEBUG-TENDENCIA', [
             'fatorCompraOriginal' => $tendencia['fator_compra'],
             'fatorVendaOriginal' => $tendencia['fator_venda'],
             'rsi' => $tendencia['rsi'],
@@ -1692,7 +1702,7 @@ class BotExecutor
             $saltoForcado ?? (int) $tendencia['salto_dinamico'],
             (int) ceil($this->saltoMinimoPorSpread($precoAtual, $config) / 500) * 500
         );
-        Log::info("BotExecutor: salto = {$salto} | ATR={$tendencia['atr']} BollW=" . round($tendencia['boll_width'], 4));
+        $this->logDetalhe("BotExecutor: salto = {$salto} | ATR={$tendencia['atr']} BollW=" . round($tendencia['boll_width'], 4));
         $state->salto = $salto;
 
         // M9 — idade do par atual (base do cooldown da adaptação do grid).
@@ -1724,7 +1734,7 @@ class BotExecutor
             && ($direcao === 'down' ? $rsi4h <= 40 : $rsi4h >= 60);
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-ORDEM-INICIO', [
+        $this->logDetalhe('DEBUG-ORDEM-INICIO', [
             'saldoBRL' => $saldoBRL,
             'saldoBTC' => $saldoBTC,
             'direcao' => $direcao,
@@ -1749,7 +1759,7 @@ class BotExecutor
         $alocacao = $this->calcularAlocacao($saldoBRL, $saldoBTC, $precoAtual, $config, $tendencia);
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-ALOCACAO', [
+        $this->logDetalhe('DEBUG-ALOCACAO', [
             'pctBTC' => $alocacao['pct_btc'] ?? null,
             'pctBRL' => $alocacao['pct_brl'] ?? null,
             'fatorCompraAlocacao' => $alocacao['fator_compra'] ?? null,
@@ -1787,7 +1797,7 @@ class BotExecutor
                     && !($allin && $direcao === 'up'));
 
             if ($compraBloqueada || $vendaBloqueada) {
-                Log::info('BotExecutor: bloqueio de ordem — ' . implode(' · ', array_merge(
+                $this->logDetalhe('BotExecutor: bloqueio de ordem — ' . implode(' · ', array_merge(
                     $alocacao['motivos'],
                     array_filter([
                         $bloquearCompraExtremo && !($allin && $direcao === 'down') ? sprintf('RSI %.1f ≥ %.0f: compra bloqueada', $tendencia['rsi'], (float) $config->rsi_maximo_compra) : null,
@@ -1806,7 +1816,7 @@ class BotExecutor
         }
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-FATORES-FINAIS', [
+        $this->logDetalhe('DEBUG-FATORES-FINAIS', [
             'modoSubidaAuto' => $state->modo_subida_auto,
             'fatorCompraFinal' => $fatorCompra,
             'fatorVendaFinal' => $fatorVenda,
@@ -1868,7 +1878,7 @@ class BotExecutor
         }
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-COMPRA', [
+        $this->logDetalhe('DEBUG-COMPRA', [
             'saldoBRL' => $saldoBRL,
             'valorCompraFinal' => $valorCompra,
             'percentualRealCompra' => $saldoBRL > 0
@@ -1954,7 +1964,7 @@ class BotExecutor
         }
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-VENDA', [
+        $this->logDetalhe('DEBUG-VENDA', [
             'saldoBTC' => $saldoBTC,
             'precoVenda' => $precoVenda,
             'percentualVendaFinal' => $percentualVenda,
@@ -1979,7 +1989,7 @@ class BotExecutor
         }
 
         // ── DEBUG TEMPORÁRIO (remover após diagnosticar tamanho de ordens) ──
-        Log::info('DEBUG-RESUMO', [
+        $this->logDetalhe('DEBUG-RESUMO', [
             'COMPRA_BRL' => $valorCompra,
             'VENDA_BRL' => $valorVenda,
             'pctCompraDoSaldoBRL' => $saldoBRL > 0
